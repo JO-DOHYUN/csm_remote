@@ -14,6 +14,7 @@ This is the standalone CSM board firmware repository.
 - Product default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`.
   This is the two-bus ACK-capable observe-only passive product artifact for the current vehicle use
   case.
+- Final completion target: `board/docs/CSM_FINAL_PRODUCT_COMPLETION_TARGET_KO.md`.
 - Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
 - Kvaser/PCAN single-node transmit checks require the Passive Product host
   session to be open and ACK-observe enabled. ACK capability is not host
@@ -90,6 +91,13 @@ Build Passive Product firmware:
 
 This is the only CSM field/product build name for the current hardware. Do not
 build lab/full/test envs unless the task is explicitly a bench diagnostic.
+
+Upload Passive Product firmware only when the vehicle/bench context is safe for
+MCU reset and USB re-enumeration:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive -t upload
+```
 
 Build Full Instrumented firmware:
 

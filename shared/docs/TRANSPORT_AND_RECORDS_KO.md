@@ -273,6 +273,9 @@ Current `BOARD_EVENT` codes used by the reference firmware:
   built-in CAN ready, bit2 means ACK-observe enabled.
 - `38` CAN front-end session init failed. Deferred CAN front-end initialization
   failed and ACK-observe remains disabled. `detail` uses the same ready bitmask.
+- `39` CAN front-end fault hold. A passive readback, TXREQ, SPI all-ones, or
+  deferred-init fault forced the product back to no-ACK hold. This is
+  product-blocking evidence until inspected.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.

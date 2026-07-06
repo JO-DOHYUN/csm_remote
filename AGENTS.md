@@ -11,7 +11,9 @@ their own repositories, not inside this project folder.
 2. For CSM firmware work, read `board/AGENTS.md` and `board/BRIEF.md`.
 3. For binary records, transport, replay, or cross-project contracts, read
    `shared/docs/TRANSPORT_AND_RECORDS_KO.md`.
-4. For current integration architecture, read
+4. For final product completion boundaries, read
+   `board/docs/CSM_FINAL_PRODUCT_COMPLETION_TARGET_KO.md`.
+5. For current integration architecture, read
    `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as a decision input, then apply it
    through the scoped docs instead of treating it as a replacement prompt.
 
@@ -65,6 +67,10 @@ their own repositories, not inside this project folder.
   ACK-capable after session stability, and host TX/control disabled.
   The Full Instrumented env keeps both buses available for bench/HIL RX and
   audited control TX. One-bus passive builds are not product artifacts.
+- The only field/product upload target is
+  `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`. Do not build or upload
+  one-bus, full, or lab envs while validating vehicle passive behavior unless
+  the user explicitly switches to bench diagnostics.
 
 ## Verification Budget
 - Do not build by habit. Select the smallest proof that covers the changed

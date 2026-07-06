@@ -551,6 +551,7 @@ enum BoardEventCode : uint16_t {
   EventCanFrontendPresessionHold = 36,
   EventCanFrontendSessionReady = 37,
   EventCanFrontendSessionInitFailed = 38,
+  EventCanFrontendFaultHold = 39,
 };
 
 using CanRxItem = CanRxSegmentItem;
@@ -1834,6 +1835,41 @@ static void begin_passive_can_frontend_session_quarantine(uint32_t now_ms) {
 #endif
 }
 
+static void enter_passive_can_frontend_fault_hold(uint16_t detail, uint32_t counter) {
+#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
+  can_frontend_session_ready = false;
+  can_frontend_session_arm_pending = false;
+  ack_observe_enabled = false;
+
+#if BOARD_ENABLE_SAFETY_IO
+  digitalWrite(BoardPins::CanTxEnable, LOW);
+#endif
+
+#if BOARD_ENABLE_MCP2515
+  if (mcp2515 != nullptr) {
+    mcp2515->clearTXInterrupts();
+    const MCP2515::ERROR err = mcp2515->setListenOnlyMode();
+    if (err == MCP2515::ERROR_OK) {
+      mcp2515_listen_only_mode = true;
+    } else {
+      emit_board_event(EventMcp2515Error, static_cast<uint16_t>(err), 6);
+    }
+  }
+#endif
+
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  if (builtin_can_tx_ok) {
+    builtin_can.monitor(true);
+  }
+#endif
+
+  emit_board_event(EventCanFrontendFaultHold, detail, counter);
+#else
+  (void)detail;
+  (void)counter;
+#endif
+}
+
 static bool ensure_passive_can_frontend_session_ready(uint32_t now_ms) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (!uplink_host_session_open()) {
@@ -1876,6 +1912,7 @@ static bool ensure_passive_can_frontend_session_ready(uint32_t now_ms) {
 #endif
 
   if (!ready) {
+    enter_passive_can_frontend_fault_hold(0x0001u, can_frontend_session_init_fail_total + 1u);
     can_frontend_session_init_fail_total++;
     emit_board_event(EventCanFrontendSessionInitFailed,
                      static_cast<uint16_t>((can_backend_ok ? 0x0001u : 0u) |
@@ -2312,7 +2349,9 @@ static void __attribute__((unused)) service_mcp2515_passive_readback_guard(bool 
   if (canctrl == 0xFFu) {
     host_absent_mcp_error_total++;
     mcp_service.spi_error_total++;
+    latch_passive_violation(kPassiveViolationMcpReadbackMode);
     emit_board_event(EventMcpPassiveModeReadback, 0xFFu, passive_readback_total);
+    enter_passive_can_frontend_fault_hold(0xFF00u, passive_readback_total);
     return;
   }
 
@@ -2331,6 +2370,7 @@ static void __attribute__((unused)) service_mcp2515_passive_readback_guard(bool 
     passive_readback_violation_total++;
     latch_passive_violation(kPassiveViolationMcpReadbackMode);
     emit_board_event(EventMcpPassiveModeViolation, detail, passive_readback_violation_total);
+    enter_passive_can_frontend_fault_hold(detail, passive_readback_violation_total);
   } else if (force_event) {
     emit_board_event(EventMcpPassiveModeReadback, detail, passive_readback_total);
   }
@@ -2339,6 +2379,7 @@ static void __attribute__((unused)) service_mcp2515_passive_readback_guard(bool 
     txreq_violation_total++;
     latch_passive_violation(kPassiveViolationMcpTxreqSet);
     emit_board_event(EventMcpTxreqViolation, detail, txreq_violation_total);
+    enter_passive_can_frontend_fault_hold(detail, txreq_violation_total);
   }
 #else
   (void)force_event;
