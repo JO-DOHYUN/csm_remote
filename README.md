@@ -48,7 +48,10 @@ to the existing CSM platform.
 14. `CSM_REMOTE_PRODUCT_DEFINITION.md`
    English engineering companion. Use it for implementation-oriented review, but the Korean master wins on conflict.
 
-15. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`
+15. `CSM_REMOTE_PHASE1_SKELETON_AUDIT_KO.md`
+   Phase 1 skeleton closure audit and guard commands before moving to Phase 2 evidence work.
+
+16. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`
    Original handoff/background document. Useful context, but superseded by the product definition on conflict.
 
 ## Current Baseline

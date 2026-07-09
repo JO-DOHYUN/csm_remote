@@ -697,3 +697,62 @@ Next Step:
 ```text
 Phase 1I: Phase 1 skeleton audit/guard 정리 후 Phase 2 M4 env/Serial3/IPC 증거 수집 계획으로 전환.
 ```
+
+---
+
+## 2026-07-09: Phase 1I Skeleton Guard And Audit
+
+Summary:
+
+```text
+Phase 1 remote skeleton 경계를 자동 점검하는 guard와 Phase 1 closure audit 문서를 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/tools/remote_phase1_guard.py
+CSM_REMOTE_PHASE1_SKELETON_AUDIT_KO.md
+README.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Phase 2에서 M4 env, Serial3, IPC를 열기 전에 Phase 1 skeleton이 main/runtime/UART/IPC/CAN TX로
+새지 않았는지 반복 검증할 수 있는 기준을 만들기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+remote_phase1_guard.py는 PlatformIO extra_scripts에 연결하지 않은 수동 실행 guard다.
+새 runtime path 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+git diff --check passed.
+PlatformIO passive env build succeeded.
+```
+
+Residual Risk:
+
+```text
+Phase 1 guard는 Phase 1 skeleton closure용이다. Phase 2에서 M4 env/IPC/UART를 열면
+guard 기준을 Phase 2 evidence profile에 맞게 갱신해야 한다.
+```
+
+Next Step:
+
+```text
+Phase 2: M4 PlatformIO env proof, Serial3/R16SM capture, M4-M7 IPC prototype evidence.
+```

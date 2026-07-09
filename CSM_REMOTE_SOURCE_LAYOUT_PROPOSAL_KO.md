@@ -426,20 +426,21 @@ firmware/csm/tools/passive_guard.py
 추가 후보:
 
 ```text
-firmware/csm/tools/remote_guard.py
+firmware/csm/tools/remote_phase1_guard.py
 ```
 
-remote_guard 검사 후보:
+remote_phase1_guard 검사:
 
 ```text
-M4 build contains CAN TX symbols -> fail
-RemoteControlSource contains CAN ID literals -> fail
-CanTxGateway bypass direct CAN write -> fail
-RemoteProductCandidate enables host raw downlink -> fail
-PassiveProduct links active RemoteControlSource path -> fail
+remote/control skeleton contains direct UART/IPC/CAN TX IO -> fail
+remote module knows CAN ID/frame/gateway types -> fail
+main.cpp wires Phase 1 remote runtime -> fail
+platformio.ini enables M4/remote runtime before Phase 2 -> fail
+VehicleCommandMapper maps real vehicle frames -> fail
+CanTxGateway performs backend write -> fail
 ```
 
-Phase 1에서는 script skeleton 또는 passive_guard 확장 설계만 가능하다.
+Phase 1I에서 수동 실행 guard로 추가했다. PlatformIO extra_scripts에는 아직 연결하지 않는다.
 
 ---
 
@@ -512,13 +513,21 @@ RemoteControlSource -> AuthorityManager -> CommandLimiter -> VehicleCommandMappe
 no main.cpp wiring, no CAN backend write
 ```
 
+Phase 1I:
+
+```text
+remote_phase1_guard.py
+Phase 1 skeleton audit document
+Phase 2 evidence/prototype entry criteria
+```
+
 Phase 1 금지:
 
 ```text
 new real local CAN TX
 vehicle CAN mapping
-M4 CRSF parser
-M4-M7 real IPC
+M4 UART/Serial3 runtime binding
+M4-M7 real IPC binding
 Host/VSM control expansion
 ```
 

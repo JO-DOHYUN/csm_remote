@@ -188,3 +188,17 @@ Notes:
 | R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | mapped frames are evaluated by `CanTxGateway`; no backend write exists in orchestrator |
 | R-PROD-010 | Product Definition 17.2 | rejected command = reason + no TX evidence | Designed | orchestrator returns stage/decision/detail and performs no TX on reject |
 | R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | current mapper still rejects with no real vehicle mapping |
+
+---
+
+## Phase 1I Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | Phase 1 skeleton audit ties all added modules to the final dataflow |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | `remote_phase1_guard.py` fails if `main.cpp` wires Phase 1 remote runtime |
+| R-DEV-006 | Harness 14 | 구상 변경 시 old code/path/flag/test/doc residue를 정리하거나 명시적으로 남긴다 | Implemented | Phase 1 audit lists remaining open decisions and Phase 2 entry criteria |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | guard checks no direct UART/IPC/CAN TX IO, no real vehicle mapping, no gateway backend write |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | guard fails if remote files acquire CAN frame/gateway knowledge |
+| R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | guard ensures CanTxGateway has no backend write during Phase 1 |
+| R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | guard fails if VehicleCommandMapper starts mapping real frames in Phase 1 |
