@@ -125,6 +125,20 @@ Serial3 RX electrical capture
 valid frame decode evidence
 ```
 
+Current Phase 1E Result:
+
+```text
+CRSF bounded frame parser, CRC8-DVB-S2 check, 0x16 RC_CHANNELS_PACKED 16ch/22B unpack skeleton은 코드와 문서로 고정했다.
+하지만 실제 R16SM baud, UART inversion/duplex, frame cadence, wiring-level mode evidence는 아직 확정하지 않았다.
+```
+
+Allowed Temporary Assumption:
+
+```text
+Parser/normalizer code may compile and be unit-tested with captured or synthetic bytes,
+but production UART binding must remain disabled until logic analyzer and valid decode evidence exists.
+```
+
 Blocked Work:
 
 ```text
@@ -218,6 +232,19 @@ operator test
 channel capture
 failsafe behavior capture
 neutral/debounce validation
+```
+
+Current Phase 1E Result:
+
+```text
+16개 raw CRSF channel을 normalized RcSample.ch[16]으로 변환하는 공통 normalizer skeleton은 추가했다.
+하지만 어떤 channel이 throttle/steer/brake/takeover/release/mode인지 아직 결정하지 않았다.
+```
+
+Allowed Temporary Assumption:
+
+```text
+All 16 normalized channels may be carried as data, but RemoteControlSource final takeover/release semantics must not be inferred from channel index yet.
 ```
 
 Blocked Work:

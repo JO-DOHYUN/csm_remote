@@ -446,3 +446,68 @@ Next Step:
 Phase 1E: M4 CRSF parser/normalizer skeleton 또는 M7 unit guard/harness를 추가하기 전,
 OD-003/OD-004 evidence 수집 계획을 확정한다.
 ```
+
+---
+
+## 2026-07-09: Phase 1E CRSF Parser And RC Normalizer Skeleton
+
+Summary:
+
+```text
+CRSF byte/frame parser와 RC channel normalizer의 platform-independent skeleton을 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/remote/CrsfParser.h
+firmware/csm/src/board/remote/CrsfParser.cpp
+firmware/csm/include/board/remote/RcNormalizer.h
+firmware/csm/src/board/remote/RcNormalizer.cpp
+CSM_REMOTE_CRSF_FRONTEND_CONTRACT_KO.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_OPEN_DECISIONS_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+README.md
+```
+
+Reason:
+
+```text
+M4 UART/IPC 구현 전에도 CRSF frame bound, length/CRC reject, 0x16 RC_CHANNELS_PACKED unpack,
+raw channel normalization 경계를 코드로 고정하기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+M4 build env 없음.
+UART/Serial3 binding 없음.
+M4-M7 IPC/shared memory binding 없음.
+takeover/release channel semantics 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN TX, D1 gate, HostDownlink, Serial3, MCP2515, digitalWrite, HardwareSerial, or UART path in the new remote parser files.
+PlatformIO passive env build succeeded and compiled CrsfParser.cpp and RcNormalizer.cpp.
+```
+
+Residual Risk:
+
+```text
+OD-003과 OD-006은 여전히 open이다. R16SM 실제 baud/mode/cadence와
+T16D channel/switch assignment는 logic analyzer/operator evidence가 필요하다.
+```
+
+Next Step:
+
+```text
+Phase 1F: M4 mailbox writer helper 또는 parser/normalizer unit guard를 추가하되,
+real UART/IPC/product TX는 계속 disabled로 유지한다.
+```

@@ -135,3 +135,17 @@ Notes:
 | R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | M4 can report `CrcBad`/`ProtocolFault`; M7 maps them to `Malformed`/`ProtocolFault` reject |
 | R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Implemented | decoder rejects no-frame, torn sequence, bad magic/version/size/state, CRC mismatch, stale timeout |
 | R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | non-OK sample states map to non-usable `RemoteLinkState` and do not create `OperatorCommand` |
+
+---
+
+## Phase 1E Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `CrsfParser`, `RcNormalizer` |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | no `main.cpp` changes |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | frame length bounds, CRC reject, packed channel decode, configured normalizer |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | CRSF parser and normalizer contain no CAN ID/payload or TX path |
+| R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | normalizer emits only current `RcSample`; no last-stick reuse path |
+| R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Implemented | parser rejects invalid length and CRC mismatch; decoder rejects non-0x16 or bad packed payload length |
+| R-PROD-013 | Product Definition 17.2 | neutral-before-takeover enforced | Designed | channel values are normalized only; takeover/neutral semantics remain in `RemoteControlSource`/OD-006 |

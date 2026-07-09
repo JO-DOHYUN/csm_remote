@@ -141,11 +141,15 @@ firmware/csm/src/board/control/
 
 firmware/csm/include/board/remote/
   RemoteTypes.h
+  CrsfParser.h
+  RcNormalizer.h
   M4RemoteMailboxContract.h
   M4RemoteMailboxReader.h
   RemoteControlSource.h
 
 firmware/csm/src/board/remote/
+  CrsfParser.cpp
+  RcNormalizer.cpp
   M4RemoteMailboxContract.cpp
   M4RemoteMailboxReader.cpp
   RemoteControlSource.cpp
@@ -468,6 +472,14 @@ M4-M7 mailbox fixed frame contract
 torn/corrupt/protocol fault decode skeleton
 compile integration
 Requirement Trace update
+```
+
+Phase 1E:
+
+```text
+platform-independent CRSF frame parser skeleton
+RC channel normalizer skeleton
+no UART binding, no M4 env, no channel/switch semantic closure
 ```
 
 Phase 1 금지:
