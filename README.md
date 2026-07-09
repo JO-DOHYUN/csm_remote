@@ -33,10 +33,16 @@ to the existing CSM platform.
 9. `CSM_REMOTE_REPOSITORY_SETUP_KO.md`  
    Git/subtree setup record and rules for updating or splitting the imported CSM firmware.
 
-10. `CSM_REMOTE_PRODUCT_DEFINITION.md`  
+10. `CSM_REMOTE_PHASE0_HANDOFF_REVIEW_KO.md`  
+   Phase 0 review that classifies the original handoff as accepted, modified, held, or superseded.
+
+11. `CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md`  
+   Proposed firmware source layout for Phase 1 skeleton implementation.
+
+12. `CSM_REMOTE_PRODUCT_DEFINITION.md`  
    English engineering companion. Use it for implementation-oriented review, but the Korean master wins on conflict.
 
-11. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
+13. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
    Original handoff/background document. Useful context, but superseded by the product definition on conflict.
 
 ## Current Baseline

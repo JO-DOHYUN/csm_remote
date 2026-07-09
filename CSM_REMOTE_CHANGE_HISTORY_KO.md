@@ -168,3 +168,43 @@ Next Step:
 ```text
 Phase 0 handoff 재판정과 CSM source layout proposal 작성.
 ```
+
+---
+
+## 2026-07-09: Phase 0 Handoff Review And Source Layout Proposal
+
+Summary:
+
+```text
+기존 handoff 문서를 Product Definition 기준으로 재판정하고,
+현재 firmware/csm 구조에 맞는 Phase 1 source layout proposal을 작성했다.
+```
+
+Files Changed:
+
+```text
+CSM_REMOTE_PHASE0_HANDOFF_REVIEW_KO.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+README.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+```
+
+Reason:
+
+```text
+코드 구현 전 handoff의 유지/수정/보류/SUPERSEDED 항목을 명확히 하고,
+main.cpp에 기능을 몰아넣지 않도록 최종 모듈 배치를 먼저 확정하기 위해서다.
+```
+
+Tests/Evidence:
+
+```text
+firmware/csm BoardPins.h, platformio.ini, main.cpp, SafetySupervisor, passive_guard.py를 근거로 판정했다.
+PlatformIO passive env build succeeded after Phase 0 documentation changes.
+```
+
+Next Step:
+
+```text
+Phase 1A: AuthorityTypes / RemoteTypes / OperatorCommand deny-first type skeleton 작성.
+```
