@@ -106,3 +106,18 @@ Notes:
 | R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | `M4RemoteMailboxReader` rejects stale/failsafe samples; `RemoteControlSource` clears command |
 | R-PROD-007 | Product Definition 17.2 | autonomy reappearance 후 다음 local TX 전 inhibit | Designed | `AutonomyAuthorityMonitor::observeFrame(..., local_authority_active=true)` latches inhibit |
 | R-PROD-013 | Product Definition 17.2 | neutral-before-takeover enforced | Designed | `RemoteControlSource` requires `neutral` before emitting remote `OperatorCommand` |
+
+---
+
+## Phase 1C Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `CommandLimiter`, `VehicleCommandMapper`, `CanTxGateway` skeletons |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | no `main.cpp` changes |
+| R-DEV-007 | Harness 15 | 설계는 Lean Completeness, 즉 간결한 완결성을 기준으로 판단한다 | Implemented | gateway는 평가 결과만 반환하고 실제 송신/counter/evidence를 만들지 않음 |
+| R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | `CanTxGateway::evaluate()` policy/build/authority/inhibit/safety/hardware/backend/frame checks |
+| R-PROD-005 | Product Definition 17.2 | raw CAN downlink product disabled | Designed | Phase 1C adds no HostDownlink or raw TX path |
+| R-PROD-009 | Product Definition 17.2 | accepted command = ACK + TX evidence | Designed | acceptance can be evaluated, but no TX evidence is emitted yet |
+| R-PROD-010 | Product Definition 17.2 | rejected command = reason + no TX evidence | Designed | all new modules return explicit reject detail and perform no TX |
+| R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | `VehicleCommandMapper` rejects configured commands with `NoVehicleMapping` until vehicle profile closure |

@@ -319,3 +319,63 @@ Next Step:
 ```text
 Phase 1C: CommandLimiter / VehicleCommandMapper / CanTxGateway deny-first skeleton.
 ```
+
+---
+
+## 2026-07-09: Phase 1C Control Gateway Deny-First Skeleton
+
+Summary:
+
+```text
+CommandLimiter, VehicleCommandMapper, CanTxGateway의 deny-first skeleton을 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/control/CommandLimiter.h
+firmware/csm/src/board/control/CommandLimiter.cpp
+firmware/csm/include/board/control/VehicleCommandMapper.h
+firmware/csm/src/board/control/VehicleCommandMapper.cpp
+firmware/csm/include/board/control/CanTxGateway.h
+firmware/csm/src/board/control/CanTxGateway.cpp
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+리모컨/host source가 authority를 통과한 뒤에도 range limit, vehicle mapping,
+CAN TX policy gate를 별도 모듈로 통과하도록 최종 데이터 흐름의 남은 경계를 고정하기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+새 CAN TX backend write 없음.
+VehicleCommandMapper는 실제 차량 CAN frame을 만들지 않고 명시적으로 reject한다.
+CanTxGateway는 frame request를 평가만 하고 송신하지 않는다.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN write, D1 gate, HostDownlink, Serial3, MCP2515, or digitalWrite path in the new control/authority/remote skeleton files.
+PlatformIO passive env build succeeded and compiled CanTxGateway.cpp, CommandLimiter.cpp, VehicleCommandMapper.cpp.
+```
+
+Residual Risk:
+
+```text
+실제 vehicle CAN profile, accepted command evidence, D1/local TX gate semantics,
+CAN TX backend binding은 아직 open decision 이후 단계다.
+```
+
+Next Step:
+
+```text
+Phase 1D: M4-M7 mailbox/RC parser integration contract 또는 open decision closure 우선순위 확정.
+```
