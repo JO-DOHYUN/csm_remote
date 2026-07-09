@@ -257,3 +257,65 @@ Next Step:
 ```text
 Phase 1B: AutonomyAuthorityMonitor / AuthorityManager / M4RemoteMailboxReader / RemoteControlSource deny-first skeleton.
 ```
+
+---
+
+## 2026-07-09: Phase 1B M7 Deny-First Skeleton
+
+Summary:
+
+```text
+AutonomyAuthorityMonitor, AuthorityManager, M4RemoteMailboxReader, RemoteControlSource의 deny-first skeleton을 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/authority/AutonomyAuthorityMonitor.h
+firmware/csm/src/board/authority/AutonomyAuthorityMonitor.cpp
+firmware/csm/include/board/authority/AuthorityManager.h
+firmware/csm/src/board/authority/AuthorityManager.cpp
+firmware/csm/include/board/remote/M4RemoteMailboxReader.h
+firmware/csm/src/board/remote/M4RemoteMailboxReader.cpp
+firmware/csm/include/board/remote/RemoteControlSource.h
+firmware/csm/src/board/remote/RemoteControlSource.cpp
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Phase 1C gateway/control skeleton으로 가기 전에 autonomy state, source authority,
+remote mailbox snapshot, remote command source의 경계를 코드 구조로 고정하기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+새 CAN TX 없음.
+Vehicle CAN mapping 없음.
+M4 CRSF parser 없음.
+RemoteControlSource는 CAN ID/payload를 알지 않는다.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN write, D1 gate, HostDownlink, or payload path in the new skeleton files.
+PlatformIO passive env build succeeded and compiled AuthorityManager.cpp,
+AutonomyAuthorityMonitor.cpp, M4RemoteMailboxReader.cpp, RemoteControlSource.cpp.
+```
+
+Residual Risk:
+
+```text
+실제 upstream autonomy profile, M4-M7 IPC, RC channel mapping, vehicle CAN mapping은 아직 open decision이다.
+```
+
+Next Step:
+
+```text
+Phase 1C: CommandLimiter / VehicleCommandMapper / CanTxGateway deny-first skeleton.
+```

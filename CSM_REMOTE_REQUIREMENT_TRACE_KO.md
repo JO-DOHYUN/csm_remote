@@ -91,3 +91,18 @@ Notes:
 | R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | `OperatorCommand` contains normalized intent only |
 | R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | `RemoteLinkState`, `RcSampleState` unusable stale/failsafe helpers |
 | R-PROD-013 | Product Definition 17.2 | neutral-before-takeover enforced | Designed | neutral default `OperatorCommand` |
+
+---
+
+## Phase 1B Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `AutonomyAuthorityMonitor`, `AuthorityManager`, `M4RemoteMailboxReader`, `RemoteControlSource` skeletons |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | no `main.cpp` changes |
+| R-PROD-001 | Product Definition 17.2 | autonomy release 없으면 local TX 0 | Designed | `AutonomyAuthorityMonitor` defaults to `Unknown`; `AuthorityManager` rejects non-`InactiveConfirmed` |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | `M4RemoteMailboxReader` consumes only `RcSample` |
+| R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | Phase 1B contains no CAN TX path |
+| R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | `M4RemoteMailboxReader` rejects stale/failsafe samples; `RemoteControlSource` clears command |
+| R-PROD-007 | Product Definition 17.2 | autonomy reappearance 후 다음 local TX 전 inhibit | Designed | `AutonomyAuthorityMonitor::observeFrame(..., local_authority_active=true)` latches inhibit |
+| R-PROD-013 | Product Definition 17.2 | neutral-before-takeover enforced | Designed | `RemoteControlSource` requires `neutral` before emitting remote `OperatorCommand` |
