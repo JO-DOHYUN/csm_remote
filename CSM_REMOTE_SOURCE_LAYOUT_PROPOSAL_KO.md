@@ -133,11 +133,13 @@ firmware/csm/include/board/control/
   CommandLimiter.h
   VehicleCommandMapper.h
   CanTxGateway.h
+  RemoteControlOrchestrator.h
 
 firmware/csm/src/board/control/
   CommandLimiter.cpp
   VehicleCommandMapper.cpp
   CanTxGateway.cpp
+  RemoteControlOrchestrator.cpp
 
 firmware/csm/include/board/remote/
   RemoteTypes.h
@@ -500,6 +502,14 @@ Phase 1G:
 compile-ready remote contract self-test helper
 synthetic CRSF -> normalize -> mailbox writer -> mailbox reader roundtrip
 not wired to main.cpp and not hardware/IPC evidence
+```
+
+Phase 1H:
+
+```text
+M7 remote control orchestration skeleton in control layer
+RemoteControlSource -> AuthorityManager -> CommandLimiter -> VehicleCommandMapper -> CanTxGateway
+no main.cpp wiring, no CAN backend write
 ```
 
 Phase 1 금지:

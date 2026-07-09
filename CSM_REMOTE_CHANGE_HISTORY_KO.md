@@ -637,3 +637,63 @@ Next Step:
 ```text
 Phase 1H: M7 remote orchestration candidate skeleton 또는 executable host/unit test harness.
 ```
+
+---
+
+## 2026-07-09: Phase 1H M7 Remote Control Orchestrator Skeleton
+
+Summary:
+
+```text
+M7 remote control 한 tick의 제어 흐름을 묶는 RemoteControlOrchestrator skeleton을 control 계층에 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/control/RemoteControlOrchestrator.h
+firmware/csm/src/board/control/RemoteControlOrchestrator.cpp
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+RemoteControlSource, AuthorityManager, CommandLimiter, VehicleCommandMapper, CanTxGateway의 호출 순서를
+main.cpp에 넣지 않고 별도 control orchestration 경계로 고정하기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+M4 build env 없음.
+UART/Serial3 binding 없음.
+actual M4-M7 IPC 없음.
+VehicleCommandMapper는 여전히 실제 vehicle frame을 만들지 않음.
+CanTxGateway는 여전히 평가만 하고 CAN backend write를 하지 않음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN TX, D1 gate, HostDownlink, Serial3, MCP2515, digitalWrite, HardwareSerial, UART, HSEM, OpenAMP, or RPC path in control/remote files.
+PlatformIO passive env build succeeded and compiled RemoteControlOrchestrator.cpp.
+```
+
+Residual Risk:
+
+```text
+orchestrator는 아직 main.cpp에 연결되지 않았고, 실제 accepted TX evidence도 없다.
+OD-001/002/003/004/005/006이 닫히기 전 production local TX는 여전히 금지된다.
+```
+
+Next Step:
+
+```text
+Phase 1I: Phase 1 skeleton audit/guard 정리 후 Phase 2 M4 env/Serial3/IPC 증거 수집 계획으로 전환.
+```

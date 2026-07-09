@@ -174,3 +174,17 @@ Notes:
 | R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | self-test includes corrupt CRSF CRC rejection helper |
 | R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | self-test roundtrips writer/reader sequence and CRC contract; hardware torn-read evidence remains OD-004 |
 | R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | self-test touches only remote sample contracts, no CAN path |
+
+---
+
+## Phase 1H Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `RemoteControlOrchestrator` |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | orchestration skeleton is outside `main.cpp`; no `main.cpp` changes |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | stage-specific reject result, authority/limit/map/gateway sequence, passive build evidence |
+| R-PROD-001 | Product Definition 17.2 | autonomy release 없으면 local TX 0 | Designed | orchestrator checks `AuthorityManager` before limiter/mapper/gateway |
+| R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | mapped frames are evaluated by `CanTxGateway`; no backend write exists in orchestrator |
+| R-PROD-010 | Product Definition 17.2 | rejected command = reason + no TX evidence | Designed | orchestrator returns stage/decision/detail and performs no TX on reject |
+| R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | current mapper still rejects with no real vehicle mapping |
