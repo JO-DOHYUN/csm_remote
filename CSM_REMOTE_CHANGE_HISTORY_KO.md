@@ -1,0 +1,126 @@
+# CSM Remote Change History
+
+작성일: 2026-07-09  
+목적: 작업 흐름과 변경 이유를 짧게 기록한다.
+
+---
+
+## Entry Template
+
+```text
+Date:
+Change ID:
+Summary:
+Reason:
+Files Changed:
+Affected Definitions:
+Affected Decisions:
+Tests/Evidence:
+Residual Risk:
+Next Step:
+```
+
+---
+
+## 2026-07-07: Product Definition Created
+
+Summary:
+
+```text
+CSM Remote의 한국어 마스터 제품 정의서와 영문 보조 정의서를 작성했다.
+```
+
+Files Changed:
+
+```text
+CSM_REMOTE_PRODUCT_DEFINITION_KO.md
+CSM_REMOTE_PRODUCT_DEFINITION.md
+README.md
+```
+
+Reason:
+
+```text
+CSM 리모컨 통합은 코드 기능 추가 전에 제품 철학, M4/M7 경계, CAN TX 권한, VSM 기본 권한, 상태/에러/evidence를 먼저 고정해야 한다.
+```
+
+Residual Risk:
+
+```text
+D1 gate semantics, upstream autonomy profile, R16SM actual baud, M4-M7 IPC, vehicle CAN mapping은 open decision으로 남음.
+```
+
+---
+
+## 2026-07-09: Development Harness Architecture Created
+
+Summary:
+
+```text
+개발 중 기능/구상 변경으로 인한 아키텍처 붕괴를 막기 위해 개발 하네스 에이전트 아키텍처를 작성했다.
+```
+
+Files Changed:
+
+```text
+CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+README.md
+CSM_REMOTE_DECISION_LEDGER_KO.md
+CSM_REMOTE_OPEN_DECISIONS_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Architecture drift, boundary leakage, data flow scatter, shadow state machine, profile blur, evidence collapse를 개발 운영 차원에서 막아야 한다.
+```
+
+Next Step:
+
+```text
+CSM baseline import/copy strategy와 Phase 0 handoff 재판정으로 이동.
+```
+
+---
+
+## 2026-07-09: Agent Routing And Lean Completeness Added
+
+Summary:
+
+```text
+에이전트 하네스의 최종 목표를 완성도와 토큰 효율화로 명확히 하고,
+작업 유형별 문서/섹션/에이전트 라우팅 매트릭스를 추가했다.
+```
+
+Files Changed:
+
+```text
+CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md
+CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+CSM_REMOTE_DECISION_LEDGER_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+CSM_REMOTE_HARNESS_FINAL_AUDIT_KO.md
+README.md
+```
+
+Reason:
+
+```text
+불필요한 agent/skill/document 로딩을 막고, 구상 변경 시 제품 실행-사용 시나리오 적합성,
+최종 아키텍처 우선 구현, 잔재 정리, 간결한 완결성을 강제하기 위해서다.
+```
+
+Residual Risk:
+
+```text
+라우팅 매트릭스는 구현이 시작되면 실제 source layout과 test command에 맞춰 계속 갱신해야 한다.
+```
+
+Next Step:
+
+```text
+Phase 0에서 CSM baseline import/copy strategy와 handoff 재판정을 수행한다.
+```

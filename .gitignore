@@ -1,0 +1,32 @@
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs / temporary files
+*.log
+*.tmp
+*.bak
+
+# Python / tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# PlatformIO / embedded build output
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# C/C++ build output
+build/
+out/
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+
