@@ -1,0 +1,29 @@
+실행 순서
+
+1. 아래 3개 파일을 같은 폴더에 둔다
+   - vms_rules_from_excel_profiled_signals.py
+   - profile_hamt_like_r13.json
+   - HYM_HAMT2.0_CAN DB_R13_260206.xlsx
+
+2. 가장 쉬운 방법
+   - run_vms_rules_build_example.bat 를 더블클릭
+
+3. 직접 명령어로 실행하고 싶으면
+   py vms_rules_from_excel_profiled_signals.py --excel "HYM_HAMT2.0_CAN DB_R13_260206.xlsx" --profile "profile_hamt_like_r13.json" --outdir "db_out" --only ALL --system-bus 0 --driving-bus 1 --prefix vms_rules --suffix R13
+
+4. 결과물
+   db_out\vms_rules_SYSTEM_R13.json
+   db_out\vms_rules_DRIVING_R13.json
+   db_out\vms_rules_MERGED_R13.json
+
+설명
+
+- 기존 Qt는 top-level 시간 규칙만 읽는다.
+- 이 생성기는 기존 필드를 그대로 유지하면서, 각 rule 안에 signals 배열을 추가로 넣는다.
+- 그래서 지금 Qt와도 충돌 없이 공존 가능하다.
+- 나중에 Qt를 확장하면 signals를 이용해 값 범위, 비트 플래그, enum 검사까지 붙일 수 있다.
+
+주의
+
+- merged 파일은 SYSTEM/DRIVING에서 같은 ID가 있을 수 있으니 bus를 분리해서 만드는 편이 안전하다.
+- bat 예시는 system=0, driving=1 로 넣었다.

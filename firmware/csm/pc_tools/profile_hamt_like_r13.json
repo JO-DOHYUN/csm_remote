@@ -1,0 +1,61 @@
+{
+  "profile_name": "hamt_like_r13",
+  "sheets": {
+    "system": "CAN DB_LINE2(SYSTEM)",
+    "driving": "CAN DB_LINE1(DRIVING)"
+  },
+  "header_scan_rows": 20,
+  "header_alias": {
+    "msg_name": [
+      "Name",
+      "Message Name"
+    ],
+    "msg_id": [
+      "Identifier [Hex]",
+      "Identifier",
+      "CAN ID",
+      "ID"
+    ],
+    "period_ms": [
+      "Repetition rate [ms]",
+      "period(ms)",
+      "period",
+      "cycle"
+    ],
+    "byte": [
+      "Byte"
+    ],
+    "bit": [
+      "Bit"
+    ],
+    "comment": [
+      "Comment / Paramter (signal)",
+      "Comment / Parameter (signal)",
+      "Signal",
+      "Comment"
+    ],
+    "length_resolution": [
+      "Length / Resolution",
+      "Length/Resolution"
+    ],
+    "data_offset": [
+      "Data Offset",
+      "Offset"
+    ],
+    "data_range": [
+      "Data Range",
+      "Range"
+    ],
+    "operating_range": [
+      "Operating Data Range",
+      "Operating Range"
+    ],
+    "timeout": [
+      "Timeout Value"
+    ],
+    "description": [
+      "DESCRIPTION",
+      "Description"
+    ]
+  }
+}

@@ -1,0 +1,68 @@
+name: platform-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  csm-firmware:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        shell: powershell
+        run: python -m pip install --upgrade platformio
+
+      - name: Build CSM firmware
+        shell: powershell
+        run: platformio run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm
+
+  vsm-qt:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: qt
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.10.2
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtserialport
+
+      - name: Resolve Qt prefix path
+        shell: powershell
+        run: |
+          $qmake = (Get-Command qmake).Source
+          $qtRoot = Split-Path (Split-Path $qmake -Parent) -Parent
+          "CAN_MONITOR_QT_PREFIX_PATH=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Configure Release
+        shell: powershell
+        run: cmake --preset vs-release-qt6
+
+      - name: Build Release
+        shell: powershell
+        run: cmake --build --preset build-release
+
+      - name: Test Release
+        shell: powershell
+        run: ctest --preset test-release
+
+      - name: Portable deploy smoke
+        shell: powershell
+        run: |
+          scripts\deploy_release.bat out\build\x64-Release out\build\x64-Release\ci_portable
+          if (!(Test-Path out\build\x64-Release\ci_portable\can_monitor_qml_reboot.exe)) { throw "portable exe missing" }
