@@ -160,3 +160,54 @@ CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
 CSM_REMOTE_REQUIREMENT_TRACE_KO.md
 CSM_REMOTE_CHANGE_HISTORY_KO.md
 ```
+
+---
+
+## ADR-0004: Import CSM As Git Subtree
+
+Date: 2026-07-09  
+Status: Accepted  
+
+Decision:
+
+```text
+기존 CSM `bfef287`을 `firmware/csm` prefix의 git subtree로 통합한다.
+```
+
+Context:
+
+```text
+CSM은 앞으로 직접 수정될 제품 firmware다.
+하지만 나중에 별도 repo로 다시 분리할 가능성도 남겨야 한다.
+복붙은 history와 diff 추적을 깨고, submodule은 제품 정의/trace와 firmware 변경 commit 흐름을 갈라놓는다.
+```
+
+Chosen Reason:
+
+```text
+subtree는 csm_remote 안에서 firmware를 직접 수정할 수 있게 하면서도,
+prefix 기준 split/pull이 가능하다.
+```
+
+Rejected Alternatives:
+
+```text
+copy-paste: baseline 추적과 재분리 가능성이 약함
+submodule: CSM을 외부 dependency처럼 만들어 현재 제품 개발 흐름에 맞지 않음
+```
+
+Consequences:
+
+```text
+CSM firmware는 `firmware/csm` 아래에서 작업한다.
+upstream CSM 변경은 git subtree pull로 가져온다.
+나중에 분리할 때는 git subtree split을 사용한다.
+```
+
+Affected Documents:
+
+```text
+README.md
+CSM_REMOTE_REPOSITORY_SETUP_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+```

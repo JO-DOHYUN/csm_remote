@@ -161,7 +161,8 @@ RC 또는 service 제어가 active인 동안 upstream autonomous motion-control 
 기준 CSM:
 
 ```text
-C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
+imported subtree: C:\WORKS\VS\csm_remote\firmware\csm
+upstream source:  C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
 commit bfef287aa424edcef6026dcd86aa6e4077a82386
 short  bfef287 Finalize passive CSM fault hold evidence
 branch codex/csm-cdc-uplink-architecture
@@ -1658,7 +1659,8 @@ vehicle output rate above initial low-rate candidate
 
 Local source basis:
 
-- `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`
+- `C:\WORKS\VS\csm_remote\firmware\csm`
+- upstream `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`
 - CSM commit `bfef287`
 - CSM `include/BoardPins.h`
 - CSM `src/main.cpp`
@@ -1714,4 +1716,3 @@ VSM observes by default.
 Unknown blocks.
 Rejected means no CAN_TX_RAW.
 ```
-

@@ -169,7 +169,8 @@ fallback to raw CAN downlink;
 The implementation baseline is:
 
 ```text
-C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
+imported subtree: C:\WORKS\VS\csm_remote\firmware\csm
+upstream source:  C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
 commit bfef287aa424edcef6026dcd86aa6e4077a82386
 short  bfef287 Finalize passive CSM fault hold evidence
 branch codex/csm-cdc-uplink-architecture
@@ -1652,7 +1653,7 @@ Open decisions shall block product TX if unresolved.
 
 Local source basis:
 
-- CSM baseline at `bfef287`;
+- CSM imported subtree at `firmware/csm`, baseline `bfef287`;
 - CSM `include/BoardPins.h`;
 - CSM `src/main.cpp` passive/full-instrumented build guards and D1 behavior;
 - CSM existing `SafetySupervisor`;

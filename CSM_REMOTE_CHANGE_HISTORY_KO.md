@@ -124,3 +124,45 @@ Next Step:
 ```text
 Phase 0에서 CSM baseline import/copy strategy와 handoff 재판정을 수행한다.
 ```
+
+---
+
+## 2026-07-09: CSM Imported As Git Subtree
+
+Summary:
+
+```text
+`csm_remote`를 git repository로 초기화하고, 기존 CSM `bfef287`을 `firmware/csm` 아래에 git subtree로 통합했다.
+```
+
+Files Changed:
+
+```text
+.gitignore
+.gitattributes
+firmware/csm/
+README.md
+CSM_REMOTE_REPOSITORY_SETUP_KO.md
+CSM_REMOTE_DECISION_LEDGER_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+```
+
+Reason:
+
+```text
+복붙 없이 CSM baseline을 추적하고, 제품 정의/decision/trace와 firmware 변경을 같은 repo에서 관리하면서도,
+나중에 `firmware/csm` prefix 기준으로 다시 분리할 수 있게 하기 위해서다.
+```
+
+Tests/Evidence:
+
+```text
+CSM upstream HEAD confirmed as bfef287aa424edcef6026dcd86aa6e4077a82386.
+Subtree import commit created under firmware/csm.
+```
+
+Next Step:
+
+```text
+Phase 0 handoff 재판정과 CSM source layout proposal 작성.
+```

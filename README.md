@@ -30,20 +30,31 @@ to the existing CSM platform.
 8. `CSM_REMOTE_HARNESS_FINAL_AUDIT_KO.md`  
    Final audit of whether the current harness is operationally ready for industrial product development.
 
-9. `CSM_REMOTE_PRODUCT_DEFINITION.md`  
+9. `CSM_REMOTE_REPOSITORY_SETUP_KO.md`  
+   Git/subtree setup record and rules for updating or splitting the imported CSM firmware.
+
+10. `CSM_REMOTE_PRODUCT_DEFINITION.md`  
    English engineering companion. Use it for implementation-oriented review, but the Korean master wins on conflict.
 
-10. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
+11. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
    Original handoff/background document. Useful context, but superseded by the product definition on conflict.
 
 ## Current Baseline
 
 ```text
-CSM: C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
+Imported CSM subtree: firmware/csm
+Original CSM upstream: C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
 CSM commit: bfef287 Finalize passive CSM fault hold evidence
 VSM: C:\WORKS\VS\turn81_full_buildfix2
 Target hardware: Portenta H7 + Mid Carrier + Radiolink T16D + R16SM
 ```
+
+## Firmware Path
+
+```text
+CSM PlatformIO project: firmware/csm
+```
+
 
 ## Core Rule
 
