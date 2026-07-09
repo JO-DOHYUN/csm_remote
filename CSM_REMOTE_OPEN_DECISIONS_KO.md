@@ -153,6 +153,19 @@ torn-read test
 stale/heartbeat test
 ```
 
+Current Phase 1D Result:
+
+```text
+64-byte M4RemoteMailboxFrame, seqlock begin/end rule, CRC16-CCITT, sample state mapping은 코드와 문서로 고정했다.
+하지만 shared memory 위치, cache barrier, HSEM/OpenAMP/RPC 선택은 아직 확정하지 않았다.
+```
+
+Allowed Temporary Assumption:
+
+```text
+M7 code may compile and test the fixed frame decoder, but production M4-M7 IPC binding must remain disabled until closure evidence exists.
+```
+
 Blocked Work:
 
 ```text
@@ -253,4 +266,3 @@ Blocked Work:
 vehicle validation readiness
 final fault recovery policy
 ```
-

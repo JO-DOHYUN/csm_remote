@@ -52,5 +52,22 @@ constexpr bool isUsableRcSampleState(RcSampleState state) {
   return state == RcSampleState::Ok;
 }
 
-}  // namespace csm::board::remote
+constexpr RemoteLinkState remoteLinkStateForRcSampleState(RcSampleState state) {
+  switch (state) {
+    case RcSampleState::Lost:
+      return RemoteLinkState::Searching;
+    case RcSampleState::Ok:
+      return RemoteLinkState::Valid;
+    case RcSampleState::Failsafe:
+      return RemoteLinkState::Failsafe;
+    case RcSampleState::Stale:
+      return RemoteLinkState::Stale;
+    case RcSampleState::CrcBad:
+      return RemoteLinkState::Malformed;
+    case RcSampleState::ProtocolFault:
+      return RemoteLinkState::ProtocolFault;
+  }
+  return RemoteLinkState::ProtocolFault;
+}
 
+}  // namespace csm::board::remote

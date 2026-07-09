@@ -379,3 +379,70 @@ Next Step:
 ```text
 Phase 1D: M4-M7 mailbox/RC parser integration contract 또는 open decision closure 우선순위 확정.
 ```
+
+---
+
+## 2026-07-09: Phase 1D M4-M7 Remote Mailbox Contract
+
+Summary:
+
+```text
+M4가 생산하고 M7이 소비할 64-byte RC mailbox frame contract와 decode skeleton을 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/remote/M4RemoteMailboxContract.h
+firmware/csm/src/board/remote/M4RemoteMailboxContract.cpp
+firmware/csm/include/board/remote/M4RemoteMailboxReader.h
+firmware/csm/src/board/remote/M4RemoteMailboxReader.cpp
+firmware/csm/include/board/remote/RemoteTypes.h
+firmware/csm/src/board/remote/RemoteTypes.cpp
+CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_OPEN_DECISIONS_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+README.md
+```
+
+Reason:
+
+```text
+M4 parser 구현 전 M7이 신뢰할 수 있는 handoff 경계를 먼저 고정하기 위해서다.
+이제 M7은 외부 integrity_ok 플래그만 믿지 않고 seqlock, magic/version/size, sample state, CRC를 직접 검증할 수 있다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+M4 build env 없음.
+실제 M4-M7 IPC/shared memory binding 없음.
+CRSF parser 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+M4RemoteMailboxFrame static_assert fixes the wire size at 64 bytes.
+Boundary search found no CAN TX, D1 gate, HostDownlink, Serial3, MCP2515, or digitalWrite path in the new remote contract files.
+PlatformIO passive env build succeeded and compiled M4RemoteMailboxContract.cpp.
+```
+
+Residual Risk:
+
+```text
+OD-004는 여전히 open이다. 실제 shared memory 위치, cache coherency, memory barrier,
+HSEM/OpenAMP/RPC 선택, torn-read bench test는 아직 필요하다.
+```
+
+Next Step:
+
+```text
+Phase 1E: M4 CRSF parser/normalizer skeleton 또는 M7 unit guard/harness를 추가하기 전,
+OD-003/OD-004 evidence 수집 계획을 확정한다.
+```

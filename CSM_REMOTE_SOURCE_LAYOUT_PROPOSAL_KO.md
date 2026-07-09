@@ -141,10 +141,12 @@ firmware/csm/src/board/control/
 
 firmware/csm/include/board/remote/
   RemoteTypes.h
+  M4RemoteMailboxContract.h
   M4RemoteMailboxReader.h
   RemoteControlSource.h
 
 firmware/csm/src/board/remote/
+  M4RemoteMailboxContract.cpp
   M4RemoteMailboxReader.cpp
   RemoteControlSource.cpp
 ```
@@ -462,8 +464,9 @@ CanTxGateway skeleton
 Phase 1D:
 
 ```text
+M4-M7 mailbox fixed frame contract
+torn/corrupt/protocol fault decode skeleton
 compile integration
-static/unit guard planning
 Requirement Trace update
 ```
 
@@ -502,4 +505,3 @@ Phase 1A: AuthorityTypes / RemoteTypes / OperatorCommand 작성
 Passive build 유지 확인
 main.cpp 변경 최소화 또는 없음
 ```
-

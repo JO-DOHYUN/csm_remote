@@ -121,3 +121,17 @@ Notes:
 | R-PROD-009 | Product Definition 17.2 | accepted command = ACK + TX evidence | Designed | acceptance can be evaluated, but no TX evidence is emitted yet |
 | R-PROD-010 | Product Definition 17.2 | rejected command = reason + no TX evidence | Designed | all new modules return explicit reject detail and perform no TX |
 | R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | `VehicleCommandMapper` rejects configured commands with `NoVehicleMapping` until vehicle profile closure |
+
+---
+
+## Phase 1D Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `M4RemoteMailboxContract`, `M4RemoteMailboxReader::updateFromMailboxFrame()` |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | no `main.cpp` changes |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | fixed frame size, seqlock rule, CRC, reject detail, passive build evidence |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | M4 mailbox frame contains RC sample only, no CAN ID or payload |
+| R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | M4 can report `CrcBad`/`ProtocolFault`; M7 maps them to `Malformed`/`ProtocolFault` reject |
+| R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Implemented | decoder rejects no-frame, torn sequence, bad magic/version/size/state, CRC mismatch, stale timeout |
+| R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | non-OK sample states map to non-usable `RemoteLinkState` and do not create `OperatorCommand` |

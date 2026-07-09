@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "board/remote/M4RemoteMailboxContract.h"
 #include "board/remote/RemoteTypes.h"
 
 namespace csm::board::remote {
@@ -24,6 +25,7 @@ class M4RemoteMailboxReader {
   void update(uint32_t now_ms, uint32_t stale_timeout_ms = kDefaultRcSampleStaleMs);
 
   bool updateFromSample(uint32_t now_ms, const RcSample& sample, bool integrity_ok);
+  bool updateFromMailboxFrame(uint32_t now_ms, const M4RemoteMailboxFrame& frame);
   void clear();
 
   const M4RemoteMailboxSnapshot& snapshot() const { return snapshot_; }
@@ -38,4 +40,3 @@ class M4RemoteMailboxReader {
 };
 
 }  // namespace csm::board::remote
-

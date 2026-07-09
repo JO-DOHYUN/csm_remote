@@ -3,11 +3,16 @@
 namespace csm::board::remote {
 namespace {
 
-constexpr uint16_t kDetailBadMagic = 1;
-constexpr uint16_t kDetailBadVersion = 2;
-constexpr uint16_t kDetailIntegrityFailed = 3;
-constexpr uint16_t kDetailSampleNotUsable = 4;
-constexpr uint16_t kDetailStale = 5;
+constexpr uint16_t kDetailBadMagic =
+    static_cast<uint16_t>(M4RemoteMailboxRejectDetail::BadMagic);
+constexpr uint16_t kDetailBadVersion =
+    static_cast<uint16_t>(M4RemoteMailboxRejectDetail::BadVersion);
+constexpr uint16_t kDetailIntegrityFailed =
+    static_cast<uint16_t>(M4RemoteMailboxRejectDetail::IntegrityFailed);
+constexpr uint16_t kDetailSampleNotUsable =
+    static_cast<uint16_t>(M4RemoteMailboxRejectDetail::SampleNotUsable);
+constexpr uint16_t kDetailStale =
+    static_cast<uint16_t>(M4RemoteMailboxRejectDetail::Stale);
 
 }  // namespace
 
@@ -49,15 +54,30 @@ bool M4RemoteMailboxReader::updateFromSample(uint32_t now_ms,
     return false;
   }
   if (!isUsableRcSampleState(sample.sample_state)) {
-    reject(sample.sample_state == RcSampleState::Failsafe ? RemoteLinkState::Failsafe
-                                                          : RemoteLinkState::Stale,
-           kDetailSampleNotUsable);
+    reject(remoteLinkStateForRcSampleState(sample.sample_state), kDetailSampleNotUsable);
     return false;
   }
 
   snapshot_.link_state = RemoteLinkState::Valid;
   snapshot_.reject_detail = 0;
   return true;
+}
+
+bool M4RemoteMailboxReader::updateFromMailboxFrame(uint32_t now_ms,
+                                                   const M4RemoteMailboxFrame& frame) {
+  const M4RemoteMailboxDecodeResult decoded = decodeM4RemoteMailboxFrame(frame);
+  if (!decoded.integrity_ok) {
+    snapshot_.sample = decoded.sample;
+    snapshot_.sample_present = decoded.sample_present;
+    snapshot_.integrity_ok = false;
+    snapshot_.received_m7_ms = now_ms;
+    snapshot_.age_ms = 0;
+    snapshot_.link_state = decoded.link_state;
+    snapshot_.reject_detail = decoded.reject_detail;
+    return false;
+  }
+
+  return updateFromSample(now_ms, decoded.sample, true);
 }
 
 void M4RemoteMailboxReader::clear() {
@@ -91,4 +111,3 @@ void M4RemoteMailboxReader::reject(RemoteLinkState state, uint16_t detail) {
 }
 
 }  // namespace csm::board::remote
-

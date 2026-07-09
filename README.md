@@ -39,10 +39,13 @@ to the existing CSM platform.
 11. `CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md`  
    Proposed firmware source layout for Phase 1 skeleton implementation.
 
-12. `CSM_REMOTE_PRODUCT_DEFINITION.md`  
+12. `CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md`
+   Fixed M4-to-M7 RC mailbox frame contract. OD-004 remains open for the real IPC mechanism.
+
+13. `CSM_REMOTE_PRODUCT_DEFINITION.md`
    English engineering companion. Use it for implementation-oriented review, but the Korean master wins on conflict.
 
-13. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
+14. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`
    Original handoff/background document. Useful context, but superseded by the product definition on conflict.
 
 ## Current Baseline
