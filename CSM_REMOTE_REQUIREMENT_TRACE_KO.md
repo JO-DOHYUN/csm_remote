@@ -76,3 +76,18 @@ Notes:
 | R-DEV-009 | Repository Setup | CSM firmware 작업은 `firmware/csm` subtree 안에서 수행하고 복붙 갱신을 금지한다 | Defined | none |
 | R-DEV-010 | Phase 0 Review | 기존 handoff는 Product Definition 기준으로 ACCEPT/MODIFY/HOLD/REJECT/SUPERSEDED 판정을 거친다 | Designed | none |
 | R-DEV-011 | Source Layout Proposal | Phase 1 구현 전 최종 module layout과 dataflow owner를 문서화한다 | Designed | none |
+
+---
+
+## Phase 1A Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `firmware/csm/include/board/authority/AuthorityTypes.h`, `firmware/csm/include/board/remote/RemoteTypes.h`, `firmware/csm/include/board/control/OperatorCommand.h` |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | no `main.cpp` changes |
+| R-DEV-007 | Harness 15 | 설계는 Lean Completeness, 즉 간결한 완결성을 기준으로 판단한다 | Implemented | type-only skeleton with compile anchors |
+| R-PROD-001 | Product Definition 17.2 | autonomy release 없으면 local TX 0 | Designed | `AutonomyAuthorityState`, `AuthorityDecision` deny-first defaults |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | remote types contain no CAN ID/payload |
+| R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | `OperatorCommand` contains normalized intent only |
+| R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | `RemoteLinkState`, `RcSampleState` unusable stale/failsafe helpers |
+| R-PROD-013 | Product Definition 17.2 | neutral-before-takeover enforced | Designed | neutral default `OperatorCommand` |

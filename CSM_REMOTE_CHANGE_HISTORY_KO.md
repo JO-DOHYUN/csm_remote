@@ -208,3 +208,52 @@ Next Step:
 ```text
 Phase 1A: AuthorityTypes / RemoteTypes / OperatorCommand deny-first type skeleton 작성.
 ```
+
+---
+
+## 2026-07-09: Phase 1A Deny-First Type Skeleton
+
+Summary:
+
+```text
+Phase 1A로 M7 authority/control/remote 경계의 첫 타입 skeleton을 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/authority/AuthorityTypes.h
+firmware/csm/src/board/authority/AuthorityTypes.cpp
+firmware/csm/include/board/remote/RemoteTypes.h
+firmware/csm/src/board/remote/RemoteTypes.cpp
+firmware/csm/include/board/control/OperatorCommand.h
+firmware/csm/src/board/control/OperatorCommand.cpp
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Phase 1B/C 구현 전에 AutonomyAuthorityState, AuthorityState, ControlSourceId,
+ControlDecisionCode, RcSample, RemoteLinkState, OperatorCommand의 단일 타입 계약을 먼저 고정하기 위해서다.
+```
+
+Tests/Evidence:
+
+```text
+새 타입은 compile anchor cpp를 통해 passive build에서 실제 컴파일되도록 배치했다.
+PlatformIO passive env build succeeded and compiled AuthorityTypes.cpp, RemoteTypes.cpp, OperatorCommand.cpp.
+```
+
+Residual Risk:
+
+```text
+아직 AuthorityManager, AutonomyAuthorityMonitor, RemoteControlSource, CanTxGateway 동작은 구현하지 않았다.
+```
+
+Next Step:
+
+```text
+Phase 1B: AutonomyAuthorityMonitor / AuthorityManager / M4RemoteMailboxReader / RemoteControlSource deny-first skeleton.
+```
