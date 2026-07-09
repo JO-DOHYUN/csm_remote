@@ -139,6 +139,24 @@ documentation baseline committed
 text normalization policy added
 CSM bfef287 imported as subtree under firmware/csm
 csm-upstream remote connected
+passive PlatformIO build succeeded from firmware/csm
+subtree split verification returned bfef287
+```
+
+검증 명령:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
+git subtree split --prefix=firmware/csm --branch verify/csm-split-test
+git rev-parse verify/csm-split-test
+git branch -D verify/csm-split-test
+```
+
+검증 결과:
+
+```text
+PlatformIO env portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive: SUCCESS
+split commit: bfef287aa424edcef6026dcd86aa6e4077a82386
 ```
 
 다음 단계:
@@ -148,4 +166,3 @@ Phase 0 handoff 재판정
 CSM source layout proposal
 Phase 1 M7 scaffolding plan
 ```
-

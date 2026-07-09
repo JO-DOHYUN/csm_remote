@@ -159,6 +159,8 @@ Tests/Evidence:
 ```text
 CSM upstream HEAD confirmed as bfef287aa424edcef6026dcd86aa6e4077a82386.
 Subtree import commit created under firmware/csm.
+PlatformIO passive env build succeeded from firmware/csm.
+git subtree split --prefix=firmware/csm returned bfef287.
 ```
 
 Next Step:
