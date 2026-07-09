@@ -574,3 +574,66 @@ Next Step:
 ```text
 Phase 1G: parser/normalizer/mailbox contract self-test harness 또는 M7 orchestration candidate skeleton.
 ```
+
+---
+
+## 2026-07-09: Phase 1G Remote Contract Self-Test Helper
+
+Summary:
+
+```text
+synthetic CRSF frame부터 M7 mailbox snapshot까지 왕복하는 remote contract self-test helper를 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/remote/RemoteContractSelfTest.h
+firmware/csm/src/board/remote/RemoteContractSelfTest.cpp
+CSM_REMOTE_CRSF_FRONTEND_CONTRACT_KO.md
+CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_OPEN_DECISIONS_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+CRSF parser, RC normalizer, M4 mailbox writer, M7 mailbox reader가 같은 contract로 맞물리는지
+합성 입력 기준으로 확인할 수 있는 helper를 만들어 이후 UART/IPC 통합 전 regression 기준을 세우기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+M4 build env 없음.
+UART/Serial3 binding 없음.
+actual shared memory address 없음.
+cache barrier/HSEM/OpenAMP/RPC binding 없음.
+새 CAN TX 없음.
+self-test는 product runtime에 자동 연결되지 않음.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN TX, D1 gate, HostDownlink, Serial3, MCP2515, digitalWrite, HardwareSerial, UART, HSEM, OpenAMP, or RPC path in remote files.
+PlatformIO passive env build succeeded and compiled RemoteContractSelfTest.cpp.
+```
+
+Residual Risk:
+
+```text
+이 self-test는 compile-ready synthetic helper다. 실제 실행형 unit test, R16SM capture,
+dual-core torn-read bench evidence는 아직 별도 단계가 필요하다.
+```
+
+Next Step:
+
+```text
+Phase 1H: M7 remote orchestration candidate skeleton 또는 executable host/unit test harness.
+```

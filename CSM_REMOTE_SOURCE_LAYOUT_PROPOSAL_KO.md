@@ -146,6 +146,7 @@ firmware/csm/include/board/remote/
   M4RemoteMailboxContract.h
   M4RemoteMailboxWriter.h
   M4RemoteMailboxReader.h
+  RemoteContractSelfTest.h
   RemoteControlSource.h
 
 firmware/csm/src/board/remote/
@@ -154,6 +155,7 @@ firmware/csm/src/board/remote/
   M4RemoteMailboxContract.cpp
   M4RemoteMailboxWriter.cpp
   M4RemoteMailboxReader.cpp
+  RemoteContractSelfTest.cpp
   RemoteControlSource.cpp
 ```
 
@@ -490,6 +492,14 @@ Phase 1F:
 platform-independent M4 mailbox writer helper
 RcSample -> M4RemoteMailboxFrame pack/CRC/sequence skeleton
 no shared memory address, no barrier/HSEM/OpenAMP/RPC binding
+```
+
+Phase 1G:
+
+```text
+compile-ready remote contract self-test helper
+synthetic CRSF -> normalize -> mailbox writer -> mailbox reader roundtrip
+not wired to main.cpp and not hardware/IPC evidence
 ```
 
 Phase 1 금지:

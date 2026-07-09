@@ -162,3 +162,15 @@ Notes:
 | R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | writer packs only `RcSample` into `M4RemoteMailboxFrame`, no CAN ID/payload |
 | R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | writer produces matching sequence/CRC contract; actual torn-read bench evidence still OD-004 |
 | R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | writer publishes explicit `RcSampleState`; M7 reader/source reject non-OK states |
+
+---
+
+## Phase 1G Implementation Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `RemoteContractSelfTest` |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | synthetic CRSF/parser/normalizer/mailbox roundtrip helper, passive build evidence |
+| R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | self-test includes corrupt CRSF CRC rejection helper |
+| R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | self-test roundtrips writer/reader sequence and CRC contract; hardware torn-read evidence remains OD-004 |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | self-test touches only remote sample contracts, no CAN path |

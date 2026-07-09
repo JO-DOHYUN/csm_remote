@@ -235,3 +235,10 @@ M4RemoteMailboxWriter.cpp compiles in passive product env.
 Writer can produce a valid 64-byte frame from RcSample without owning actual IPC.
 No M4 build env, real IPC, UART, or CAN TX path was added.
 ```
+
+Phase 1G evidence:
+
+```text
+RemoteContractSelfTest.cpp compiles a synthetic writer/reader roundtrip helper.
+It does not own shared memory placement, cache barrier, HSEM/OpenAMP/RPC, or torn-read bench evidence.
+```

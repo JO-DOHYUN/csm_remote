@@ -132,6 +132,12 @@ CRSF bounded frame parser, CRC8-DVB-S2 check, 0x16 RC_CHANNELS_PACKED 16ch/22B u
 하지만 실제 R16SM baud, UART inversion/duplex, frame cadence, wiring-level mode evidence는 아직 확정하지 않았다.
 ```
 
+Current Phase 1G Result:
+
+```text
+synthetic CRSF roundtrip self-test helper는 추가했지만, 실제 R16SM signal capture와 valid frame decode evidence는 아직 아니다.
+```
+
 Allowed Temporary Assumption:
 
 ```text
@@ -179,6 +185,12 @@ Current Phase 1F Result:
 ```text
 M4RemoteMailboxWriter helper가 RcSample을 fixed frame으로 포장하고 CRC/sequence를 채우는 producer-side skeleton을 추가했다.
 하지만 실제 shared memory publish, cache barrier, HSEM/OpenAMP/RPC binding은 아직 확정하지 않았다.
+```
+
+Current Phase 1G Result:
+
+```text
+synthetic mailbox writer/reader roundtrip self-test helper는 추가했지만, 실제 dual-core shared memory/torn-read bench evidence는 아직 아니다.
 ```
 
 Allowed Temporary Assumption:

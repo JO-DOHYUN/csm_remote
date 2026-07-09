@@ -158,6 +158,14 @@ CrsfParser.cpp and RcNormalizer.cpp compile in passive product env.
 No UART, Serial3, M4 env, M4-M7 IPC, CAN TX, or vehicle mapping was added.
 ```
 
+Phase 1G evidence:
+
+```text
+RemoteContractSelfTest.cpp provides a compile-ready synthetic CRSF frame roundtrip:
+CRSF parser -> RC channel decode -> normalizer -> mailbox writer -> mailbox reader.
+It is not wired to product runtime and does not replace R16SM logic-analyzer evidence.
+```
+
 ---
 
 ## 6. External References
