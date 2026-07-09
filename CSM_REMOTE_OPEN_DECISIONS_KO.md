@@ -174,6 +174,13 @@ Current Phase 1D Result:
 하지만 shared memory 위치, cache barrier, HSEM/OpenAMP/RPC 선택은 아직 확정하지 않았다.
 ```
 
+Current Phase 1F Result:
+
+```text
+M4RemoteMailboxWriter helper가 RcSample을 fixed frame으로 포장하고 CRC/sequence를 채우는 producer-side skeleton을 추가했다.
+하지만 실제 shared memory publish, cache barrier, HSEM/OpenAMP/RPC binding은 아직 확정하지 않았다.
+```
+
 Allowed Temporary Assumption:
 
 ```text

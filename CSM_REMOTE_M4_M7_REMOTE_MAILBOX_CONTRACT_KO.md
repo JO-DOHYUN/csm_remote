@@ -2,7 +2,16 @@
 
 작성일: 2026-07-09
 상태: Phase 1D fixed frame contract, IPC mechanism not closed
-대상 코드: `firmware/csm/include/board/remote/M4RemoteMailboxContract.h`
+대상 코드:
+
+```text
+firmware/csm/include/board/remote/M4RemoteMailboxContract.h
+firmware/csm/src/board/remote/M4RemoteMailboxContract.cpp
+firmware/csm/include/board/remote/M4RemoteMailboxWriter.h
+firmware/csm/src/board/remote/M4RemoteMailboxWriter.cpp
+firmware/csm/include/board/remote/M4RemoteMailboxReader.h
+firmware/csm/src/board/remote/M4RemoteMailboxReader.cpp
+```
 
 이 문서는 Portenta H7 M4 리모컨 프론트엔드가 M7 권한 판단 경로로 넘길 RC sample의
 고정 binary contract를 정의한다.
@@ -11,6 +20,7 @@
 
 ```text
 M4가 생산할 mailbox frame layout
+M4가 RcSample을 frame으로 포장하는 writer helper
 M7이 torn/corrupt/stale/protocol fault를 거부하는 기준
 M4와 M7이 공유할 sample state 의미
 ```
@@ -180,7 +190,34 @@ Stale timeout
 
 ---
 
-## 7. Evidence
+## 7. M4 Writer Helper Contract
+
+`M4RemoteMailboxWriter::publishSample()`은 다음만 수행한다.
+
+```text
+RcSample magic/version/state 검증
+normalized channel range 검증
+M4RemoteMailboxFrame payload fill
+CRC16-CCITT 계산
+seqlock begin/end sequence fill
+```
+
+금지:
+
+```text
+shared memory address ownership
+cache barrier
+HSEM/OpenAMP/RPC call
+UART access
+CAN ID/payload
+authority/safety/CAN TX judgment
+```
+
+따라서 writer helper가 생겼다는 사실은 OD-004 closure가 아니다.
+
+---
+
+## 8. Evidence
 
 Phase 1D evidence:
 
@@ -189,4 +226,12 @@ M4RemoteMailboxContract.cpp compiles in passive product env.
 M4RemoteMailboxFrame is fixed at 64 bytes.
 M7 reader can decode frame internally instead of trusting external integrity_ok.
 No M4 build env, real IPC, CRSF parser, or CAN TX path was added.
+```
+
+Phase 1F evidence:
+
+```text
+M4RemoteMailboxWriter.cpp compiles in passive product env.
+Writer can produce a valid 64-byte frame from RcSample without owning actual IPC.
+No M4 build env, real IPC, UART, or CAN TX path was added.
 ```

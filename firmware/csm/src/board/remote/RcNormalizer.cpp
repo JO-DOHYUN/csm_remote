@@ -4,11 +4,11 @@ namespace csm::board::remote {
 namespace {
 
 int16_t clampPermille(int32_t value) {
-  if (value > 1000) {
-    return 1000;
+  if (value > kRcNormalizedChannelMax) {
+    return kRcNormalizedChannelMax;
   }
-  if (value < -1000) {
-    return -1000;
+  if (value < kRcNormalizedChannelMin) {
+    return kRcNormalizedChannelMin;
   }
   return static_cast<int16_t>(value);
 }
@@ -81,7 +81,7 @@ bool RcNormalizer::isValidConfig(const RcNormalizerConfig& config) {
          config.raw_mid < config.raw_max &&
          config.raw_max <= kCrsfRawChannelMax &&
          config.deadband_permille >= 0 &&
-         config.deadband_permille <= 1000;
+         config.deadband_permille <= kRcNormalizedChannelMax;
 }
 
 bool RcNormalizer::isWithinRawRange(const CrsfRcChannels& channels) const {

@@ -8,6 +8,8 @@ static constexpr uint16_t kRcSampleMagic = 0x4352;  // "RC" little-endian marker
 static constexpr uint8_t kRcSampleVersion = 1;
 static constexpr uint8_t kRcChannelCount = 16;
 static constexpr uint8_t kRemoteMetricUnknown = 0xFF;
+static constexpr int16_t kRcNormalizedChannelMin = -1000;
+static constexpr int16_t kRcNormalizedChannelMax = 1000;
 
 enum class RemoteLinkState : uint8_t {
   NotConfigured = 0,

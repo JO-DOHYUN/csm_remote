@@ -144,6 +144,7 @@ firmware/csm/include/board/remote/
   CrsfParser.h
   RcNormalizer.h
   M4RemoteMailboxContract.h
+  M4RemoteMailboxWriter.h
   M4RemoteMailboxReader.h
   RemoteControlSource.h
 
@@ -151,6 +152,7 @@ firmware/csm/src/board/remote/
   CrsfParser.cpp
   RcNormalizer.cpp
   M4RemoteMailboxContract.cpp
+  M4RemoteMailboxWriter.cpp
   M4RemoteMailboxReader.cpp
   RemoteControlSource.cpp
 ```
@@ -480,6 +482,14 @@ Phase 1E:
 platform-independent CRSF frame parser skeleton
 RC channel normalizer skeleton
 no UART binding, no M4 env, no channel/switch semantic closure
+```
+
+Phase 1F:
+
+```text
+platform-independent M4 mailbox writer helper
+RcSample -> M4RemoteMailboxFrame pack/CRC/sequence skeleton
+no shared memory address, no barrier/HSEM/OpenAMP/RPC binding
 ```
 
 Phase 1 금지:

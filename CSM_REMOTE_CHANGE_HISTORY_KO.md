@@ -511,3 +511,66 @@ Next Step:
 Phase 1F: M4 mailbox writer helper 또는 parser/normalizer unit guard를 추가하되,
 real UART/IPC/product TX는 계속 disabled로 유지한다.
 ```
+
+---
+
+## 2026-07-09: Phase 1F M4 Mailbox Writer Helper
+
+Summary:
+
+```text
+RcSample을 64-byte M4RemoteMailboxFrame으로 포장하는 producer-side writer helper를 추가했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/remote/M4RemoteMailboxWriter.h
+firmware/csm/src/board/remote/M4RemoteMailboxWriter.cpp
+firmware/csm/include/board/remote/RemoteTypes.h
+firmware/csm/src/board/remote/RcNormalizer.cpp
+CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+CSM_REMOTE_OPEN_DECISIONS_KO.md
+CSM_REMOTE_CHANGE_HISTORY_KO.md
+CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+M4 parser/normalizer 출력이 M7 mailbox reader contract와 정확히 맞도록
+producer-side pack/CRC/sequence 경계를 코드로 고정하기 위해서다.
+```
+
+Boundary:
+
+```text
+main.cpp 변경 없음.
+platformio.ini 변경 없음.
+M4 build env 없음.
+UART/Serial3 binding 없음.
+actual shared memory address 없음.
+cache barrier/HSEM/OpenAMP/RPC binding 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+Boundary search found no CAN TX, D1 gate, HostDownlink, Serial3, MCP2515, digitalWrite, HardwareSerial, UART, HSEM, OpenAMP, or RPC path in the remote files.
+PlatformIO passive env build succeeded and compiled M4RemoteMailboxWriter.cpp.
+```
+
+Residual Risk:
+
+```text
+OD-004는 여전히 open이다. 실제 dual-core memory placement, barrier, coherency,
+torn-read bench test가 닫히기 전까지 production IPC binding은 금지된다.
+```
+
+Next Step:
+
+```text
+Phase 1G: parser/normalizer/mailbox contract self-test harness 또는 M7 orchestration candidate skeleton.
+```
