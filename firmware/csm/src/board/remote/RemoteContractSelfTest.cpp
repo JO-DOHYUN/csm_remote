@@ -99,6 +99,51 @@ bool corruptCrcIsRejected(const uint8_t* good_frame, uint8_t total) {
   return result.status == CrsfParseStatus::RejectedCrc;
 }
 
+bool tornMailboxWriteIsRejected(const M4RemoteMailboxFrame& good_frame) {
+  M4RemoteMailboxFrame torn = good_frame;
+  torn.sequence_begin |= 1u;
+
+  const M4RemoteMailboxDecodeResult decoded =
+      decodeM4RemoteMailboxFrame(torn);
+  return !decoded.integrity_ok &&
+         !decoded.sample_present &&
+         decoded.link_state == RemoteLinkState::Malformed &&
+         decoded.reject_detail ==
+             static_cast<uint16_t>(M4RemoteMailboxRejectDetail::TornWrite);
+}
+
+bool staleMailboxSampleIsRejected(const M4RemoteMailboxFrame& good_frame) {
+  M4RemoteMailboxReader reader;
+  reader.begin(kSelfTestM7TimeMs);
+  if (!reader.updateFromMailboxFrame(kSelfTestM7TimeMs, good_frame)) {
+    return false;
+  }
+
+  reader.update(kSelfTestM7TimeMs + kDefaultRcSampleStaleMs + 1u,
+                kDefaultRcSampleStaleMs);
+  return !reader.hasFreshUsableSample() &&
+         reader.snapshot().link_state == RemoteLinkState::Stale &&
+         reader.snapshot().reject_detail ==
+             static_cast<uint16_t>(M4RemoteMailboxRejectDetail::Stale);
+}
+
+bool failsafeMailboxSampleIsRejected(const M4RemoteMailboxFrame& good_frame) {
+  M4RemoteMailboxFrame failsafe = good_frame;
+  failsafe.sample_state = static_cast<uint8_t>(RcSampleState::Failsafe);
+  failsafe.crc = computeM4RemoteMailboxCrc(failsafe);
+
+  M4RemoteMailboxReader reader;
+  reader.begin(kSelfTestM7TimeMs);
+  if (reader.updateFromMailboxFrame(kSelfTestM7TimeMs, failsafe)) {
+    return false;
+  }
+
+  return !reader.hasFreshUsableSample() &&
+         reader.snapshot().link_state == RemoteLinkState::Failsafe &&
+         reader.snapshot().reject_detail ==
+             static_cast<uint16_t>(M4RemoteMailboxRejectDetail::SampleNotUsable);
+}
+
 }  // namespace
 
 RemoteContractSelfTestResult runRemoteContractSelfTest() {
@@ -168,6 +213,24 @@ RemoteContractSelfTestResult runRemoteContractSelfTest() {
 
   if (!corruptCrcIsRejected(frame_bytes, total)) {
     return fail(RemoteContractSelfTestDetail::CorruptCrcNotRejected,
+                parse_result.malformed_total,
+                write_result.published_sequence);
+  }
+
+  if (!tornMailboxWriteIsRejected(mailbox_frame)) {
+    return fail(RemoteContractSelfTestDetail::TornWriteNotRejected,
+                parse_result.malformed_total,
+                write_result.published_sequence);
+  }
+
+  if (!staleMailboxSampleIsRejected(mailbox_frame)) {
+    return fail(RemoteContractSelfTestDetail::StaleFrameNotRejected,
+                parse_result.malformed_total,
+                write_result.published_sequence);
+  }
+
+  if (!failsafeMailboxSampleIsRejected(mailbox_frame)) {
+    return fail(RemoteContractSelfTestDetail::FailsafeNotRejected,
                 parse_result.malformed_total,
                 write_result.published_sequence);
   }

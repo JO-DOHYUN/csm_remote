@@ -1,5 +1,9 @@
 # CODEX_WORKFLOW_KO
 
+> CSM Remote note: this is an imported CSM-local workflow reference. For current
+> workspace routing, start at `../../../../AGENTS.md` and
+> `../../../../docs/remote/AGENTS.md`.
+
 ## 목적
 AI 작업이 현재 task 범위를 벗어난 문서를 과도하게 읽거나, 이미 반증된 가설을
 반복하거나, wire contract 없이 코드를 크게 바꾸는 일을 막는다.
@@ -7,7 +11,7 @@ AI 작업이 현재 task 범위를 벗어난 문서를 과도하게 읽거나, �
 ## 작업 전 읽기
 - repo 전체: `AGENTS.md`, `BRIEF.md`
 - CSM: `board/AGENTS.md`, `board/BRIEF.md`
-- VMS: `qt/AGENTS.md`, `qt/BRIEF.md`
+- VMS: standalone VSM repository context, not a `qt/` folder inside this workspace
 - protocol: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 - passive product changes: `CSM 최종 완성 플랜 Vehicle-Impact-Free Passive Firmware Architecture.md`
 - hardware test only: `board/docs/HARDWARE_BRINGUP_GATE_HARNESS_KO.md` first,

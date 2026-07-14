@@ -1,48 +1,69 @@
 # HAMT2 CSM Firmware
 
-Standalone PlatformIO repository for the HAMT2 CSM board firmware.
+Imported PlatformIO firmware project for the CSM Remote workspace.
 
-Do CSM build and upload work from this folder:
+Active workspace path:
+
+```text
+C:\WORKS\VS\csm_remote\firmware\csm
+```
+
+Original upstream reference:
 
 ```text
 C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
 ```
 
-VSM/Qt and Android app work belong in separate repositories. Do not place or
-build nested app workspaces under this CSM folder.
+Do not treat the upstream path as the active build root while working in
+`csm_remote`.
 
 ## Active Target
-
 - Board: Portenta H7 M7 + Mid Carrier ASX00055
-- env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
+- Product env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`
+- M4 proof env: `portenta_h7_m4_remote_frontend_build_proof`
+- M4 Serial3 capture probe env: `portenta_h7_m4_remote_serial3_capture_probe`
+- Remote Phase 1: deny-first skeleton, not wired to runtime M4 UART/IPC/CAN TX
 - `bus0`: external MCP2515/TJA1050, Classic CAN 2.0 500 kbps
 - `bus1`: Mid Carrier J4 CAN1/U2, Classic CAN 2.0 500 kbps
 - Live stream: typed transport v1
-- High-load RX: `CAN_RX_SEGMENT`
 - TX evidence: `CONTROL_ACK` is board decision, `CAN_TX_RAW` is actual CAN write audit
 
 ## Build
+From the workspace root:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
 ```
 
-## Upload
+From this directory:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm -t upload
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
 ```
 
-## Verify Firmware Identity
+M4 remote frontend build proof from the workspace root:
 
 ```powershell
-py -3 pc_tools\verify_typed_stream.py --port COM7 --seconds 4 --max-records 20
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m4_remote_frontend_build_proof
 ```
 
-`CAPABILITY` must show the expected env, git SHA, dirty flag, MCP SPI speed,
-IRQ mode, and drain budget.
+M4 Serial3 capture probe from the workspace root:
 
-## Contracts
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m4_remote_serial3_capture_probe
+```
 
-`shared/docs/TRANSPORT_AND_RECORDS_KO.md` is the wire-contract source of truth
-for CSM/VSM typed records.
+## Verify
+Remote Phase 1 guard from workspace root:
+
+```powershell
+python firmware/csm/tools/remote_phase1_guard.py
+python firmware/csm/tools/remote_phase2a_guard.py
+python firmware/csm/tools/remote_phase2b_guard.py
+```
+
+Wire contract:
+
+```text
+shared/docs/TRANSPORT_AND_RECORDS_KO.md
+```

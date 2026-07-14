@@ -13,6 +13,9 @@ enum class RemoteContractSelfTestDetail : uint16_t {
   ReaderRejected = 5,
   SnapshotMismatch = 6,
   CorruptCrcNotRejected = 7,
+  TornWriteNotRejected = 8,
+  StaleFrameNotRejected = 9,
+  FailsafeNotRejected = 10,
 };
 
 struct RemoteContractSelfTestResult {

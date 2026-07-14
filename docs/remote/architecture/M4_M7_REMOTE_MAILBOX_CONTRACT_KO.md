@@ -1,7 +1,7 @@
 # CSM Remote M4-M7 Remote Mailbox Contract
 
 작성일: 2026-07-09
-상태: Phase 1D fixed frame contract, IPC mechanism not closed
+상태: Phase 2B fixed frame/writer builds on M4, IPC mechanism not closed
 대상 코드:
 
 ```text
@@ -32,7 +32,6 @@ Portenta H7 실제 M4-M7 IPC 방식
 shared memory 위치
 cache coherency/barrier/HSEM/OpenAMP/RPC 선택
 CRSF UART baud/cadence
-M4 펌웨어 build env
 ```
 
 따라서 OD-004는 아직 닫지 않는다.
@@ -241,4 +240,31 @@ Phase 1G evidence:
 ```text
 RemoteContractSelfTest.cpp compiles a synthetic writer/reader roundtrip helper.
 It does not own shared memory placement, cache barrier, HSEM/OpenAMP/RPC, or torn-read bench evidence.
+```
+
+Phase 2A evidence:
+
+```text
+M4RemoteMailboxWriter and M4RemoteMailboxContract compile in
+portenta_h7_m4_remote_frontend_build_proof.
+This proves M4 target compatibility for the writer/contract only.
+```
+
+Phase 2B evidence:
+
+```text
+M4RemoteMailboxWriter and M4RemoteMailboxContract compile in
+portenta_h7_m4_remote_serial3_capture_probe.
+The probe writes only a local frame; it does not select shared memory placement,
+cache barrier, HSEM/OpenAMP/RPC, or torn-read/stale bench behavior.
+```
+
+Phase 2C software evidence:
+
+```text
+RemoteContractSelfTest.cpp now checks synthetic happy-path roundtrip plus
+CRSF CRC reject, mailbox torn-write reject, stale timeout reject, and failsafe
+sample rejection.
+This is software contract evidence only; it does not replace dual-core shared
+memory placement, cache barrier, HSEM/OpenAMP/RPC, or hardware torn-read bench evidence.
 ```

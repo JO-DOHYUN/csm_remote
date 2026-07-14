@@ -1,7 +1,7 @@
 # CSM Remote Harness Final Audit
 
-작성일: 2026-07-09  
-대상: CSM Remote 제품 정의/개발 하네스 문서 세트  
+작성일: 2026-07-09
+대상: CSM Remote 제품 정의/개발 하네스 문서 세트
 결론: 산업 제품 개발을 시작할 수 있는 운영 기준으로 사용 가능. 단, 구현 시작 후 실제 source layout/test command에 맞춰 trace와 routing matrix를 계속 갱신해야 한다.
 
 ---
@@ -29,7 +29,7 @@
 근거:
 
 ```text
-CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md를 작업 진입점으로 추가했다.
+docs/remote/harness/ROUTING_MATRIX_KO.md를 작업 진입점으로 추가했다.
 작업 유형별 읽을 문서/섹션/에이전트를 분리했다.
 기본 활성 에이전트 최대 3개 원칙을 추가했다.
 무관한 skill/reference/document 반복 로딩 금지를 명시했다.
@@ -124,15 +124,15 @@ Correct, Bounded, Cohesive, Minimal, Traceable, Testable, Readable 기준을 추
 
 ```text
 README.md
-CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md
-CSM_REMOTE_PRODUCT_DEFINITION_KO.md
-CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
-CSM_REMOTE_PRODUCT_DEFINITION.md
-CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md
+docs/remote/harness/ROUTING_MATRIX_KO.md
+docs/remote/product/PRODUCT_DEFINITION_KO.md
+docs/remote/harness/DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
+docs/remote/product/PRODUCT_DEFINITION_EN.md
+docs/remote/reviews/AUTHORITY_FINAL_HANDOFF_ORIGINAL.md
 ```
 
 역할 분리:

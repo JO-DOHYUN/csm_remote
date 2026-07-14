@@ -1,6 +1,6 @@
 # CSM Remote Requirement Trace
 
-작성일: 2026-07-09  
+작성일: 2026-07-09
 목적: 제품 정의 요구사항을 코드, 테스트, evidence와 연결한다.
 
 이 문서는 구현이 시작되면 계속 갱신한다.
@@ -76,6 +76,7 @@ Notes:
 | R-DEV-009 | Repository Setup | CSM firmware 작업은 `firmware/csm` subtree 안에서 수행하고 복붙 갱신을 금지한다 | Defined | none |
 | R-DEV-010 | Phase 0 Review | 기존 handoff는 Product Definition 기준으로 ACCEPT/MODIFY/HOLD/REJECT/SUPERSEDED 판정을 거친다 | Designed | none |
 | R-DEV-011 | Source Layout Proposal | Phase 1 구현 전 최종 module layout과 dataflow owner를 문서화한다 | Designed | none |
+| R-DEV-012 | AGENTS Routing | 모든 작업은 루트 `AGENTS.md`에서 시작하고, 경로별 `AGENTS.md`가 하위 라우팅을 담당한다 | Implemented | none |
 
 ---
 
@@ -202,3 +203,102 @@ Notes:
 | R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | guard fails if remote files acquire CAN frame/gateway knowledge |
 | R-PROD-003 | Product Definition 17.2 | 모든 local motion TX는 CanTxGateway 통과 | Designed | guard ensures CanTxGateway has no backend write during Phase 1 |
 | R-PROD-014 | Product Definition 17.2 | vehicle profile before real CAN mapping | Designed | guard fails if VehicleCommandMapper starts mapping real frames in Phase 1 |
+
+---
+
+## Codex Routing Implementation Trace
+
+| ID | Source | Requirement | Status | Code/Docs |
+|---|---|---|---|---|
+| R-DEV-001 | Routing Matrix | 모든 작업은 작업 유형별 필요한 문서/섹션/에이전트만 읽는다 | Implemented | `AGENTS.md`, `docs/remote/AGENTS.md`, `docs/remote/harness/ROUTING_MATRIX_KO.md` |
+| R-DEV-006 | Harness 14 | 구상 변경 시 old code/path/flag/test/doc residue를 정리하거나 명시적으로 남긴다 | Implemented | root flat remote docs moved to `docs/remote/**`; imported CSM docs retained as scoped references |
+| R-DEV-009 | Repository Setup | CSM firmware 작업은 `firmware/csm` subtree 안에서 수행하고 복붙 갱신을 금지한다 | Implemented | `firmware/AGENTS.md`, `firmware/csm/AGENTS.md`, `firmware/csm/BRIEF.md` |
+| R-DEV-012 | AGENTS Routing | 모든 작업은 루트 `AGENTS.md`에서 시작하고, 경로별 `AGENTS.md`가 하위 라우팅을 담당한다 | Implemented | root/docs/firmware/CSM scoped `AGENTS.md` hierarchy |
+
+Evidence:
+
+```text
+git diff --check passed.
+python firmware/csm/tools/remote_phase1_guard.py passed.
+root CSM_REMOTE_*.md remaining count: 0.
+active router legacy CSM_REMOTE_*.md references: 0.
+```
+
+---
+
+## Phase 2A M4 Build Proof Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `firmware/csm/src/m4_remote_frontend_build_proof.cpp`, `platformio.ini` M4 env |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | M4 proof uses separate source file; M7 `main.cpp` unchanged |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | `remote_phase2a_guard.py`, M4 build, M7 passive build |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | M4 proof compiles parser/normalizer/mailbox writer only; no CAN source, authority, mapper, or gateway |
+| R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | M4 build compiles `CrsfParser` on `portenta_h7_m4` |
+| R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | M4 build compiles `M4RemoteMailboxContract` and `M4RemoteMailboxWriter`; real IPC evidence remains OD-004 |
+
+Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+PlatformIO M4 env `portenta_h7_m4_remote_frontend_build_proof` build succeeded.
+PlatformIO M7 passive env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive` build succeeded after M4 source-filter isolation.
+```
+
+---
+
+## Phase 2B M4 Serial3 Capture Probe Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-004 | Harness 13 | 코드는 최종 module layout/interface/dataflow skeleton을 먼저 만들고 내부를 채운다 | Implemented | `firmware/csm/src/m4_remote_serial3_capture_probe.cpp`, `platformio.ini` M4 env |
+| R-DEV-005 | Harness 13 | main.cpp에 parser/authority/mapper/gateway 본문을 몰아넣지 않는다 | Implemented | M4 probe uses separate source file; M7 `main.cpp` unchanged |
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | `remote_phase2b_guard.py`, M4 Serial3 capture probe build |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | M4 probe opens only `Serial3` RX path and local mailbox writer; no CAN source, authority, mapper, or gateway |
+| R-PROD-011 | Product Definition 17.2 | CRSF malformed/oversize reject | Designed | Probe feeds received bytes through `CrsfParser` and tracks length/CRC rejects |
+| R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | Probe writes only a local `M4RemoteMailboxFrame`; real M4-M7 IPC remains OD-004 |
+
+Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+python firmware/csm/tools/remote_phase2b_guard.py passed.
+PlatformIO M4 env `portenta_h7_m4_remote_serial3_capture_probe` build succeeded.
+```
+
+Residual Risk:
+
+```text
+This is not R16SM hardware proof.
+OD-003 remains open until logic-analyzer capture, physical pin evidence, and valid hardware CRSF decode evidence exist.
+```
+
+---
+
+## Phase 2C Mailbox Reject Self-Test Expansion Trace
+
+| ID | Source | Requirement | Status | Code Modules |
+|---|---|---|---|---|
+| R-DEV-008 | Harness 15 | 간결성을 이유로 필수 boundary/state/evidence/test를 생략하지 않는다 | Implemented | `RemoteContractSelfTest` reject cases |
+| R-PROD-006 | Product Definition 17.2 | RC stale/failsafe에서 last command 재사용 금지 | Designed | self-test checks stale timeout and failsafe rejection |
+| R-PROD-012 | Product Definition 17.2 | mailbox torn/stale/corrupt reject | Designed | self-test checks torn-write, stale, and corrupt CRSF CRC rejection |
+| R-PROD-002 | Product Definition 17.2 | M4 CAN TX capability 없음 | Designed | self-test remains remote contract only; no CAN source, mapper, gateway, or TX backend |
+
+Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+python firmware/csm/tools/remote_phase2b_guard.py passed.
+PlatformIO M7 passive env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive` build succeeded.
+```
+
+Residual Risk:
+
+```text
+This is software contract evidence only.
+OD-004 remains open until real M4-M7 shared memory placement, cache/barrier mechanism,
+IPC selection, and hardware torn-read/stale bench evidence exist.
+```

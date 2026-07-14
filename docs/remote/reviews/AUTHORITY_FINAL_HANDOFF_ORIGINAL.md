@@ -1,8 +1,8 @@
 # CSM Remote Authority Architecture Final Handoff
 
-Date: 2026-07-06  
-Target baseline: `JO-DOHYUN/HAMT2-platform` commit `bfef287` (`Finalize passive CSM fault hold evidence`)  
-Target hardware: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM  
+Date: 2026-07-06
+Target baseline: `JO-DOHYUN/HAMT2-platform` commit `bfef287` (`Finalize passive CSM fault hold evidence`)
+Target hardware: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM
 Primary goal: add RC/manual-control capability without ever competing with upstream autonomous control.
 
 ---

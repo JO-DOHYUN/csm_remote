@@ -6,16 +6,22 @@
 - keep capture truth above convenience
 
 ## Source of Truth
-1. root `AGENTS.md` / `BRIEF.md` routing context
-2. current board source (`src/main.cpp`, split modules, `platformio.ini`)
-3. `board/BRIEF.md`
-4. task-matched documents from the conditional map below
-5. `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as a synthesis decision input
-6. old notes only after current files
+1. workspace root `../../../AGENTS.md` / `../../../README.md` for CSM Remote product
+   authority
+2. firmware router `../AGENTS.md` / `../BRIEF.md`
+3. current board source (`src/main.cpp`, split modules, `platformio.ini`)
+4. `board/BRIEF.md`
+5. task-matched documents from the conditional map below
+6. imported synthesis or old notes only after current files
 
-Do not bulk-load the shared or board docs directories. Load detailed docs only when the current task touches that area.
+Do not bulk-load the shared or board docs directories. Load detailed docs only
+when the current task touches that area. For RC remote product decisions, read
+`../../../docs/remote/AGENTS.md` first and treat imported CSM documents as scoped
+firmware references.
 
 ## Conditional Document Map
+- CSM Remote product, M4/M7 split, RC authority, remote evidence:
+  `../../../docs/remote/AGENTS.md`, then task-matched remote docs
 - Record schema, typed stream, mono64, drop/overflow contract: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 - Shared acceptance, capability binding, system-level contract: matching files under `shared/docs/`
 - Board firmware architecture or lane ownership: `board/docs/BOARD_ARCH_CURRENT_ADDENDUM_KO.md` first, then `board/docs/BOARD_ARCH_KO.md` for historical context

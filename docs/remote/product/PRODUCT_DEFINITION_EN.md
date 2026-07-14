@@ -1,14 +1,14 @@
 # CSM Remote Product Definition
 
-Date: 2026-07-07  
-Status: English engineering companion to `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`  
-Baseline CSM: `bfef287aa424edcef6026dcd86aa6e4077a82386` (`Finalize passive CSM fault hold evidence`)  
-Baseline VSM: `C:\WORKS\VS\turn81_full_buildfix2` passive-first runtime/profile architecture  
-Target hardware: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM  
+Date: 2026-07-07
+Status: English engineering companion to `docs/remote/product/PRODUCT_DEFINITION_KO.md`
+Baseline CSM: `bfef287aa424edcef6026dcd86aa6e4077a82386` (`Finalize passive CSM fault hold evidence`)
+Baseline VSM: `C:\WORKS\VS\turn81_full_buildfix2` passive-first runtime/profile architecture
+Target hardware: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM
 
-The controlling Korean master definition is `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`.
+The controlling Korean master definition is `docs/remote/product/PRODUCT_DEFINITION_KO.md`.
 If this English companion conflicts with the Korean master, the Korean master wins.
-If either product definition conflicts with `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`, the product definition wins.
+If either product definition conflicts with `docs/remote/reviews/AUTHORITY_FINAL_HANDOFF_ORIGINAL.md`, the product definition wins.
 
 The handoff document remains useful as background, but this document defines the product-grade
 requirements, boundaries, states, data flows, evidence, and acceptance criteria that implementation

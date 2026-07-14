@@ -1,6 +1,6 @@
 # CSM Remote Open Decisions
 
-작성일: 2026-07-09  
+작성일: 2026-07-09
 목적: 아직 추측으로 닫으면 안 되는 제품/구현 결정을 관리한다.
 
 Open decision이 닫히기 전에는 관련 product vehicle TX를 허용하지 않는다.
@@ -42,7 +42,7 @@ Closure Criteria:
 
 ## OD-001: Final Upstream Autonomous Command Profile
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -75,7 +75,7 @@ final AutonomyCommandProfile
 
 ## OD-002: D1 CanTxEnable Hardware Semantics
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -109,7 +109,7 @@ vehicle remote TX
 
 ## OD-003: R16SM Actual CRSF Baud And Mode
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -138,6 +138,23 @@ Current Phase 1G Result:
 synthetic CRSF roundtrip self-test helper는 추가했지만, 실제 R16SM signal capture와 valid frame decode evidence는 아직 아니다.
 ```
 
+Current Phase 2A Result:
+
+```text
+Portenta H7 M4 build proof env에서 CRSF parser와 RC normalizer가 컴파일되는 것을 확인했다.
+하지만 Serial3/R16SM UART binding, baud, inversion/duplex, frame cadence, 실제 valid frame decode evidence는 아직 없다.
+```
+
+Current Phase 2B Result:
+
+```text
+Portenta H7 M4 Serial3 capture probe env에서 Serial3.begin(420000, SERIAL_8N1),
+CRSF parser, RC normalizer, M4 mailbox writer 조합이 컴파일되는 것을 확인했다.
+remote_phase2b_guard.py로 이 프로브가 lab-only이며 M7 product source filter에서 제외됨을 확인했다.
+하지만 실제 R16SM logic-analyzer capture, Mid Carrier 물리 핀 검증, baud/polarity/frame cadence,
+valid hardware frame decode evidence는 아직 없다.
+```
+
 Allowed Temporary Assumption:
 
 ```text
@@ -156,7 +173,7 @@ M4 parser timing final values
 
 ## OD-004: Final M4-M7 IPC Mechanism
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -193,6 +210,23 @@ Current Phase 1G Result:
 synthetic mailbox writer/reader roundtrip self-test helper는 추가했지만, 실제 dual-core shared memory/torn-read bench evidence는 아직 아니다.
 ```
 
+Current Phase 2A Result:
+
+```text
+Portenta H7 M4 build proof env에서 M4RemoteMailboxWriter와 shared mailbox contract가 컴파일되는 것을 확인했다.
+하지만 shared memory address, cache barrier, HSEM/OpenAMP/RPC 선택, torn-read/stale bench evidence는 아직 없다.
+```
+
+Current Phase 2C Software Result:
+
+```text
+RemoteContractSelfTest가 synthetic happy-path roundtrip 외에 CRSF CRC reject,
+mailbox torn-write reject, stale timeout reject, failsafe sample reject를 확인하도록 확장됐다.
+이는 M7 reader/decoder의 software contract evidence이며,
+실제 dual-core shared memory address, cache barrier, HSEM/OpenAMP/RPC 선택,
+hardware torn-read/stale bench evidence는 아직 아니다.
+```
+
 Allowed Temporary Assumption:
 
 ```text
@@ -210,7 +244,7 @@ RC source authority path
 
 ## OD-005: Real Vehicle CAN Command IDs And Payloads
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -237,7 +271,7 @@ low-rate vehicle remote command
 
 ## OD-006: Remote Channel Map And Switch Semantics
 
-Status: EvidenceRequired  
+Status: EvidenceRequired
 Decision Needed:
 
 ```text
@@ -276,7 +310,7 @@ RemoteControlSource final takeover logic
 
 ## OD-007: Service/HIL Authority Policy
 
-Status: Open  
+Status: Open
 Decision Needed:
 
 ```text
@@ -299,7 +333,7 @@ service profile control features
 
 ## OD-008: Final Watchdog/Reset Behavior
 
-Status: Open  
+Status: Open
 Decision Needed:
 
 ```text

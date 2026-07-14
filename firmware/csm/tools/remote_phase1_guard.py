@@ -107,7 +107,6 @@ def main():
     platformio_hits = _contains_any(
         platformio,
         [
-            "portenta_h7_m4",
             "BOARD_ENABLE_REMOTE_CONTROL=1",
             "BOARD_ENABLE_M4_REMOTE_FRONTEND=1",
             "BOARD_ENABLE_REMOTE_AUTHORITY=1",

@@ -1,10 +1,10 @@
 # CSM Remote Phase 0 Handoff Review
 
-작성일: 2026-07-09  
-상태: Phase 0 판정 완료  
-대상 문서: `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`  
-상위 기준: `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`  
-대상 코드: `firmware/csm` subtree, CSM baseline `bfef287`  
+작성일: 2026-07-09
+상태: Phase 0 판정 완료
+대상 문서: `docs/remote/reviews/AUTHORITY_FINAL_HANDOFF_ORIGINAL.md`
+상위 기준: `docs/remote/product/PRODUCT_DEFINITION_KO.md`
+대상 코드: `firmware/csm` subtree, CSM baseline `bfef287`
 
 이 문서는 기존 handoff를 현재 제품 정의서와 실제 CSM 코드 기준으로 재판정한다.
 

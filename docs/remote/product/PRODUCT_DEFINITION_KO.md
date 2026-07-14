@@ -1,11 +1,11 @@
 # CSM 리모컨 통합 제품 정의서
 
-작성일: 2026-07-07  
-문서 상태: 제품 정의 마스터 초안, 아키텍처 동결 후보  
-우선순위: 이 문서는 `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`보다 우선한다.  
-CSM 기준: `bfef287aa424edcef6026dcd86aa6e4077a82386` (`Finalize passive CSM fault hold evidence`)  
-VSM 기준: `C:\WORKS\VS\turn81_full_buildfix2` passive-first runtime/profile 구조  
-대상 하드웨어: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM  
+작성일: 2026-07-07
+문서 상태: 제품 정의 마스터 초안, 아키텍처 동결 후보
+우선순위: 이 문서는 `docs/remote/reviews/AUTHORITY_FINAL_HANDOFF_ORIGINAL.md`보다 우선한다.
+CSM 기준: `bfef287aa424edcef6026dcd86aa6e4077a82386` (`Finalize passive CSM fault hold evidence`)
+VSM 기준: `C:\WORKS\VS\turn81_full_buildfix2` passive-first runtime/profile 구조
+대상 하드웨어: Arduino Portenta H7 + Portenta Mid Carrier + Radiolink T16D + Radiolink R16SM
 
 이 문서는 CSM에 리모컨 송수신 기능을 붙이는 프로젝트의 최상위 제품 정의서다.
 이후 코드, 보드 결선, 테스트, HIL, 차량 실험은 이 문서의 정의를 만족해야 한다.

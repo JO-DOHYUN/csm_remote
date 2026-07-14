@@ -1,5 +1,9 @@
 # PROJECT_CONSTITUTION_KO
 
+> CSM Remote note: this is an imported CSM architecture reference. Current CSM
+> Remote product authority starts at `../../../AGENTS.md` and
+> `../../../docs/remote/AGENTS.md`.
+
 ## 목적
 이 프로젝트의 최종 형태는 CSM 보드와 VMS Qt 프로그램을 하나의 typed
 evidence/control 시스템으로 맞추는 것이다.
@@ -14,8 +18,8 @@ evidence/control 시스템으로 맞추는 것이다.
 ## Canonical Source
 - wire format: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 - CSM baseline: `board/BRIEF.md`
-- VMS baseline: `qt/BRIEF.md`
-- integration synthesis: `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md`
+- VMS baseline: standalone VSM repository reference
+- integration synthesis: imported historical synthesis input
 
 ## 금지
 - Qt serial write success를 CAN success로 표시하지 않는다.
@@ -23,4 +27,3 @@ evidence/control 시스템으로 맞추는 것이다.
 - ADC, voltage, encoder raw evidence를 fake CAN frame으로 만들지 않는다.
 - MCP2515 falling-edge-only INT gate를 복원하지 않는다.
 - `src/main.cpp`나 Qt `AppController`에 기능을 계속 누적하지 않는다.
-

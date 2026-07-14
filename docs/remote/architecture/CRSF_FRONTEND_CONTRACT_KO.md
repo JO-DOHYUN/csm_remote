@@ -1,7 +1,7 @@
 # CSM Remote CRSF Frontend Contract
 
 작성일: 2026-07-09
-상태: Phase 1E parser/normalizer skeleton, UART binding not closed
+상태: Phase 2B M4 Serial3 capture probe builds, R16SM electrical evidence not closed
 대상 코드:
 
 ```text
@@ -9,6 +9,7 @@ firmware/csm/include/board/remote/CrsfParser.h
 firmware/csm/src/board/remote/CrsfParser.cpp
 firmware/csm/include/board/remote/RcNormalizer.h
 firmware/csm/src/board/remote/RcNormalizer.cpp
+firmware/csm/src/m4_remote_serial3_capture_probe.cpp
 ```
 
 이 문서는 R16SM CRSF byte stream을 M4 remote frontend가 어떻게 안전하게 해석해야 하는지의
@@ -21,14 +22,14 @@ CRSF frame size bound
 CRSF frame length/CRC reject rule
 RC_CHANNELS_PACKED 0x16 channel unpack rule
 raw CRSF channel -> normalized RcSample 변환 경계
+lab-only M4 Serial3 capture probe compile boundary
 ```
 
 이 문서가 아직 확정하지 않는 것:
 
 ```text
-R16SM 실제 CRSF baud
-Serial3/UART binding
-M4 PlatformIO env
+R16SM 실제 CRSF baud/electrical polarity/frame cadence
+Mid Carrier physical connector pin assignment for Serial3 RX/TX
 T16D channel/switch assignment
 takeover/release switch semantics
 SBUS fallback 여부
@@ -46,12 +47,13 @@ SBUS fallback 여부
 byte stream -> bounded CRSF frame
 CRSF frame -> raw 16ch channels
 raw channels -> normalized RcSample
+lab-only Serial3 capture probe -> volatile decode counters
 ```
 
 금지:
 
 ```text
-UART/Serial3 직접 접근
+product runtime UART enablement
 M4-M7 shared memory write
 CAN ID/payload 생성
 authority/safety/CAN TX 판단
@@ -164,6 +166,25 @@ Phase 1G evidence:
 RemoteContractSelfTest.cpp provides a compile-ready synthetic CRSF frame roundtrip:
 CRSF parser -> RC channel decode -> normalizer -> mailbox writer -> mailbox reader.
 It is not wired to product runtime and does not replace R16SM logic-analyzer evidence.
+```
+
+Phase 2A evidence:
+
+```text
+PlatformIO M4 env portenta_h7_m4_remote_frontend_build_proof builds parser,
+normalizer, and mailbox writer on board=portenta_h7_m4.
+It does not open Serial3, R16SM wiring, IPC, or product runtime authority.
+```
+
+Phase 2B evidence:
+
+```text
+PlatformIO M4 env portenta_h7_m4_remote_serial3_capture_probe builds with
+Serial3.begin(420000, SERIAL_8N1), CRSF parser, normalizer, and mailbox writer.
+remote_phase2b_guard.py confirms this source is lab-only and excluded from M7
+product source filters.
+This still does not close OD-003 because no R16SM logic-analyzer capture or
+valid hardware decode evidence has been recorded.
 ```
 
 ---

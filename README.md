@@ -1,78 +1,63 @@
-# CSM Remote Definition Workspace
+# CSM Remote Workspace
 
-This workspace holds the product-definition material for adding RC remote-control capability
-to the existing CSM platform.
+This workspace designs and implements RC remote-control capability on top of the
+existing CSM firmware baseline.
 
-## Document Priority
+## Codex Entry
+Codex-facing routing starts at `AGENTS.md`.
 
-1. `CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md`  
-   Start here for token-efficient task routing. It tells which documents, sections, and agents to use.
-
-2. `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`  
-   Korean master product definition. This is the controlling document.
-
-3. `CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md`  
-   Development harness and agent architecture. Use this to keep design changes, history,
-   module boundaries, and evidence discipline aligned during implementation.
-
-4. `CSM_REMOTE_DECISION_LEDGER_KO.md`  
-   ADR-style record of accepted, rejected, and superseded decisions.
-
-5. `CSM_REMOTE_OPEN_DECISIONS_KO.md`  
-   Open product/architecture decisions that must not be guessed or silently closed.
-
-6. `CSM_REMOTE_CHANGE_HISTORY_KO.md`  
-   Short chronological project history for handoff and context recovery.
-
-7. `CSM_REMOTE_REQUIREMENT_TRACE_KO.md`  
-   Requirement-to-code/test/evidence trace. Filled progressively during implementation.
-
-8. `CSM_REMOTE_HARNESS_FINAL_AUDIT_KO.md`  
-   Final audit of whether the current harness is operationally ready for industrial product development.
-
-9. `CSM_REMOTE_REPOSITORY_SETUP_KO.md`  
-   Git/subtree setup record and rules for updating or splitting the imported CSM firmware.
-
-10. `CSM_REMOTE_PHASE0_HANDOFF_REVIEW_KO.md`  
-   Phase 0 review that classifies the original handoff as accepted, modified, held, or superseded.
-
-11. `CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md`  
-   Proposed firmware source layout for Phase 1 skeleton implementation.
-
-12. `CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md`
-   Fixed M4-to-M7 RC mailbox frame contract. OD-004 remains open for the real IPC mechanism.
-
-13. `CSM_REMOTE_CRSF_FRONTEND_CONTRACT_KO.md`
-   Platform-independent CRSF frame parser and RC normalization contract. OD-003 and OD-006 remain open.
-
-14. `CSM_REMOTE_PRODUCT_DEFINITION.md`
-   English engineering companion. Use it for implementation-oriented review, but the Korean master wins on conflict.
-
-15. `CSM_REMOTE_PHASE1_SKELETON_AUDIT_KO.md`
-   Phase 1 skeleton closure audit and guard commands before moving to Phase 2 evidence work.
-
-16. `CSM_REMOTE_AUTHORITY_FINAL_HANDOFF.md`
-   Original handoff/background document. Useful context, but superseded by the product definition on conflict.
-
-## Current Baseline
+Required path:
 
 ```text
+AGENTS.md
+-> README.md
+-> docs/remote/AGENTS.md
+-> task-matched product, architecture, review, or firmware documents
+```
+
+Do not start from the old flat root document layout. Remote documents now live
+under `docs/remote/**` by role.
+
+## Current Baseline
+```text
+Workspace: C:\WORKS\VS\csm_remote
 Imported CSM subtree: firmware/csm
-Original CSM upstream: C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
-CSM commit: bfef287 Finalize passive CSM fault hold evidence
-VSM: C:\WORKS\VS\turn81_full_buildfix2
+Original CSM upstream reference: C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM
+CSM baseline commit: bfef287 Finalize passive CSM fault hold evidence
+VSM reference: C:\WORKS\VS\turn81_full_buildfix2
 Target hardware: Portenta H7 + Mid Carrier + Radiolink T16D + R16SM
 ```
 
-## Firmware Path
+## Product Authority
+1. `docs/remote/product/PRODUCT_DEFINITION_KO.md`
+2. `docs/remote/product/OPEN_DECISIONS_KO.md`
+3. `docs/remote/product/DECISION_LEDGER_KO.md`
+4. `docs/remote/product/REQUIREMENT_TRACE_KO.md`
+5. `docs/remote/architecture/**`
+6. `docs/remote/reviews/**`
+7. Imported CSM documents under `firmware/csm/**`
 
+## Router Documents
+- `docs/remote/AGENTS.md`: remote product/document router.
+- `docs/remote/harness/ROUTING_MATRIX_KO.md`: token-efficient task routing matrix.
+- `docs/remote/harness/DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md`: development harness philosophy and gates.
+- `firmware/AGENTS.md`: firmware tree router.
+- `firmware/csm/AGENTS.md`: imported CSM firmware implementation router.
+
+## Firmware Path
 ```text
 CSM PlatformIO project: firmware/csm
+M4 build proof env: portenta_h7_m4_remote_frontend_build_proof
+M4 Serial3 capture probe env: portenta_h7_m4_remote_serial3_capture_probe
 ```
 
+Build from the workspace root:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
+```
 
 ## Core Rule
-
 ```text
 No confirmed autonomy release = zero local CAN TX.
 ```

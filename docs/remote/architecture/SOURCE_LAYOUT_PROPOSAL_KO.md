@@ -1,9 +1,9 @@
 # CSM Remote Source Layout Proposal
 
-작성일: 2026-07-09  
-상태: Phase 0 proposal  
-대상 코드: `firmware/csm`  
-상위 기준: `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`, `CSM_REMOTE_PHASE0_HANDOFF_REVIEW_KO.md`  
+작성일: 2026-07-09
+상태: Phase 0 proposal
+대상 코드: `firmware/csm`
+상위 기준: `docs/remote/product/PRODUCT_DEFINITION_KO.md`, `docs/remote/reviews/PHASE0_HANDOFF_REVIEW_KO.md`
 
 이 문서는 CSM Remote 구현을 시작하기 전, 최종 모듈 배치와 데이터 흐름을 정의한다.
 목표는 `main.cpp`에 기능을 몰아넣지 않고, 최종 아키텍처의 뼈대부터 만든 뒤 내부를 채우는 것이다.
@@ -177,7 +177,40 @@ firmware/csm/src/board/host/
 
 ## 4. Phase 2 M4 Frontend Layout
 
-Phase 2 전까지는 생성하지 않는다.
+Phase 2A에서 M4 build proof 전용 파일을 먼저 생성했다.
+
+현재 생성:
+
+```text
+firmware/csm/src/
+  m4_remote_frontend_build_proof.cpp
+  m4_remote_serial3_capture_probe.cpp
+```
+
+목적:
+
+```text
+Portenta H7 M4 PlatformIO env에서 CRSF parser, RC normalizer, M4 mailbox writer가
+컴파일되는지 증명한다.
+```
+
+Phase 2B 목적:
+
+```text
+Portenta H7 M4 PlatformIO env에서 Serial3 RX capture probe가 컴파일되는지 증명한다.
+R16SM byte stream을 CRSF parser -> normalizer -> local mailbox frame writer까지 통과시키되,
+차량 명령, M7 runtime, shared memory, CAN TX에는 연결하지 않는다.
+```
+
+금지:
+
+```text
+product Serial3 runtime enablement 없음.
+R16SM wiring 확정 없음.
+M4-M7 shared memory/IPC 없음.
+CAN TX 없음.
+M7 main.cpp wiring 없음.
+```
 
 후보 구조:
 
@@ -206,11 +239,31 @@ firmware/csm/src/remote_m4/
 
 최종 선택은 PlatformIO M4 env와 source_filter 확인 후 결정한다.
 
-Phase 2 전 open item:
+Phase 2A 결과:
+
+```text
+PlatformIO env: portenta_h7_m4_remote_frontend_build_proof
+M4 board target: portenta_h7_m4
+M4 build proof: passed
+M7 passive build after source-filter isolation: passed
+```
+
+Phase 2B 결과:
+
+```text
+PlatformIO env: portenta_h7_m4_remote_serial3_capture_probe
+M4 board target: portenta_h7_m4
+Serial3 capture probe build: passed
+Default capture baud: 420000 8N1
+M7 source-filter isolation: protected by remote_phase2b_guard.py
+```
+
+남은 open item:
 
 ```text
 OD-004 M4-M7 IPC mechanism
-PlatformIO portenta_h7_m4 env proof
+R16SM logic analyzer capture and valid hardware decode evidence
+Mid Carrier physical Serial3 connector/pin evidence
 M4/M7 build output separation
 ```
 

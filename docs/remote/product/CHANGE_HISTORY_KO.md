@@ -1,6 +1,6 @@
 # CSM Remote Change History
 
-작성일: 2026-07-09  
+작성일: 2026-07-09
 목적: 작업 흐름과 변경 이유를 짧게 기록한다.
 
 ---
@@ -33,8 +33,8 @@ CSM Remote의 한국어 마스터 제품 정의서와 영문 보조 정의서를
 Files Changed:
 
 ```text
-CSM_REMOTE_PRODUCT_DEFINITION_KO.md
-CSM_REMOTE_PRODUCT_DEFINITION.md
+docs/remote/product/PRODUCT_DEFINITION_KO.md
+docs/remote/product/PRODUCT_DEFINITION_EN.md
 README.md
 ```
 
@@ -63,12 +63,12 @@ Summary:
 Files Changed:
 
 ```text
-CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+docs/remote/harness/DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
 README.md
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -97,12 +97,12 @@ Summary:
 Files Changed:
 
 ```text
-CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md
-CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
-CSM_REMOTE_HARNESS_FINAL_AUDIT_KO.md
+docs/remote/harness/ROUTING_MATRIX_KO.md
+docs/remote/harness/DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
+docs/remote/harness/HARNESS_FINAL_AUDIT_KO.md
 README.md
 ```
 
@@ -142,9 +142,9 @@ Files Changed:
 .gitattributes
 firmware/csm/
 README.md
-CSM_REMOTE_REPOSITORY_SETUP_KO.md
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
+docs/remote/operations/REPOSITORY_SETUP_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
 ```
 
 Reason:
@@ -183,10 +183,10 @@ Summary:
 Files Changed:
 
 ```text
-CSM_REMOTE_PHASE0_HANDOFF_REVIEW_KO.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/reviews/PHASE0_HANDOFF_REVIEW_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
 README.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
 ```
 
 Reason:
@@ -228,8 +228,8 @@ firmware/csm/include/board/remote/RemoteTypes.h
 firmware/csm/src/board/remote/RemoteTypes.cpp
 firmware/csm/include/board/control/OperatorCommand.h
 firmware/csm/src/board/control/OperatorCommand.cpp
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -279,8 +279,8 @@ firmware/csm/include/board/remote/M4RemoteMailboxReader.h
 firmware/csm/src/board/remote/M4RemoteMailboxReader.cpp
 firmware/csm/include/board/remote/RemoteControlSource.h
 firmware/csm/src/board/remote/RemoteControlSource.cpp
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -339,8 +339,8 @@ firmware/csm/include/board/control/VehicleCommandMapper.h
 firmware/csm/src/board/control/VehicleCommandMapper.cpp
 firmware/csm/include/board/control/CanTxGateway.h
 firmware/csm/src/board/control/CanTxGateway.cpp
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -399,11 +399,11 @@ firmware/csm/include/board/remote/M4RemoteMailboxReader.h
 firmware/csm/src/board/remote/M4RemoteMailboxReader.cpp
 firmware/csm/include/board/remote/RemoteTypes.h
 firmware/csm/src/board/remote/RemoteTypes.cpp
-CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 README.md
 ```
 
@@ -464,11 +464,11 @@ firmware/csm/include/board/remote/CrsfParser.h
 firmware/csm/src/board/remote/CrsfParser.cpp
 firmware/csm/include/board/remote/RcNormalizer.h
 firmware/csm/src/board/remote/RcNormalizer.cpp
-CSM_REMOTE_CRSF_FRONTEND_CONTRACT_KO.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/CRSF_FRONTEND_CONTRACT_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 README.md
 ```
 
@@ -529,11 +529,11 @@ firmware/csm/include/board/remote/M4RemoteMailboxWriter.h
 firmware/csm/src/board/remote/M4RemoteMailboxWriter.cpp
 firmware/csm/include/board/remote/RemoteTypes.h
 firmware/csm/src/board/remote/RcNormalizer.cpp
-CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -590,12 +590,12 @@ Files Changed:
 ```text
 firmware/csm/include/board/remote/RemoteContractSelfTest.h
 firmware/csm/src/board/remote/RemoteContractSelfTest.cpp
-CSM_REMOTE_CRSF_FRONTEND_CONTRACT_KO.md
-CSM_REMOTE_M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/CRSF_FRONTEND_CONTRACT_KO.md
+docs/remote/architecture/M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -653,9 +653,9 @@ Files Changed:
 ```text
 firmware/csm/include/board/control/RemoteControlOrchestrator.h
 firmware/csm/src/board/control/RemoteControlOrchestrator.cpp
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -712,11 +712,11 @@ Files Changed:
 
 ```text
 firmware/csm/tools/remote_phase1_guard.py
-CSM_REMOTE_PHASE1_SKELETON_AUDIT_KO.md
+docs/remote/reviews/PHASE1_SKELETON_AUDIT_KO.md
 README.md
-CSM_REMOTE_SOURCE_LAYOUT_PROPOSAL_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 Reason:
@@ -755,4 +755,277 @@ Next Step:
 
 ```text
 Phase 2: M4 PlatformIO env proof, Serial3/R16SM capture, M4-M7 IPC prototype evidence.
+```
+
+---
+
+## 2026-07-09: Codex-Native AGENTS Routing Restructure
+
+Summary:
+
+```text
+CSM Remote 문서/하네스 구조를 Codex 실행 경로 기준으로 재배치하고,
+루트 AGENTS.md를 최상위 자동 진입점으로 추가했다.
+```
+
+Files Changed:
+
+```text
+AGENTS.md
+README.md
+docs/AGENTS.md
+docs/remote/AGENTS.md
+firmware/AGENTS.md
+firmware/csm/AGENTS.md
+firmware/csm/BRIEF.md
+firmware/csm/README.md
+firmware/csm/board/AGENTS.md
+firmware/csm/board/BRIEF.md
+firmware/csm/board/.agents/AGENTS.md
+firmware/csm/board/docs/AGENTS.md
+firmware/csm/docs/AGENTS.md
+firmware/csm/install/docs/AGENTS.md
+firmware/csm/shared/docs/AGENTS.md
+docs/remote/**
+```
+
+Reason:
+
+```text
+기존 flat root CSM_REMOTE_* 문서 구조는 사람이 보기에는 명확했지만,
+Codex 기본 실행성 기준에서는 자동 주입성이 약했다.
+또한 imported CSM 내부 AGENTS/BRIEF가 standalone CSM 전제를 갖고 있어 remote 제품 정의와 충돌할 수 있었다.
+```
+
+Boundary:
+
+```text
+펌웨어 source 변경 없음.
+platformio.ini 변경 없음.
+imported CSM 문서 삭제 없음.
+CSM 문서는 scoped firmware reference로 유지.
+remote 제품 권한은 root AGENTS.md와 docs/remote/product/PRODUCT_DEFINITION_KO.md가 소유.
+```
+
+Tests/Evidence:
+
+```text
+git diff --check passed.
+python firmware/csm/tools/remote_phase1_guard.py passed.
+root CSM_REMOTE_*.md remaining count: 0.
+active router legacy CSM_REMOTE_*.md references: 0.
+```
+
+Residual Risk:
+
+```text
+AGENTS.md 계층은 Codex 실행 경로에 맞춘 강한 라우팅 장치지만,
+모든 모델/도구가 모든 MD를 자동으로 통째로 읽는다는 뜻은 아니다.
+따라서 핵심 지침은 루트 AGENTS.md와 scoped AGENTS.md에 짧게 유지해야 한다.
+```
+
+Next Step:
+
+```text
+Phase 2A: M4 PlatformIO env/build separation proof.
+```
+
+---
+
+## 2026-07-09: Phase 2A M4 Remote Frontend Build Proof
+
+Summary:
+
+```text
+Portenta H7 M4 전용 build proof env를 추가하고, CRSF parser/RC normalizer/M4 mailbox writer가 M4 target에서 컴파일되는 것을 확인했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/platformio.ini
+firmware/csm/src/m4_remote_frontend_build_proof.cpp
+firmware/csm/tools/remote_phase1_guard.py
+firmware/csm/tools/remote_phase2a_guard.py
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Phase 2의 첫 증거는 실제 UART/IPC가 아니라 M4 build separation이다.
+M4에서 RC parser와 mailbox writer가 컴파일되는지 먼저 확인해야 이후 Serial3/R16SM capture와 IPC prototype을 분리해서 진행할 수 있다.
+```
+
+Boundary:
+
+```text
+Serial3 binding 없음.
+R16SM wiring 없음.
+M4-M7 shared memory/IPC 없음.
+M7 main.cpp wiring 없음.
+VehicleCommandMapper real mapping 없음.
+CanTxGateway backend write 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+PlatformIO M4 env `portenta_h7_m4_remote_frontend_build_proof`: SUCCESS.
+PlatformIO M7 passive env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`: SUCCESS.
+```
+
+Important Finding:
+
+```text
+처음 passive rebuild에서 M4 build proof file이 M7 `+<*>` source filter에 포함되어 setup/loop multiple definition으로 실패했다.
+이를 `-<m4_remote_frontend_build_proof.cpp>` exclude와 remote_phase2a_guard source-filter check로 수정했다.
+```
+
+Residual Risk:
+
+```text
+M4 env는 build proof일 뿐이다.
+실제 M4 boot, Serial3 electrical capture, R16SM CRSF decode, shared memory IPC, cache barrier, torn-read evidence는 아직 없다.
+```
+
+Next Step:
+
+```text
+Phase 2B: R16SM/Serial3 electrical and byte capture plan, then captured CRSF parser test vector execution.
+```
+
+---
+
+## 2026-07-09: Phase 2B M4 Serial3 Capture Probe
+
+Summary:
+
+```text
+Portenta H7 M4 전용 Serial3 capture probe env를 추가하고,
+Serial3 RX byte stream을 CRSF parser/RC normalizer/local mailbox writer까지 통과시키는 lab-only 빌드를 확인했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/platformio.ini
+firmware/csm/src/m4_remote_serial3_capture_probe.cpp
+firmware/csm/tools/remote_phase2b_guard.py
+docs/remote/architecture/CRSF_FRONTEND_CONTRACT_KO.md
+docs/remote/architecture/SOURCE_LAYOUT_PROPOSAL_KO.md
+docs/remote/operations/PHASE2B_R16SM_SERIAL3_CAPTURE_RUNBOOK_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+Phase 2A가 M4 논리 모듈 컴파일 증거라면,
+Phase 2B는 M4에서 Arduino `Serial3` API와 CRSF parser 경로가 동시에 컴파일되는지 확인하는 단계다.
+제품 runtime이나 차량 명령으로 연결하기 전에 R16SM 하드웨어 캡처를 위한 최소 프로브가 필요하다.
+```
+
+Boundary:
+
+```text
+lab-only M4 env만 추가.
+M7 main.cpp wiring 없음.
+M4-M7 shared memory/IPC 없음.
+VehicleCommandMapper real mapping 없음.
+CanTxGateway backend write 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+python firmware/csm/tools/remote_phase2b_guard.py passed.
+PlatformIO M4 env `portenta_h7_m4_remote_serial3_capture_probe`: SUCCESS.
+```
+
+Residual Risk:
+
+```text
+아직 실제 R16SM 신호를 캡처하지 않았다.
+420000 8N1은 lab default build setting이지 OD-003 closure가 아니다.
+Mid Carrier 물리 핀, RX voltage, polarity/inversion, frame cadence, valid hardware decode evidence가 남아 있다.
+```
+
+Next Step:
+
+```text
+Phase 2B bench execution: R16SM signal을 logic analyzer로 캡처하고,
+동일 byte stream을 parser test vector로 재생해 valid frame decode evidence를 남긴다.
+```
+
+---
+
+## 2026-07-09: Phase 2C Mailbox Reject Self-Test Expansion
+
+Summary:
+
+```text
+RemoteContractSelfTest를 확장해 mailbox torn-write, stale timeout, failsafe sample rejection을 software contract로 확인하도록 했다.
+```
+
+Files Changed:
+
+```text
+firmware/csm/include/board/remote/RemoteContractSelfTest.h
+firmware/csm/src/board/remote/RemoteContractSelfTest.cpp
+docs/remote/architecture/M4_M7_REMOTE_MAILBOX_CONTRACT_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
+```
+
+Reason:
+
+```text
+실제 M4-M7 IPC를 열기 전에 M7 reader/decoder가 torn/stale/failsafe 상태를 usable remote source로 승격하지 않는다는
+소프트웨어 계약 증거를 강화해야 한다.
+```
+
+Boundary:
+
+```text
+software self-test helper만 확장.
+shared memory address 없음.
+cache barrier/HSEM/OpenAMP/RPC 없음.
+M7 main.cpp runtime wiring 없음.
+새 CAN TX 없음.
+```
+
+Tests/Evidence:
+
+```text
+python firmware/csm/tools/remote_phase1_guard.py passed.
+python firmware/csm/tools/remote_phase2a_guard.py passed.
+python firmware/csm/tools/remote_phase2b_guard.py passed.
+PlatformIO M7 passive env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`: SUCCESS.
+```
+
+Residual Risk:
+
+```text
+OD-004는 아직 닫히지 않는다.
+실제 dual-core shared memory placement, memory barrier/cache coherency, IPC 선택, hardware torn-read/stale bench evidence가 남아 있다.
+```
+
+Next Step:
+
+```text
+하드웨어 벤치가 가능하면 R16SM/Serial3 capture를 수행한다.
+하드웨어 없이 계속 진행한다면 M4-M7 IPC prototype 설계를 별도 experimental profile로 분리한다.
 ```

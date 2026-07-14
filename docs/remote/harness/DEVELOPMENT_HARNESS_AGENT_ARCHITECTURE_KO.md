@@ -1,8 +1,8 @@
 # CSM Remote 개발 하네스 에이전트 아키텍처
 
-작성일: 2026-07-09  
-상태: 개발 운영 아키텍처 초안  
-상위 문서: `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`  
+작성일: 2026-07-09
+상태: 개발 운영 아키텍처 초안
+상위 문서: `docs/remote/product/PRODUCT_DEFINITION_KO.md`
 목적: 제품 철학, 개발 철학, 모듈 경계, 데이터 흐름, 히스토리를 유지하면서 CSM Remote를 개발하기 위한 에이전트/하네스 구조 정의
 
 이 문서는 제품 하네스가 아니라 개발 하네스다.
@@ -108,7 +108,7 @@ Risk
 다음 정보는 단일 출처를 가져야 한다.
 
 ```text
-제품 철학: CSM_REMOTE_PRODUCT_DEFINITION_KO.md
+제품 철학: docs/remote/product/PRODUCT_DEFINITION_KO.md
 open decision: decision log
 상태 정의: AuthorityTypes / definition 문서
 CAN TX 허용: CanTxGateway
@@ -448,7 +448,7 @@ DocumentationOnlyChange
 
 입력:
 
-- `CSM_REMOTE_PRODUCT_DEFINITION_KO.md`;
+- `docs/remote/product/PRODUCT_DEFINITION_KO.md`;
 - change impact;
 - open decision log;
 - 구현 diff.
@@ -486,9 +486,9 @@ No confirmed autonomy release = zero local CAN TX를 약화하는가?
 관리 파일 후보:
 
 ```text
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
 ```
 
 출력:
@@ -769,8 +769,8 @@ AI/사람이 작업을 이어받아도 같은 기준으로 판단하게 하는 �
 
 ```text
 AGENTS.md
-CSM_REMOTE_AGENT_SKILL_KO.md
-docs/dev/WORKFLOW_CHECKLIST_KO.md
+docs/remote/AGENTS.md
+docs/remote/harness/ROUTING_MATRIX_KO.md
 ```
 
 실패 조건:
@@ -816,12 +816,12 @@ open decisions not silently closed
 현재 폴더에는 다음이 필요하다.
 
 ```text
-CSM_REMOTE_PRODUCT_DEFINITION_KO.md
-CSM_REMOTE_DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
-CSM_REMOTE_DECISION_LEDGER_KO.md
-CSM_REMOTE_OPEN_DECISIONS_KO.md
-CSM_REMOTE_CHANGE_HISTORY_KO.md
-CSM_REMOTE_REQUIREMENT_TRACE_KO.md
+docs/remote/product/PRODUCT_DEFINITION_KO.md
+docs/remote/harness/DEVELOPMENT_HARNESS_AGENT_ARCHITECTURE_KO.md
+docs/remote/product/DECISION_LEDGER_KO.md
+docs/remote/product/OPEN_DECISIONS_KO.md
+docs/remote/product/CHANGE_HISTORY_KO.md
+docs/remote/product/REQUIREMENT_TRACE_KO.md
 ```
 
 역할:

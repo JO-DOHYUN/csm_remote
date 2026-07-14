@@ -2,7 +2,7 @@
 
 ## Current Baseline
 - baseline source: `src/main.cpp`, `platformio.ini`
-- root routing source: `AGENTS.md`, `BRIEF.md`
+- workspace routing source: `../../../AGENTS.md`, `../AGENTS.md`, `../BRIEF.md`
 - encoder data sheet: `dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
 - final hardware concept: `board/docs/HARDWARE_FINAL_CONCEPT_KO.md`
 - current CAN + voltage baseline: `board/docs/CAN_VOLTAGE_BASELINE.md`
@@ -67,8 +67,8 @@
 - keep the current Mid Carrier MCP2515 CSM profile explicit in CAPABILITY,
   health, and build profiles before revisiting a different controller path
 - treat `shared/docs/TRANSPORT_AND_RECORDS_KO.md` as the canonical wire contract
-- treat `VMS_CSM_03_ARCHITECT_SYNTHESIS_FINAL.md` as the latest integration
-  decision input, not as a replacement for scoped AGENTS/BRIEF docs
+- treat imported synthesis documents as historical decision inputs only; CSM
+  Remote product authority comes from `../../../docs/remote/AGENTS.md`
 - do not claim physical flash/HIL success without an actual hardware run
 - do not change record schema beyond the shared typed-record contract without
   updating that shared contract in the same turn

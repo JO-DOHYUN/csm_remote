@@ -1,7 +1,7 @@
 # CSM Remote Repository Setup
 
-작성일: 2026-07-09  
-상태: 적용 완료  
+작성일: 2026-07-09
+상태: 적용 완료
 
 이 문서는 현재 `csm_remote` repository가 어떻게 구성되었는지와, 앞으로 CSM subtree를 어떻게 다뤄야 하는지 정의한다.
 
@@ -11,9 +11,19 @@
 
 ```text
 C:\WORKS\VS\csm_remote
+  AGENTS.md
   README.md
-  CSM_REMOTE_*.md
+  docs/
+    AGENTS.md
+    remote/
+      AGENTS.md
+      product/
+      architecture/
+      harness/
+      reviews/
+      operations/
   firmware/
+    AGENTS.md
     csm/
       platformio.ini
       include/
@@ -26,7 +36,8 @@ C:\WORKS\VS\csm_remote
 역할:
 
 ```text
-루트: 제품 정의, 개발 하네스, decision/open decision/history/trace
+루트 AGENTS/README: Codex 자동 라우팅 진입점
+docs/remote: 제품 정의, 개발 하네스, decision/open decision/history/trace
 firmware/csm: CSM firmware subtree, 기준 bfef287
 ```
 
@@ -121,7 +132,7 @@ git subtree split --prefix=firmware/csm -b split/csm-remote
 
 ```text
 1. README.md
-2. CSM_REMOTE_AGENT_ROUTING_MATRIX_KO.md
+2. docs/remote/harness/ROUTING_MATRIX_KO.md
 3. 필요한 Product Definition 섹션
 4. 관련 firmware/csm source
 5. Decision/Open Decision/Requirement Trace 갱신 여부 확인

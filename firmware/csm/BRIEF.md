@@ -1,120 +1,124 @@
-# BRIEF.md - CSM Repository Brief
+# BRIEF.md - Imported CSM Firmware Brief
 
 ## Current Focus
-This is the standalone CSM board firmware repository.
+This directory is the imported CSM PlatformIO firmware project used by the CSM
+Remote workspace.
 
-- CSM firmware lives at the repository root, `src/`, `include/`, and `board/`.
-- Shared CSM/VSM wire contracts live under `shared/`.
-- VSM/Qt and Android app work must remain in separate repositories.
-- Build and upload from this directory only:
-  `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`.
+- Workspace root: `C:\WORKS\VS\csm_remote`
+- CSM firmware path: `firmware/csm`
+- Original upstream reference:
+  `C:\Users\JEON0295\Documents\PlatformIO\Projects\J_ArdP7_AM2_CSM`
+- Imported baseline commit:
+  `bfef287 Finalize passive CSM fault hold evidence`
+
+The upstream path is a reference baseline, not the active build root for this
+workspace.
+
+## Remote Workspace Relationship
+- Remote product decisions come from `../../docs/remote/**`.
+- This directory supplies the actual CSM firmware implementation.
+- VSM/Qt and Android work remain in their own repositories, but their product
+  authority is described by the remote product definition when it affects CSM.
+- Imported CSM docs remain useful scoped references; they do not override the
+  CSM Remote product definition.
 
 ## Current Build Baseline
 - Board: Arduino Portenta H7 M7 + Mid Carrier ASX00055.
 - Product default env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`.
-  This is the two-bus ACK-capable observe-only passive product artifact for the current vehicle use
-  case.
-- Final completion target: `board/docs/CSM_FINAL_PRODUCT_COMPLETION_TARGET_KO.md`.
 - Bench/HIL full env: `portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented`.
-- Kvaser/PCAN single-node transmit checks require the Passive Product host
-  session to be open and ACK-observe enabled. ACK capability is not host
-  TX/control capability.
-- Current board identity before this cleanup was read on COM7 as:
-  - `git=4d21a3c9431`
-  - `dirty=1`
-  - `env=portenta_h7_m7_mid_mcp2515_j4_dual_csm`
-  - `BOARD_CAN_IRQ_MODE=0`
-  - `BOARD_MCP2515_SPI_HZ=8000000`
-  - `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`
-- This repository now carries that uploaded source state so future uploads no
-  longer depend on `C:\WORKS\VS\csm_zip_pre_wifi`.
+- Current Phase 1 remote code is a deny-first skeleton. It compiles into the
+  passive build but is not wired to runtime M4 UART, IPC, or vehicle CAN TX.
+- Phase 2A M4 build proof env:
+  `portenta_h7_m4_remote_frontend_build_proof`. This proves only that selected
+  remote parser/normalizer/mailbox-writer code compiles for the M4 target. It
+  does not prove Serial3, R16SM, M4 boot coordination, or M4-M7 IPC.
+- Phase 2B M4 Serial3 capture probe env:
+  `portenta_h7_m4_remote_serial3_capture_probe`. This proves that the M4 target
+  can compile a lab-only `Serial3` RX capture path with CRSF parser,
+  normalizer, and local mailbox writer. It does not prove actual R16SM baud,
+  polarity, physical Mid Carrier pin mapping, or valid hardware decode.
 
 ## CSM Baseline
-- Passive Product `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic
-  CAN 2.0 500 kbps. In the field build, MCP SPI/reset/bitrate setup is deferred
-  through USB power-up and runs only after stable CDC/DTR session plus quiet
-  window; then ACK-observe is enabled.
+- Passive Product `bus=0`: external MCP2515/TJA1050, 8 MHz crystal, Classic CAN
+  2.0 500 kbps.
 - Passive Product `bus=1`: Mid Carrier J4/U2 built-in CAN, Classic CAN 2.0
-  500 kbps. Built-in CAN setup follows the same deferred-init rule and enters
-  ACK-observe only after stable session plus quiet window.
+  500 kbps.
 - Host downlink/control/TX/test paths are compile-time removed in the product
-  passive env. Encoder-derived streaming is also disabled in the product passive
-  env; keep non-CAN instrumentation in Full/diagnostic envs.
-- Full Instrumented keeps `bus=0` MCP2515/TJA1050 and `bus=1` Mid Carrier J4
-  CAN1 through onboard U2 for bench/HIL audited control tests.
+  passive env.
 - Live production output is typed transport v1.
 - High-load receive uses `CAN_RX_SEGMENT` while preserving per-frame truth.
-- `CONTROL_ACK` is request evidence only in Full Instrumented; final CAN write
-  evidence is `CAN_TX_RAW`. Passive Product must not advertise either as a live
-  active capability.
-- `CAPABILITY` exposes firmware identity, bus descriptors, and build settings.
-- `CAPABILITY v5` exposes firmware profile, vehicle-impact state, host command
-  RX, control path, USB reset sensitivity, CDC DTR session policy, and passive
-  safety evidence IDs.
-- `BOARD_HEALTH v7` preserves earlier offsets and adds uplink pool/descriptor,
-  CAN RX task max time, USB reconnect/reset counters, and passive violation
-  latch diagnostics plus host-absent discard, MCP passive readback, TXREQ
-  violation, and DTR change counters.
-- Passive CDC uplink is session-gated: before host CDC/DTR session open, CAN
-  front-end initialization and typed payload staging are both held. Session open
-  clears stale payloads, emits session evidence, waits the quiet window, then
-  initializes CAN front ends and enables ACK-observe for new frames only.
-- USB attach quarantine is CDC/uplink/session cleanup only. It must never replay
-  old CAN payload or enable host TX/control. The controlled transition to
-  ACK-observe is allowed only after deferred CAN front-end initialization
-  succeeds.
-- USB physical hotplug disturbance is not considered solved by CDC/uplink
-  quarantine alone. Firmware must expose lifecycle evidence, and final
-  vehicle-impact-free PASS requires external analyzer/scope/DTC proof.
-- `CAPABILITY v6` hardware fields are runtime claims/artifact references only.
-  Final `verified_passive` requires external analyzer/scope/DTC evidence whose
-  IDs match the claim fields.
-- The product remains two-bus. One-bus passive products are invalid, but
-  one-bus/missing-bus mismatch diagnostics must remain visible to VSM.
+- `CONTROL_ACK` is request evidence only. Final CAN write evidence is
+  `CAN_TX_RAW` or a later explicitly defined TX evidence record.
+- `CAPABILITY` exposes firmware identity, bus descriptors, build settings, and
+  passive evidence claims. These claims are not external physical proof.
+- Final `verified_passive` requires external analyzer/scope/DTC evidence.
+- The product remains two-bus. One-bus passive products are invalid.
 
 ## Canonical Contracts
-- Root routing: `AGENTS.md`
+- Workspace routing: `../../AGENTS.md`
+- Remote document routing: `../../docs/remote/AGENTS.md`
+- CSM firmware routing: `AGENTS.md`
 - Board scoped rules: `board/AGENTS.md`, `board/BRIEF.md`
 - Wire contract: `shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 - HIL runbook: `board/docs/HIL_RUNBOOK_KO.md`
 
 ## Verification Commands
-Use these commands only when the changed surface requires them. For docs,
-harness, or comment-only changes, run `git diff --check` and targeted search
-instead of PlatformIO. Upload is a separate hardware action, not a build proof.
+Use the smallest proof that covers the changed surface.
 
-Build Passive Product firmware:
+Docs/harness-only changes:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
+git diff --check
 ```
 
-This is the only CSM field/product build name for the current hardware. Do not
-build lab/full/test envs unless the task is explicitly a bench diagnostic.
-
-Upload Passive Product firmware only when the vehicle/bench context is safe for
-MCU reset and USB re-enumeration:
+Remote Phase 1 skeleton guard from workspace root:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive -t upload
+python firmware/csm/tools/remote_phase1_guard.py
 ```
 
-Build Full Instrumented firmware:
+Remote Phase 2A build-proof guard from workspace root:
 
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented
+python firmware/csm/tools/remote_phase2a_guard.py
 ```
 
-Decode board identity after upload:
+Remote Phase 2B Serial3 capture-probe guard from workspace root:
 
 ```powershell
-py -3 pc_tools\verify_typed_stream.py --port COM7 --seconds 4 --max-records 20
+python firmware/csm/tools/remote_phase2b_guard.py
 ```
+
+Build Passive Product firmware from workspace root:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive
+```
+
+Build M4 Remote Frontend proof firmware from workspace root:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m4_remote_frontend_build_proof
+```
+
+Build M4 Serial3 capture probe firmware from workspace root:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m4_remote_serial3_capture_probe
+```
+
+Build Full Instrumented firmware from workspace root when that surface changed:
+
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run -d firmware/csm -e portenta_h7_m7_mid_mcp2515_j4_dual_csm_full_instrumented
+```
+
+Upload only when explicitly requested and when the vehicle/bench context is safe
+for MCU reset and USB re-enumeration.
 
 ## Immediate Next Work
-- Use this repository root for all CSM PlatformIO build/upload work.
+- Keep remote product definition and firmware implementation in sync.
 - Keep VSM parser updates in the standalone VSM repository.
-- Build only the affected CSM env unless profile separation or wire
-  compatibility is part of the change.
-- Upload only on explicit request and safe hardware context.
+- Do not use old imported CSM prompt documents as product authority without
+  checking `../../docs/remote/product/PRODUCT_DEFINITION_KO.md`.
 - Do not commit build outputs, captures, archives, or nested app workspaces.
