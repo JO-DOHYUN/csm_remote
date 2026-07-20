@@ -1,6 +1,9 @@
 #include <Arduino.h>
 #include <cstring>
 #include <mbed.h>
+#if DEVICE_RESET_REASON
+#include "drivers/ResetReason.h"
+#endif
 #if defined(SERIAL_CDC)
 #include "USB/PluggableUSBSerial.h"
 #endif
@@ -11,9 +14,10 @@
 #include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
-#include "board/uplink/SerialTxScheduler.h"
+#include "board/uplink/CanonicalPublisher.h"
 #include "board/uplink/UplinkPriorityPolicy.h"
-#include "board/uplink/UplinkScheduler.h"
+#include "board/uplink/UsbCdcSink.h"
+#include "board/uplink/WifiTcpSink.h"
 #include "protocol/HostCommands.h"
 #include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
@@ -36,6 +40,22 @@
 
 #ifndef CSM_FW_BUILD_ID
 #define CSM_FW_BUILD_ID 0
+#endif
+
+#ifndef BOARD_WIFI_AP_SSID
+#define BOARD_WIFI_AP_SSID "VSM-CSM-DEV"
+#endif
+
+#ifndef BOARD_WIFI_AP_PASSPHRASE
+#define BOARD_WIFI_AP_PASSPHRASE "vsm-csm-dev"
+#endif
+
+#ifndef BOARD_WIFI_TCP_PORT
+#define BOARD_WIFI_TCP_PORT 3333
+#endif
+
+#ifndef BOARD_WIFI_AP_CHANNEL
+#define BOARD_WIFI_AP_CHANNEL 6
 #endif
 
 #ifndef BOARD_HW_PROFILE_MID_TJA1051_DUAL
@@ -308,6 +328,14 @@
 #define BOARD_ENABLE_HOST_DOWNLINK BOARD_ENABLE_HOST_CAN_TX_ANY
 #endif
 
+#ifndef BOARD_HOST_DOWNLINK_TRANSPORT_WIFI
+#define BOARD_HOST_DOWNLINK_TRANSPORT_WIFI 0
+#endif
+
+#ifndef BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+#define BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS 0
+#endif
+
 #ifndef BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
 #define BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND 0
 #endif
@@ -431,6 +459,12 @@
 #endif
 #endif
 
+#if BOARD_ENABLE_WIFI_UPLINK && BOARD_HOST_DOWNLINK_TRANSPORT_WIFI && BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+#if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
+#error "Service/HIL Wi-Fi must not reset the board on transient USB CDC disconnects"
+#endif
+#endif
+
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
 #include "drivers/CAN.h"
 #endif
@@ -492,6 +526,10 @@ using csm::kBoardHealthV2PayloadLen;
 using csm::kBoardHealthV4PayloadLen;
 using csm::kBoardHealthV6PayloadLen;
 using csm::kBoardHealthV7PayloadLen;
+using csm::kBoardHealthV8PayloadLen;
+using csm::kBoardHealthV9PayloadLen;
+using csm::kBoardHealthV10PayloadLen;
+using csm::kBoardHealthV11PayloadLen;
 using csm::kCanRxSegmentEntryLen;
 using csm::kCanRxSegmentHeaderLen;
 using csm::kCanRxSegmentMaxFrames;
@@ -506,53 +544,89 @@ using csm::wr_u32_le;
 using csm::wr_u64_le;
 using csm::board::uplink::CanRxSegmentBuilder;
 using csm::board::uplink::CanRxSegmentItem;
-using csm::board::uplink::SerialTxScheduler;
+using csm::board::uplink::CanonicalPublisher;
+using csm::board::uplink::SessionAnnouncementReason;
 using csm::board::uplink::UplinkPriority;
-using csm::board::uplink::UplinkScheduler;
+using csm::board::uplink::UsbCdcSink;
+using csm::board::uplink::WifiTcpSink;
 
 using SafetyState = csm::board::SafetyState;
 
 enum BoardEventCode : uint16_t {
-  EventBoot = 1,
-  EventCanBeginFailed = 2,
-  EventCanRxQueueDrop = 3,
-  EventEncoderFaultAsserted = 4,
-  EventFieldPowerLost = 5,
-  EventEstopAsserted = 6,
-  EventEncoderIndex = 7,
-  EventEncoderWrap = 8,
-  EventMcp2515Error = 9,
-  EventMcp2515SpiSnapshot = 10,
-  EventBuiltinCanBeginFailed = 11,
-  EventBuiltinCanTxFailed = 12,
-  EventHostFrameCrcFailed = 13,
-  EventHostCanTxRejected = 14,
-  EventHostCanTxAccepted = 15,
-  EventCan0BackendUnavailable = 16,
-  EventMcp2515TxFailed = 17,
-  EventSafetyStateChanged = 18,
-  EventHostHeartbeat = 19,
-  EventHostControlSession = 20,
-  EventHostCommandUnsupported = 21,
-  EventFaultLockoutCleared = 22,
-  EventFirmwareIdentity = 23,
-  EventSerialTxBackpressure = 24,
-  EventSerialTxRingClear = 25,
-  EventCanRxSegmentEnqueueFailed = 26,
-  EventUsbCdcSessionOpen = 27,
-  EventUsbCdcSessionClose = 28,
-  EventUsbCdcDtrChange = 29,
-  EventUsbHostAbsentCanDiscardSummary = 30,
-  EventMcpPassiveModeReadback = 31,
-  EventMcpPassiveModeViolation = 32,
-  EventMcpTxreqViolation = 33,
-  EventTransceiverSafeStateChanged = 34,
-  EventUsbPowerOrResetSuspected = 35,
-  EventCanFrontendPresessionHold = 36,
-  EventCanFrontendSessionReady = 37,
-  EventCanFrontendSessionInitFailed = 38,
-  EventCanFrontendFaultHold = 39,
+  EventBoot = csm::kBoardEventBootCode,
+  EventCanBeginFailed = csm::kBoardEventCanBeginFailedCode,
+  EventCanRxQueueDrop = csm::kBoardEventCanRxQueueDropCode,
+  EventEncoderFaultAsserted = csm::kBoardEventEncoderFaultAssertedCode,
+  EventFieldPowerLost = csm::kBoardEventFieldPowerLostCode,
+  EventEstopAsserted = csm::kBoardEventEstopAssertedCode,
+  EventEncoderIndex = csm::kBoardEventEncoderIndexCode,
+  EventEncoderWrap = csm::kBoardEventEncoderWrapCode,
+  EventMcp2515Error = csm::kBoardEventMcp2515ErrorCode,
+  EventMcp2515SpiSnapshot = csm::kBoardEventMcp2515SpiSnapshotCode,
+  EventBuiltinCanBeginFailed = csm::kBoardEventBuiltinCanBeginFailedCode,
+  EventBuiltinCanTxFailed = csm::kBoardEventBuiltinCanTxFailedCode,
+  EventHostFrameCrcFailed = csm::kBoardEventHostFrameCrcFailedCode,
+  EventHostCanTxRejected = csm::kBoardEventHostCanTxRejectedCode,
+  EventHostCanTxAccepted = csm::kBoardEventHostCanTxAcceptedCode,
+  EventCan0BackendUnavailable = csm::kBoardEventCan0BackendUnavailableCode,
+  EventMcp2515TxFailed = csm::kBoardEventMcp2515TxFailedCode,
+  EventSafetyStateChanged = csm::kBoardEventSafetyStateChangedCode,
+  EventHostHeartbeat = csm::kBoardEventHostHeartbeatCode,
+  EventHostControlSession = csm::kBoardEventHostControlSessionCode,
+  EventHostCommandUnsupported = csm::kBoardEventHostCommandUnsupportedCode,
+  EventFaultLockoutCleared = csm::kBoardEventFaultLockoutClearedCode,
+  EventFirmwareIdentity = csm::kBoardEventFirmwareIdentityCode,
+  EventSerialTxBackpressure = csm::kBoardEventSerialTxBackpressureCode,
+  EventSerialTxRingClear = csm::kBoardEventSerialTxRingClearCode,
+  EventCanRxSegmentEnqueueFailed = csm::kBoardEventCanRxSegmentEnqueueFailedCode,
+  EventUsbCdcSessionOpen = csm::kBoardEventUsbCdcSessionOpenCode,
+  EventUsbCdcSessionClose = csm::kBoardEventUsbCdcSessionCloseCode,
+  EventUsbCdcDtrChange = csm::kBoardEventUsbCdcDtrChangeCode,
+  EventUsbHostAbsentCanDiscardSummary = csm::kBoardEventUsbHostAbsentCanDiscardSummaryCode,
+  EventMcpPassiveModeReadback = csm::kBoardEventMcpPassiveModeReadbackCode,
+  EventMcpPassiveModeViolation = csm::kBoardEventMcpPassiveModeViolationCode,
+  EventMcpTxreqViolation = csm::kBoardEventMcpTxreqViolationCode,
+  EventTransceiverSafeStateChanged = csm::kBoardEventTransceiverSafeStateChangedCode,
+  EventUsbPowerOrResetSuspected = csm::kBoardEventUsbPowerOrResetSuspectedCode,
+  EventCanFrontendPresessionHold = csm::kBoardEventCanFrontendPresessionHoldCode,
+  EventCanFrontendSessionReady = csm::kBoardEventCanFrontendSessionReadyCode,
+  EventCanFrontendSessionInitFailed = csm::kBoardEventCanFrontendSessionInitFailedCode,
+  EventCanFrontendFaultHold = csm::kBoardEventCanFrontendFaultHoldCode,
+  EventWifiTxBackpressure = csm::kBoardEventWifiTxBackpressureCode,
+  EventRuntimeBreadcrumbRecovered = csm::kBoardEventRuntimeBreadcrumbRecoveredCode,
 };
+
+enum RuntimeBreadcrumbStage : uint8_t {
+  RuntimeStageIdle = 0,
+  RuntimeStageUsbConnectionPoll = 1,
+  RuntimeStageWifiConnectionPoll = 2,
+  RuntimeStageCanonicalPublish = 3,
+  RuntimeStageUsbTransmit = 4,
+  RuntimeStageWifiTransmit = 5,
+  RuntimeStageHostDownlink = 6,
+  RuntimeStageMcpEntryDrain = 7,
+  RuntimeStageMcpInterleaveDrain = 8,
+  RuntimeStageMcpMainDrain = 9,
+  RuntimeStageBuiltinCanDrain = 10,
+  RuntimeStageCanRecordDrain = 11,
+  RuntimeStageStatusAndSensors = 12,
+  RuntimeStageHealthPublish = 13,
+  RuntimeStageSetup = 14,
+};
+
+struct RuntimeBreadcrumbSlot {
+  uint32_t magic;
+  uint32_t firmware_build_id;
+  uint32_t write_sequence;
+  uint32_t stage;
+  uint32_t detail;
+  uint32_t uptime_ms;
+  uint32_t checksum;
+  uint32_t reserved;
+};
+
+static_assert(sizeof(RuntimeBreadcrumbSlot) == 32,
+              "retained runtime breadcrumb must remain one cache line");
 
 using CanRxItem = CanRxSegmentItem;
 
@@ -627,10 +701,13 @@ static_assert(BOARD_UPLINK_NORMAL_QUEUE_RECORDS >= 4,
               "normal uplink queue must absorb health/capability bursts");
 static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
               "diagnostic uplink queue must retain bounded low-value telemetry");
-static SerialTxScheduler serial_tx_scheduler;
-static UplinkScheduler uplink_scheduler;
+static UsbCdcSink usb_cdc_sink;
+#if BOARD_ENABLE_WIFI_UPLINK
+static WifiTcpSink wifi_tcp_sink;
+#endif
+static CanonicalPublisher canonical_publisher;
 static CanRxSegmentBuilder can_rx_segment_builder;
-static uint32_t serial_tx_bytes_since_can_service = 0;
+static uint32_t uplink_tx_bytes_since_can_service = 0;
 #if BOARD_ENABLE_MCP2515
 static MCP2515* mcp2515 = nullptr;
 static volatile bool mcp2515_irq_pending = false;
@@ -747,6 +824,19 @@ static uint32_t usb_reconnect_count = 0;
 static uint32_t usb_forced_reset_count = 0;
 static uint32_t passive_violation_latch = 0;
 static uint32_t can_rx_task_max_us = 0;
+static uint32_t main_loop_last_entry_us = 0;
+static uint32_t main_loop_max_gap_us = 0;
+static uint32_t boot_reset_cause_bits = 0;
+static uint32_t boot_reset_status_raw = 0;
+static volatile RuntimeBreadcrumbSlot retained_runtime_breadcrumb[2]
+    __attribute__((section(".keep.uninitialized"), used, aligned(32)));
+static uint32_t runtime_breadcrumb_write_sequence = 0;
+static bool previous_runtime_breadcrumb_valid = false;
+static bool previous_runtime_breadcrumb_pending = false;
+static uint8_t previous_runtime_breadcrumb_stage = RuntimeStageIdle;
+static uint8_t previous_runtime_breadcrumb_detail = 0;
+static uint32_t previous_runtime_breadcrumb_uptime_ms = 0;
+static uint32_t previous_runtime_breadcrumb_sequence = 0;
 static uint32_t uplink_pool_high_water_bytes = 0;
 static uint32_t capture_invalid_reason = 0;
 static uint32_t host_absent_rx_discard_total[2] = {0, 0};
@@ -772,6 +862,70 @@ static uint32_t can_frontend_presession_hold_total = 0;
 static uint32_t can_frontend_session_ready_total = 0;
 static uint32_t can_frontend_session_init_fail_total = 0;
 static uint32_t last_can_frontend_init_attempt_ms = 0;
+
+static constexpr uint32_t kRuntimeBreadcrumbMagic = 0x43534D42u;  // "CSMB"
+static constexpr uint32_t kRuntimeBreadcrumbChecksumSeed = 0xA53C91E7u;
+
+static uint32_t runtime_breadcrumb_checksum(uint32_t firmware_build_id,
+                                            uint32_t write_sequence,
+                                            uint32_t stage,
+                                            uint32_t detail,
+                                            uint32_t uptime_ms) {
+  return kRuntimeBreadcrumbChecksumSeed ^ kRuntimeBreadcrumbMagic ^
+         firmware_build_id ^ write_sequence ^ stage ^ detail ^ uptime_ms;
+}
+
+static bool runtime_breadcrumb_slot_valid(
+    const volatile RuntimeBreadcrumbSlot& slot) {
+  if (slot.magic != kRuntimeBreadcrumbMagic ||
+      slot.firmware_build_id != static_cast<uint32_t>(CSM_FW_BUILD_ID)) {
+    return false;
+  }
+  return slot.checksum == runtime_breadcrumb_checksum(
+                              slot.firmware_build_id, slot.write_sequence,
+                              slot.stage, slot.detail, slot.uptime_ms);
+}
+
+static void recover_runtime_breadcrumb() {
+  const bool valid0 = runtime_breadcrumb_slot_valid(retained_runtime_breadcrumb[0]);
+  const bool valid1 = runtime_breadcrumb_slot_valid(retained_runtime_breadcrumb[1]);
+  if (!valid0 && !valid1) return;
+
+  uint8_t selected = 0;
+  if (!valid0 ||
+      (valid1 && static_cast<int32_t>(retained_runtime_breadcrumb[1].write_sequence -
+                                     retained_runtime_breadcrumb[0].write_sequence) > 0)) {
+    selected = 1;
+  }
+  const volatile RuntimeBreadcrumbSlot& slot = retained_runtime_breadcrumb[selected];
+  runtime_breadcrumb_write_sequence = slot.write_sequence;
+  previous_runtime_breadcrumb_valid = true;
+  previous_runtime_breadcrumb_stage = static_cast<uint8_t>(slot.stage & 0xFFu);
+  previous_runtime_breadcrumb_detail = static_cast<uint8_t>(slot.detail & 0xFFu);
+  previous_runtime_breadcrumb_uptime_ms = slot.uptime_ms;
+  previous_runtime_breadcrumb_sequence = slot.write_sequence;
+  previous_runtime_breadcrumb_pending = true;
+}
+
+static void record_runtime_breadcrumb(RuntimeBreadcrumbStage stage,
+                                      uint8_t detail = 0) {
+  const uint32_t sequence = ++runtime_breadcrumb_write_sequence;
+  volatile RuntimeBreadcrumbSlot& slot = retained_runtime_breadcrumb[sequence & 1u];
+  const uint32_t uptime_ms = millis();
+  slot.checksum = 0;
+  slot.magic = kRuntimeBreadcrumbMagic;
+  slot.firmware_build_id = static_cast<uint32_t>(CSM_FW_BUILD_ID);
+  slot.write_sequence = sequence;
+  slot.stage = static_cast<uint32_t>(stage);
+  slot.detail = detail;
+  slot.uptime_ms = uptime_ms;
+  slot.reserved = 0;
+  __DMB();
+  slot.checksum = runtime_breadcrumb_checksum(
+      slot.firmware_build_id, slot.write_sequence, slot.stage, slot.detail,
+      slot.uptime_ms);
+  __DSB();
+}
 
 static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -820,7 +974,11 @@ static uint8_t __attribute__((unused)) passive_acceptance_allowed() {
 static void discard_session_uplink_payloads() {
   can_rx_segment_builder.discardPending();
   discard_can_queue_for_session_quarantine();
-  uplink_scheduler.discardQueuedRecords();
+  canonical_publisher.discardQueuedRecords();
+  usb_cdc_sink.abortQueuedFrames();
+#if BOARD_ENABLE_WIFI_UPLINK
+  wifi_tcp_sink.abortQueuedFrames();
+#endif
 }
 
 static void note_can_rx_task_elapsed(uint32_t start_us) {
@@ -860,11 +1018,7 @@ static bool emit_board_event_with_priority(uint16_t code, uint16_t detail, uint3
 static void service_deferred_loss_events();
 
 static bool uplink_host_session_open() {
-#if defined(SERIAL_CDC)
-  return _SerialUSB.connected();
-#else
-  return true;
-#endif
+  return canonical_publisher.hasConnectedSink();
 }
 
 static bool usb_cdc_dtr_asserted() {
@@ -875,19 +1029,71 @@ static bool usb_cdc_dtr_asserted() {
 #endif
 }
 
-static void service_serial_tx(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
-  const csm::board::uplink::SerialTxServiceResult result =
-      uplink_scheduler.service(byte_budget, millis(), micros());
-  if (result.backpressure_event) {
-    emit_board_event(EventSerialTxBackpressure,
-                     static_cast<uint16_t>(result.backpressure_duration_ms & 0xFFFF),
-                     serial_tx_scheduler.counters().backpressure_total);
+static void poll_uplink_connections(uint32_t now_ms) {
+  record_runtime_breadcrumb(RuntimeStageUsbConnectionPoll);
+  const csm::board::uplink::SinkServiceResult usb_poll =
+      usb_cdc_sink.service(0, now_ms, micros());
+  record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_WIFI_UPLINK
+  record_runtime_breadcrumb(RuntimeStageWifiConnectionPoll);
+  const csm::board::uplink::SinkServiceResult wifi_poll =
+      wifi_tcp_sink.service(0, now_ms, micros());
+  record_runtime_breadcrumb(RuntimeStageIdle);
+  if (usb_poll.epoch_changed || wifi_poll.epoch_changed) {
+#else
+  if (usb_poll.epoch_changed) {
+#endif
+    canonical_publisher.requestSessionAnnouncement(
+        SessionAnnouncementReason::SinkEpochChanged);
   }
-  serial_tx_bytes_since_can_service += result.actual_bytes;
-  while (serial_tx_bytes_since_can_service >= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES) {
-    serial_tx_bytes_since_can_service -= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES;
+}
+
+static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
+  const uint32_t now_ms = millis();
+  poll_uplink_connections(now_ms);
+  record_runtime_breadcrumb(RuntimeStageCanonicalPublish);
+  canonical_publisher.service(mono64_us());
+  record_runtime_breadcrumb(RuntimeStageIdle);
+  record_runtime_breadcrumb(RuntimeStageUsbTransmit);
+  const csm::board::uplink::SinkServiceResult usb_result =
+      usb_cdc_sink.service(byte_budget, now_ms, micros());
+  record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_WIFI_UPLINK
+  record_runtime_breadcrumb(RuntimeStageWifiTransmit);
+  const csm::board::uplink::SinkServiceResult wifi_result =
+      wifi_tcp_sink.service(byte_budget, now_ms, micros());
+  record_runtime_breadcrumb(RuntimeStageIdle);
+  if (usb_result.epoch_changed || wifi_result.epoch_changed) {
+#else
+  if (usb_result.epoch_changed) {
+#endif
+    canonical_publisher.requestSessionAnnouncement(
+        SessionAnnouncementReason::SinkEpochChanged);
+  }
+  if (usb_result.backpressure_event) {
+    emit_board_event(EventSerialTxBackpressure,
+                     static_cast<uint16_t>(usb_result.backpressure_duration_ms & 0xFFFF),
+                     usb_cdc_sink.counters().backpressure_total);
+  }
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (wifi_result.backpressure_event && wifi_result.epoch_changed) {
+    const uint32_t duration_ms = wifi_result.backpressure_duration_ms;
+    emit_board_event(
+        EventWifiTxBackpressure,
+        static_cast<uint16_t>(duration_ms > 0xFFFFu ? 0xFFFFu : duration_ms),
+        wifi_tcp_sink.counters().stall_close_total);
+  }
+  uplink_tx_bytes_since_can_service +=
+      usb_result.actual_bytes + wifi_result.actual_bytes;
+#else
+  uplink_tx_bytes_since_can_service += usb_result.actual_bytes;
+#endif
+  while (uplink_tx_bytes_since_can_service >= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES) {
+    uplink_tx_bytes_since_can_service -= BOARD_SERIAL_TX_CAN_INTERLEAVE_BYTES;
     if (!kTestMode) {
+      record_runtime_breadcrumb(RuntimeStageMcpInterleaveDrain);
       pump_can_rx_to_queue(BOARD_SERIAL_TX_CAN_INTERLEAVE_MCP_BUDGET);
+      record_runtime_breadcrumb(RuntimeStageIdle);
     }
   }
 }
@@ -938,7 +1144,7 @@ static bool enqueue_typed_record(RecordType type, const uint8_t* payload, uint16
   if (!uplink_host_session_open()) {
     return false;
   }
-  return uplink_scheduler.enqueueRecord(type, payload, len, priority, flags);
+  return canonical_publisher.enqueueRecord(type, payload, len, priority, flags);
 #endif
 }
 
@@ -947,10 +1153,14 @@ static bool uplink_boot_quiet_active() {
 }
 
 static bool uplink_tx_pressure_active() {
-  return serial_tx_scheduler.backpressureActive() ||
-         serial_tx_scheduler.hasActiveFrame() ||
-         uplink_scheduler.pressureActive() ||
-         uplink_scheduler.queuedPayloadBytes() >= BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
+  return usb_cdc_sink.backpressureActive() ||
+         usb_cdc_sink.hasPendingFrames() ||
+#if BOARD_ENABLE_WIFI_UPLINK
+         wifi_tcp_sink.backpressureActive() ||
+         wifi_tcp_sink.hasPendingFrames() ||
+#endif
+         canonical_publisher.pressureActive() ||
+         canonical_publisher.queuedPayloadBytes() >= BOARD_SERIAL_TX_NORMAL_LOW_WATER_BYTES;
 }
 
 static bool should_suppress_low_value_record(RecordType type, UplinkPriority priority) {
@@ -998,6 +1208,97 @@ static void init_runtime_watchdog() {
 #endif
 }
 
+static void capture_boot_reset_cause() {
+#if DEVICE_RESET_REASON
+  const reset_reason_t reason = mbed::ResetReason::get();
+  boot_reset_status_raw = mbed::ResetReason::get_raw();
+  switch (reason) {
+    case RESET_REASON_POWER_ON:
+      boot_reset_cause_bits |= csm::kResetCausePowerOn;
+      break;
+    case RESET_REASON_PIN_RESET:
+      boot_reset_cause_bits |= csm::kResetCausePin;
+      break;
+    case RESET_REASON_BROWN_OUT:
+      boot_reset_cause_bits |= csm::kResetCauseBrownout;
+      break;
+    case RESET_REASON_SOFTWARE:
+      boot_reset_cause_bits |= csm::kResetCauseSoftware;
+      break;
+    case RESET_REASON_WATCHDOG:
+      boot_reset_cause_bits |= csm::kResetCauseIndependentWatchdog;
+      break;
+    case RESET_REASON_WAKE_LOW_POWER:
+      boot_reset_cause_bits |= csm::kResetCauseLowPower;
+      break;
+    case RESET_REASON_UNKNOWN:
+      boot_reset_cause_bits |= csm::kResetCauseUnknown;
+      break;
+    default:
+      break;
+  }
+#elif defined(RCC)
+  boot_reset_status_raw = RCC->RSR;
+#endif
+
+#if defined(RCC_RSR_PORRSTF)
+  if ((boot_reset_status_raw & RCC_RSR_PORRSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCausePowerOn;
+  }
+#endif
+#if defined(RCC_RSR_BORRSTF)
+  if ((boot_reset_status_raw & RCC_RSR_BORRSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseBrownout;
+  }
+#endif
+#if defined(RCC_RSR_PINRSTF)
+  if ((boot_reset_status_raw & RCC_RSR_PINRSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCausePin;
+  }
+#endif
+#if defined(RCC_RSR_SFTRSTF)
+  if ((boot_reset_status_raw & RCC_RSR_SFTRSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseSoftware;
+  }
+#endif
+#if defined(RCC_RSR_IWDG1RSTF)
+  if ((boot_reset_status_raw & RCC_RSR_IWDG1RSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseIndependentWatchdog;
+  }
+#endif
+#if defined(RCC_RSR_WWDG1RSTF)
+  if ((boot_reset_status_raw & RCC_RSR_WWDG1RSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseWindowWatchdog;
+  }
+#endif
+#if defined(RCC_RSR_CPURSTF)
+  if ((boot_reset_status_raw & RCC_RSR_CPURSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseCpu;
+  }
+#endif
+#if defined(RCC_RSR_D1RSTF)
+  if ((boot_reset_status_raw & RCC_RSR_D1RSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseDomain1;
+  }
+#endif
+#if defined(RCC_RSR_D2RSTF)
+  if ((boot_reset_status_raw & RCC_RSR_D2RSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseDomain2;
+  }
+#endif
+#if defined(RCC_RSR_LPWR1RSTF)
+  if ((boot_reset_status_raw & RCC_RSR_LPWR1RSTF) != 0) {
+    boot_reset_cause_bits |= csm::kResetCauseLowPower;
+  }
+#endif
+  if (boot_reset_status_raw != 0 && boot_reset_cause_bits == 0) {
+    boot_reset_cause_bits = csm::kResetCauseUnknown;
+  }
+#if !DEVICE_RESET_REASON && defined(RCC_RSR_RMVF)
+  __HAL_RCC_CLEAR_RESET_FLAGS();
+#endif
+}
+
 static void kick_runtime_watchdog() {
 #if BOARD_ENABLE_RUNTIME_WATCHDOG
   mbed::Watchdog::get_instance().kick();
@@ -1007,16 +1308,28 @@ static void kick_runtime_watchdog() {
 static bool emit_board_event_with_priority(uint16_t code, uint16_t detail, uint32_t counter,
                                            UplinkPriority priority) {
   uint8_t payload[16];
-  wr_u64_le(&payload[0], mono64_us());
-  wr_u16_le(&payload[8], code);
-  wr_u16_le(&payload[10], detail);
-  wr_u32_le(&payload[12], counter);
+  wr_u64_le(&payload[csm::kBoardEventMonoUsOffset], mono64_us());
+  wr_u16_le(&payload[csm::kBoardEventCodeOffset], code);
+  wr_u16_le(&payload[csm::kBoardEventDetailOffset], detail);
+  wr_u32_le(&payload[csm::kBoardEventCounterOffset], counter);
   return emit_record(RecordType::BoardEvent, payload, sizeof(payload), priority);
 }
 
 static bool emit_board_event(uint16_t code, uint16_t detail, uint32_t counter) {
   return emit_board_event_with_priority(
       code, detail, counter, csm::board::uplink::priority_for_board_event(code));
+}
+
+static void service_recovered_runtime_breadcrumb() {
+  if (!previous_runtime_breadcrumb_pending || !uplink_host_session_open()) return;
+  const uint16_t detail =
+      static_cast<uint16_t>(previous_runtime_breadcrumb_stage) |
+      static_cast<uint16_t>(previous_runtime_breadcrumb_detail << 8);
+  if (emit_board_event_with_priority(EventRuntimeBreadcrumbRecovered, detail,
+                                     previous_runtime_breadcrumb_uptime_ms,
+                                     UplinkPriority::Critical)) {
+    previous_runtime_breadcrumb_pending = false;
+  }
 }
 
 static void note_pending_can_segment_enqueue_fail(uint32_t frames) {
@@ -1028,7 +1341,7 @@ static void service_deferred_loss_events() {
   if (pending_can_segment_enqueue_fail_frames == 0) {
     return;
   }
-  if (!uplink_scheduler.hasQueueSpace(UplinkPriority::Critical)) {
+  if (!canonical_publisher.hasQueueSpace(UplinkPriority::Critical)) {
     return;
   }
 
@@ -1110,8 +1423,13 @@ static void emit_capability() {
 #endif
   config.profile_minor = 0;
   config.can_queue_size = kCanQueueSize;
+#if BOARD_ENABLE_ENCODER_IO
   config.encoder_ppr = 2048;
   config.encoder_frequency_limit_hz = 300000;
+#else
+  config.encoder_ppr = 0;
+  config.encoder_frequency_limit_hz = 0;
+#endif
   config.adc_sample_supported = BOARD_ENABLE_VOLTAGE_ADC;
   config.adc_channel_count = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageChannelCount : 0;
   config.adc_resolution_bits = BOARD_ENABLE_VOLTAGE_ADC ? kVoltageAdcBits : 0;
@@ -1169,7 +1487,13 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::BoardEvent)) |
       (1u << static_cast<uint8_t>(RecordType::BoardHealth)) |
       (1u << static_cast<uint8_t>(RecordType::Capability)) |
-      (1u << static_cast<uint8_t>(RecordType::CanRxSegment));
+      (1u << static_cast<uint8_t>(RecordType::CanRxSegment)) |
+      (1u << static_cast<uint8_t>(RecordType::StreamSession));
+#if BOARD_ENABLE_ENCODER_IO
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::EncEdgeRaw)) |
+      (1u << static_cast<uint8_t>(RecordType::EncDerived));
+#endif
 #if BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
@@ -1664,8 +1988,17 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   const uint32_t queued0 = (can_q_head[0] - can_q_tail[0]) & kCanQueueMask;
   const uint32_t queued1 = (can_q_head[1] - can_q_tail[1]) & kCanQueueMask;
   const uint32_t queued = queued0 + queued1;
-  const csm::board::uplink::UplinkCounters& uplink_counters = uplink_scheduler.counters();
-  const csm::board::uplink::SerialTxCounters& serial_counters = serial_tx_scheduler.counters();
+  const csm::board::uplink::AdmissionCounters& admission_counters =
+      canonical_publisher.admissionCounters();
+  const csm::board::uplink::PublisherCounters& publisher_counters =
+      canonical_publisher.counters();
+  const csm::board::uplink::UsbCdcSinkCounters& usb_counters =
+      usb_cdc_sink.counters();
+#if BOARD_ENABLE_WIFI_UPLINK
+  const csm::board::uplink::WifiTcpSinkCounters& wifi_counters = wifi_tcp_sink.counters();
+#else
+  const csm::board::uplink::WifiTcpSinkCounters wifi_counters = {};
+#endif
 
   uint8_t inputs = 0;
 #if BOARD_ENABLE_SAFETY_IO
@@ -1675,20 +2008,21 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
-  uint8_t payload[kBoardHealthV7PayloadLen];
+  uint8_t payload[kBoardHealthV11PayloadLen];
   memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
   wr_u32_le(&payload[8], can_rx_count_total);
   wr_u32_le(&payload[12], can_rx_dropped_total);
   wr_u32_le(&payload[16], can_fifo_overflow_total);
-  wr_u32_le(&payload[20], uplink_counters.record_tx_total);
+  wr_u32_le(&payload[20], publisher_counters.record_publish_total);
   wr_u32_le(&payload[24], queued);
   wr_u32_le(&payload[28], encoder_fault_events);
   wr_u32_le(&payload[32], encoder_wrap_events);
   wr_i64_le(&payload[36], snap.position);
   payload[44] = static_cast<uint8_t>(safety_state);
   payload[45] = inputs;
-  payload[46] = encoder_timer_ok ? 1 : 0;
+  // A disabled encoder lane has no timer requirement and is therefore healthy.
+  payload[46] = (!BOARD_ENABLE_TIM3_ENCODER || encoder_timer_ok) ? 1 : 0;
   payload[47] = 0;
   payload[47] |= kTestMode ? (1u << 0) : 0;
   payload[47] |= can_backend_ok ? (1u << 1) : 0;
@@ -1702,12 +2036,16 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 #if BOARD_ENABLE_VOLTAGE_ADC
   payload[47] |= voltage_adc_ok ? (1u << 5) : 0;
 #endif
-  payload[47] |= (serial_tx_scheduler.queuedBytes() + uplink_scheduler.queuedPayloadBytes()) > 0
+  uint32_t sink_queued_bytes = usb_cdc_sink.queuedBytes();
+#if BOARD_ENABLE_WIFI_UPLINK
+  sink_queued_bytes += wifi_tcp_sink.queuedBytes();
+#endif
+  payload[47] |= (sink_queued_bytes + canonical_publisher.queuedPayloadBytes()) > 0
                      ? (1u << 6)
                      : 0;
-  payload[47] |= uplink_counters.record_drop_total > 0 ? (1u << 7) : 0;
+  payload[47] |= admission_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
-  payload[52] = 7;  // BOARD_HEALTH payload version.
+  payload[52] = 11;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
   payload[54] = static_cast<uint8_t>(safety_supervisor.state());
   payload[55] = safety_supervisor.faultBits();
@@ -1726,12 +2064,12 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[92], builtin_can_tx_failed_total);
 #endif
 #if BOARD_ENABLE_MCP2515
-  wr_u32_le(&payload[96], mcp_service.spi_error_total);
-  wr_u32_le(&payload[100], mcp_service.error_flag_total);
-  payload[104] = mcp_service.last_canintf;
-  payload[105] = mcp_service.last_eflg;
-  payload[106] = mcp_service.last_canctrl;
-  payload[107] = mcp_service.last_int_low ? 1 : 0;
+  wr_u32_le(&payload[csm::kBoardHealthMcpSpiErrorOffset], mcp_service.spi_error_total);
+  wr_u32_le(&payload[csm::kBoardHealthMcpErrorFlagOffset], mcp_service.error_flag_total);
+  payload[csm::kBoardHealthMcpLastCanintfOffset] = mcp_service.last_canintf;
+  payload[csm::kBoardHealthMcpLastEflgOffset] = mcp_service.last_eflg;
+  payload[csm::kBoardHealthMcpLastCanctrlOffset] = mcp_service.last_canctrl;
+  payload[csm::kBoardHealthMcpLastIntLowOffset] = mcp_service.last_int_low ? 1 : 0;
 #endif
   wr_u32_le(&payload[108], queued);
   wr_u32_le(&payload[112], safety_supervisor.transitionCounter());
@@ -1751,53 +2089,105 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[148], can_bus_runtime[1].drop_total);
   wr_u32_le(&payload[152], can_bus_runtime[1].queued);
   wr_u32_le(&payload[156], can_bus_runtime[1].high_water);
-  wr_u32_le(&payload[160], serial_counters.enqueue_fail_total);
-  wr_u32_le(&payload[164], serial_counters.ring_clear_total);
-  wr_u32_le(&payload[168], serial_counters.ring_cleared_bytes_total);
-  wr_u32_le(&payload[172], serial_counters.backpressure_total);
-  uint32_t uplink_high_water = serial_counters.high_water_bytes;
-  if (uplink_scheduler.queuedPayloadHighWaterBytes() > uplink_high_water) {
-    uplink_high_water = uplink_scheduler.queuedPayloadHighWaterBytes();
+  wr_u32_le(&payload[csm::kBoardHealthSerialEnqueueFailOffset], usb_counters.offer_overflow_total);
+  wr_u32_le(&payload[csm::kBoardHealthSerialRingClearOffset], 0);
+  wr_u32_le(&payload[csm::kBoardHealthSerialRingClearedBytesOffset], 0);
+  wr_u32_le(&payload[csm::kBoardHealthSerialBackpressureOffset], usb_counters.backpressure_total);
+  uint32_t uplink_high_water = usb_counters.queue_high_water_bytes;
+  if (wifi_counters.queue_high_water_bytes > uplink_high_water) {
+    uplink_high_water = wifi_counters.queue_high_water_bytes;
   }
-  wr_u32_le(&payload[176], uplink_high_water);
-  wr_u32_le(&payload[180], can_queue_high_water);
+  if (canonical_publisher.queuedPayloadHighWaterBytes() > uplink_high_water) {
+    uplink_high_water = canonical_publisher.queuedPayloadHighWaterBytes();
+  }
+  wr_u32_le(&payload[csm::kBoardHealthUplinkHighWaterOffset], uplink_high_water);
+  wr_u32_le(&payload[csm::kBoardHealthCanQueueHighWaterOffset], can_queue_high_water);
 #if BOARD_ENABLE_MCP2515
-  wr_u32_le(&payload[184], mcp_service.drain_time_budget_hit_total);
+  wr_u32_le(&payload[csm::kBoardHealthMcpDrainBudgetHitOffset],
+            mcp_service.drain_time_budget_hit_total);
 #endif
-  wr_u32_le(&payload[188], can_segment_enqueue_fail_total);
-  wr_u32_le(&payload[192], uplink_scheduler.poolLargeUsed());
-  wr_u32_le(&payload[196], BOARD_UPLINK_POOL_LARGE_BLOCKS);
-  wr_u32_le(&payload[200], uplink_scheduler.poolLargeCanReserveUsed());
-  wr_u32_le(&payload[204], uplink_counters.can_truth_queue_high_water);
-  wr_u32_le(&payload[208], uplink_counters.pool_alloc_fail_total);
-  wr_u32_le(&payload[212], uplink_counters.can_truth_pool_alloc_fail_total);
-  wr_u32_le(&payload[216], uplink_counters.descriptor_high_water_total);
-  wr_u32_le(&payload[220], uplink_counters.diagnostic_suppressed_total);
+  wr_u32_le(&payload[csm::kBoardHealthCanSegmentEnqueueFailOffset],
+            can_segment_enqueue_fail_total);
+  wr_u32_le(&payload[csm::kBoardHealthPoolLargeUsedOffset], canonical_publisher.poolLargeUsed());
+  wr_u32_le(&payload[csm::kBoardHealthPoolLargeCapacityOffset], BOARD_UPLINK_POOL_LARGE_BLOCKS);
+  wr_u32_le(&payload[csm::kBoardHealthPoolLargeCanReserveUsedOffset],
+            canonical_publisher.poolLargeCanReserveUsed());
+  wr_u32_le(&payload[csm::kBoardHealthCanTruthQueueHighWaterOffset],
+            admission_counters.can_truth_queue_high_water);
+  wr_u32_le(&payload[csm::kBoardHealthPoolAllocFailOffset],
+            admission_counters.pool_alloc_fail_total);
+  wr_u32_le(&payload[csm::kBoardHealthCanTruthPoolAllocFailOffset],
+            admission_counters.can_truth_pool_alloc_fail_total);
+  wr_u32_le(&payload[csm::kBoardHealthDescriptorHighWaterOffset],
+            admission_counters.descriptor_high_water_total);
+  wr_u32_le(&payload[csm::kBoardHealthDiagnosticSuppressedOffset],
+            admission_counters.diagnostic_suppressed_total);
   const uint32_t pool_high_bytes =
-      uplink_counters.pool_large_used_high_water * csm::kMaxPayloadLen +
-      uplink_counters.pool_medium_used_high_water * 128u +
-      uplink_counters.pool_small_used_high_water * 64u;
+      admission_counters.pool_large_used_high_water * csm::kMaxPayloadLen +
+      admission_counters.pool_medium_used_high_water * 128u +
+      admission_counters.pool_small_used_high_water * 64u;
   if (pool_high_bytes > uplink_pool_high_water_bytes) {
     uplink_pool_high_water_bytes = pool_high_bytes;
   }
-  wr_u32_le(&payload[224], firmware_profile_id());
-  wr_u32_le(&payload[228], vehicle_impact_state());
-  wr_u32_le(&payload[232], can_rx_task_max_us);
-  wr_u32_le(&payload[236], uplink_pool_high_water_bytes);
-  wr_u32_le(&payload[240], uplink_counters.descriptor_high_water_total);
-  wr_u32_le(&payload[244], usb_reconnect_count);
-  wr_u32_le(&payload[248], usb_forced_reset_count);
-  wr_u32_le(&payload[252], passive_violation_latch);
-  wr_u32_le(&payload[256], capture_invalid_reason);
-  wr_u32_le(&payload[260], host_absent_rx_discard_total[0]);
-  wr_u32_le(&payload[264], host_absent_rx_discard_total[1]);
-  wr_u32_le(&payload[268], host_absent_fifo_overflow_total);
-  wr_u32_le(&payload[272], host_absent_mcp_error_total);
-  wr_u32_le(&payload[276], host_absent_duration_ms_total);
-  wr_u32_le(&payload[280], passive_readback_total);
-  wr_u32_le(&payload[284], passive_readback_violation_total);
-  wr_u32_le(&payload[288], txreq_violation_total);
-  wr_u32_le(&payload[292], usb_cdc_dtr_change_total);
+  wr_u32_le(&payload[csm::kBoardHealthFirmwareProfileOffset], firmware_profile_id());
+  wr_u32_le(&payload[csm::kBoardHealthVehicleImpactOffset], vehicle_impact_state());
+  wr_u32_le(&payload[csm::kBoardHealthCanRxTaskMaxUsOffset], can_rx_task_max_us);
+  wr_u32_le(&payload[csm::kBoardHealthUplinkPoolHighWaterOffset], uplink_pool_high_water_bytes);
+  wr_u32_le(&payload[csm::kBoardHealthUplinkDescriptorHighWaterOffset],
+            admission_counters.descriptor_high_water_total);
+  wr_u32_le(&payload[csm::kBoardHealthUsbReconnectOffset], usb_reconnect_count);
+  wr_u32_le(&payload[csm::kBoardHealthUsbForcedResetOffset], usb_forced_reset_count);
+  wr_u32_le(&payload[csm::kBoardHealthPassiveViolationOffset], passive_violation_latch);
+  wr_u32_le(&payload[csm::kBoardHealthCaptureInvalidReasonOffset], capture_invalid_reason);
+  wr_u32_le(&payload[csm::kBoardHealthHostAbsentBus0DiscardOffset],
+            host_absent_rx_discard_total[0]);
+  wr_u32_le(&payload[csm::kBoardHealthHostAbsentBus1DiscardOffset],
+            host_absent_rx_discard_total[1]);
+  wr_u32_le(&payload[csm::kBoardHealthHostAbsentFifoOverflowOffset],
+            host_absent_fifo_overflow_total);
+  wr_u32_le(&payload[csm::kBoardHealthHostAbsentMcpErrorOffset], host_absent_mcp_error_total);
+  wr_u32_le(&payload[csm::kBoardHealthHostAbsentDurationMsOffset], host_absent_duration_ms_total);
+  wr_u32_le(&payload[csm::kBoardHealthPassiveReadbackOffset], passive_readback_total);
+  wr_u32_le(&payload[csm::kBoardHealthPassiveReadbackViolationOffset],
+            passive_readback_violation_total);
+  wr_u32_le(&payload[csm::kBoardHealthTxreqViolationOffset], txreq_violation_total);
+  wr_u32_le(&payload[csm::kBoardHealthUsbDtrChangeOffset], usb_cdc_dtr_change_total);
+  wr_u64_le(&payload[csm::kBoardHealthPublishNextOffset], canonical_publisher.nextPublishSeq());
+  wr_u64_le(&payload[csm::kBoardHealthBootSessionOffset], canonical_publisher.bootSessionId());
+  wr_u32_le(&payload[312], usb_counters.connection_epoch);
+  wr_u32_le(&payload[316], usb_counters.queue_high_water_bytes);
+  wr_u32_le(&payload[320], usb_counters.offer_overflow_total);
+  wr_u32_le(&payload[324], usb_counters.frame_sent_total);
+  wr_u32_le(&payload[328], wifi_counters.connection_epoch);
+  wr_u32_le(&payload[332], wifi_counters.queue_high_water_bytes);
+  wr_u32_le(&payload[336], wifi_counters.offer_overflow_total);
+  wr_u32_le(&payload[340], wifi_counters.frame_sent_total);
+  wr_u32_le(&payload[344], wifi_counters.connect_total);
+  wr_u32_le(&payload[348], wifi_counters.disconnect_total);
+  wr_u32_le(&payload[352], wifi_counters.stall_close_total);
+  wr_u32_le(&payload[356], publisher_counters.record_no_sink_drop_total);
+  wr_u32_le(&payload[csm::kBoardHealthWifiSocketErrorOffset],
+            wifi_counters.socket_error_total);
+  wr_u32_le(&payload[csm::kBoardHealthWifiSendBudgetOverrunOffset],
+            wifi_counters.send_budget_overrun_total);
+  wr_u32_le(&payload[csm::kBoardHealthWifiSendCallMaxUsOffset],
+            wifi_counters.send_call_max_us);
+  wr_u32_le(&payload[csm::kBoardHealthWifiRecvCallMaxUsOffset],
+            wifi_counters.recv_call_max_us);
+  wr_u32_le(&payload[csm::kBoardHealthWifiCloseCallMaxUsOffset],
+            wifi_counters.close_call_max_us);
+  wr_u32_le(&payload[csm::kBoardHealthMainLoopMaxGapUsOffset], main_loop_max_gap_us);
+  wr_u32_le(&payload[csm::kBoardHealthResetCauseBitsOffset], boot_reset_cause_bits);
+  wr_u32_le(&payload[csm::kBoardHealthResetStatusRawOffset], boot_reset_status_raw);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousBreadcrumbValidOffset],
+            previous_runtime_breadcrumb_valid ? 1u : 0u);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousBreadcrumbStageOffset],
+            static_cast<uint32_t>(previous_runtime_breadcrumb_stage) |
+                (static_cast<uint32_t>(previous_runtime_breadcrumb_detail) << 8));
+  wr_u32_le(&payload[csm::kBoardHealthPreviousBreadcrumbUptimeMsOffset],
+            previous_runtime_breadcrumb_uptime_ms);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousBreadcrumbSequenceOffset],
+            previous_runtime_breadcrumb_sequence);
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
 }
 
@@ -2736,7 +3126,8 @@ static bool __attribute__((unused)) is_allowed_host_can_id(uint32_t can_id, bool
   if (extended) {
     return false;
   }
-  return can_id == kHostCanTxAllowedPrimaryId ||
+  return (BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && (can_id == 0x100 || can_id == 0x200)) ||
+         can_id == kHostCanTxAllowedPrimaryId ||
          (can_id >= kHostCanTxAllowedRangeStart && can_id <= kHostCanTxAllowedRangeEnd);
 }
 
@@ -3260,7 +3651,18 @@ static csm::board::HostDownlinkParser host_downlink_parser(
     handle_host_downlink_frame, handle_host_downlink_crc_failure);
 
 static void service_host_downlink(int budget) {
+#if BOARD_HOST_DOWNLINK_TRANSPORT_WIFI
+  static uint32_t last_wifi_epoch = 0;
+  const uint32_t wifi_epoch = wifi_tcp_sink.counters().connection_epoch;
+  if (wifi_epoch != last_wifi_epoch) {
+    host_downlink_parser.reset();
+    last_wifi_epoch = wifi_epoch;
+  }
+  Stream* stream = wifi_tcp_sink.downlinkStream();
+  if (stream != nullptr) host_downlink_parser.service(*stream, budget);
+#else
   host_downlink_parser.service(Serial, budget);
+#endif
 }
 #else
 static void service_host_downlink(int budget) {
@@ -3440,18 +3842,40 @@ static void service_encoder() {
 }
 
 void setup() {
+  recover_runtime_breadcrumb();
+  record_runtime_breadcrumb(RuntimeStageSetup);
   uplink_boot_ms = millis();
+  capture_boot_reset_cause();
   init_safety_pins();
   init_status_led();
   init_runtime_watchdog();
   Serial.begin(115200);
 
-  csm::board::uplink::SerialTxSchedulerConfig serial_tx_config;
-  serial_tx_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
-  serial_tx_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
-  serial_tx_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
-  serial_tx_scheduler.begin(serial_tx_config);
-  uplink_scheduler.begin(&serial_tx_scheduler);
+  csm::board::uplink::UsbCdcSinkConfig usb_sink_config;
+  usb_sink_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
+  usb_sink_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
+  usb_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
+  usb_cdc_sink.begin(usb_sink_config);
+#if BOARD_ENABLE_WIFI_UPLINK
+  csm::board::uplink::WifiTcpSinkConfig wifi_sink_config;
+  wifi_sink_config.ap_ssid = BOARD_WIFI_AP_SSID;
+  wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
+  wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
+  wifi_sink_config.channel = BOARD_WIFI_AP_CHANNEL;
+  wifi_sink_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
+  wifi_sink_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
+  wifi_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
+  wifi_tcp_sink.begin(wifi_sink_config);
+#endif
+  const uint64_t boot_session_id =
+      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 33) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 2) ^
+      static_cast<uint64_t>(static_cast<uint32_t>(random(4)));
+#if BOARD_ENABLE_WIFI_UPLINK
+  canonical_publisher.begin(boot_session_id, &usb_cdc_sink, &wifi_tcp_sink);
+#else
+  canonical_publisher.begin(boot_session_id, &usb_cdc_sink);
+#endif
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
 
   safety_supervisor.begin(millis());
@@ -3503,20 +3927,29 @@ void setup() {
   last_health_ms = millis();
   last_encoder_derived_ms = millis();
   last_watchdog_toggle_ms = millis();
+  record_runtime_breadcrumb(RuntimeStageIdle);
 }
 
 void loop() {
+  const uint32_t loop_entry_us = micros();
+  if (main_loop_last_entry_us != 0) {
+    const uint32_t loop_gap_us = loop_entry_us - main_loop_last_entry_us;
+    if (loop_gap_us > main_loop_max_gap_us) main_loop_max_gap_us = loop_gap_us;
+  }
+  main_loop_last_entry_us = loop_entry_us;
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
+  poll_uplink_connections(millis());
   service_uplink_session_state();
+  service_recovered_runtime_breadcrumb();
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
     update_safety_state();
     toggle_safety_watchdog_if_needed();
     service_status_led();
     service_capability_advertisement();
-    service_serial_tx(1024);
+    service_uplink(1024);
     kick_runtime_watchdog();
     return;
   }
@@ -3544,18 +3977,24 @@ void loop() {
   }
 #endif
   if (!kTestMode && can_backend_ok) {
+    record_runtime_breadcrumb(RuntimeStageMcpEntryDrain);
     pump_can_rx_to_queue(BOARD_MCP2515_LOOP_ENTRY_DRAIN_BUDGET);
+    record_runtime_breadcrumb(RuntimeStageIdle);
   }
-  service_serial_tx(1024);
+  service_uplink(1024);
   service_deferred_loss_events();
+  record_runtime_breadcrumb(RuntimeStageHostDownlink);
   service_host_downlink(256);
+  record_runtime_breadcrumb(RuntimeStageIdle);
   update_safety_state();
   toggle_safety_watchdog_if_needed();
 
   if (kTestMode) {
     test_push_fake_can_if_needed();
   } else if (can_backend_ok) {
+    record_runtime_breadcrumb(RuntimeStageMcpMainDrain, 1);
     pump_can_rx_to_queue(512);
+    record_runtime_breadcrumb(RuntimeStageIdle);
   } else if (!BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION &&
              BOARD_ENABLE_MCP2515_INIT &&
              (millis() - last_can_init_retry_ms >= can_init_retry_delay_ms)) {
@@ -3574,35 +4013,50 @@ void loop() {
     }
   }
 
+  record_runtime_breadcrumb(RuntimeStageBuiltinCanDrain);
   service_builtin_can_rx_to_queue(128);
+  record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   service_builtin_can_tx_test();
 #endif
 #if BOARD_ENABLE_MCP2515
+  record_runtime_breadcrumb(RuntimeStageMcpMainDrain, 2);
   service_mcp2515_tx_audit();
+  record_runtime_breadcrumb(RuntimeStageIdle);
 #endif
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_MCP2515_TX_TEST
   service_mcp2515_tx_test();
 #endif
+  record_runtime_breadcrumb(RuntimeStageStatusAndSensors);
   service_status_led();
   service_capability_advertisement();
   service_encoder();
+  record_runtime_breadcrumb(RuntimeStageIdle);
+  record_runtime_breadcrumb(RuntimeStageCanRecordDrain);
   drain_can_records(BOARD_CAN_SERIAL_DRAIN_BUDGET);
+  record_runtime_breadcrumb(RuntimeStageIdle);
   if (!kTestMode && can_backend_ok) {
+    record_runtime_breadcrumb(RuntimeStageMcpMainDrain, 3);
     pump_can_rx_to_queue(512);
+    record_runtime_breadcrumb(RuntimeStageIdle);
   }
+  record_runtime_breadcrumb(RuntimeStageStatusAndSensors, 1);
   service_voltage_adc_lane();
+  record_runtime_breadcrumb(RuntimeStageIdle);
 
   const uint32_t now_ms = millis();
   if (!uplink_host_session_open()) {
     last_health_ms = now_ms;
   } else if (now_ms - last_health_ms >= 1000) {
+    record_runtime_breadcrumb(RuntimeStageHealthPublish);
     const EncoderSnapshot snap = poll_encoder();
     emit_board_health(snap);
     last_health_ms = now_ms;
+    record_runtime_breadcrumb(RuntimeStageIdle);
   }
-  service_serial_tx(1024);
+  service_uplink(1024);
   service_deferred_loss_events();
   service_usb_cdc_reconnect_watchdog();
   kick_runtime_watchdog();
+  record_runtime_breadcrumb(RuntimeStageIdle);
 }

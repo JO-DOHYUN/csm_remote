@@ -1,8 +1,11 @@
 #pragma once
 
-#include <Arduino.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#if !defined(CSM_TYPED_FRAME_NATIVE)
+#include <Arduino.h>
+#endif
 
 namespace csm {
 
@@ -28,6 +31,7 @@ enum class RecordType : uint8_t {
   HostQueryCapability = 14,
   HostClearFaultLockout = 15,
   CanRxSegment = 16,
+  StreamSession = 17,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);
@@ -50,7 +54,9 @@ bool encode_typed_frame(uint8_t* frame, size_t capacity, RecordType type,
                         const uint8_t* payload, uint16_t len, uint16_t seq,
                         uint8_t flags, size_t* written);
 
+#if !defined(CSM_TYPED_FRAME_NATIVE)
 bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
                        uint16_t len, uint16_t& seq, uint8_t flags = 0);
+#endif
 
 }  // namespace csm

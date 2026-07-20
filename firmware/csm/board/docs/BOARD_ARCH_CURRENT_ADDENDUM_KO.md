@@ -17,7 +17,6 @@ This addendum is the current CSM architecture correction for stale older notes i
 
 ## Stale Note Handling
 If `BOARD_ARCH_KO.md` says current code is still 20-byte only or lacks the basic
-host control path, treat that statement as historical context. Use this addendum,
-`board/BRIEF.md`, and `shared/docs/TRANSPORT_AND_RECORDS_KO.md` for current
-implementation decisions.
-
+host control path, treat that statement as historical context. Use the workspace
+`BRIEF.md`, root architecture documents, and
+`shared/docs/TRANSPORT_AND_RECORDS_KO.md` for current implementation decisions.

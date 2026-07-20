@@ -1,0 +1,170 @@
+#include "board/uplink/UsbCdcSink.h"
+
+#include <Arduino.h>
+
+#if defined(SERIAL_CDC)
+#include "USB/PluggableUSBSerial.h"
+#endif
+
+#ifndef BOARD_SERIAL_TX_CHUNK_BYTES
+#define BOARD_SERIAL_TX_CHUNK_BYTES 512
+#endif
+
+namespace csm::board::uplink {
+
+void UsbCdcSink::begin(const UsbCdcSinkConfig& config) {
+  config_ = config;
+  counters_ = {};
+  blocked_since_ms_ = 0;
+  connected_last_ = connected();
+  if (connected_last_) {
+    counters_.connection_epoch = 1;
+    counters_.connect_total = 1;
+  }
+}
+
+bool UsbCdcSink::enabled() const {
+#if defined(SERIAL_CDC)
+  return true;
+#else
+  return false;
+#endif
+}
+
+bool UsbCdcSink::connected() const {
+#if defined(SERIAL_CDC)
+  return _SerialUSB.connected();
+#else
+  return false;
+#endif
+}
+
+SinkOfferResult UsbCdcSink::offer(const PublishedFrameView& frame) {
+  if (!enabled()) return SinkOfferResult::Disabled;
+  if (!connected()) {
+    counters_.offer_disconnected_total++;
+    return SinkOfferResult::Disconnected;
+  }
+  if (!queue_.push(frame)) {
+    counters_.offer_overflow_total++;
+    return SinkOfferResult::Overflow;
+  }
+  counters_.offer_accept_total++;
+  if (!counters_.first_accepted_valid) {
+    counters_.first_accepted_valid = true;
+    counters_.first_accepted_publish_seq = frame.publish_seq;
+  }
+  counters_.last_accepted_publish_seq = frame.publish_seq;
+  counters_.queue_high_water_bytes = queue_.highWaterBytes();
+  counters_.queue_high_water_records = queue_.highWaterRecords();
+  return SinkOfferResult::Accepted;
+}
+
+SinkServiceResult UsbCdcSink::service(uint32_t byte_budget, uint32_t now_ms,
+                                      uint32_t now_us) {
+  SinkServiceResult result;
+  result.epoch_changed = updateConnectionState();
+#if defined(SERIAL_CDC)
+  if (!connected() || byte_budget == 0) return result;
+  const uint32_t start_us = now_us;
+  const uint32_t configured_bytes =
+      config_.max_bytes_per_pump == 0 ? byte_budget : config_.max_bytes_per_pump;
+  const uint32_t pump_budget = byte_budget < configured_bytes ? byte_budget : configured_bytes;
+  const uint32_t max_writes =
+      config_.max_writes_per_pump == 0 ? 0xFFFFFFFFu : config_.max_writes_per_pump;
+  uint32_t writes = 0;
+
+  while (!queue_.empty() && result.actual_bytes < pump_budget && writes < max_writes) {
+    if (config_.drain_time_budget_us > 0 &&
+        static_cast<uint32_t>(micros() - start_us) >= config_.drain_time_budget_us) break;
+    auto* entry = queue_.front();
+    if (entry == nullptr) break;
+    uint32_t requested = static_cast<uint32_t>(entry->length - entry->offset);
+    const uint32_t budget_left = pump_budget - result.actual_bytes;
+    if (requested > budget_left) requested = budget_left;
+    if (requested > BOARD_SERIAL_TX_CHUNK_BYTES) requested = BOARD_SERIAL_TX_CHUNK_BYTES;
+    if (requested == 0) break;
+
+    uint32_t actual = 0;
+    _SerialUSB.send_nb(&entry->bytes[entry->offset], requested, &actual, true);
+    if (actual > requested) actual = requested;
+    writes++;
+    counters_.write_attempt_total++;
+    if (actual == 0) {
+      counters_.zero_write_total++;
+      noteBackpressure(now_ms, result);
+      break;
+    }
+    const bool frame_complete = actual == static_cast<uint32_t>(entry->length - entry->offset);
+    const uint64_t completed_seq = entry->publish_seq;
+    queue_.consume(static_cast<uint16_t>(actual));
+    result.actual_bytes += actual;
+    counters_.bytes_sent_total += actual;
+    if (actual < requested) {
+      counters_.partial_write_total++;
+      noteBackpressure(now_ms, result);
+      break;
+    }
+    if (frame_complete) {
+      counters_.frame_sent_total++;
+      counters_.last_sent_publish_seq = completed_seq;
+      result.frames_completed++;
+    }
+    if (blocked_since_ms_ != 0) {
+      const uint32_t duration = now_ms - blocked_since_ms_;
+      if (duration > counters_.backpressure_max_duration_ms)
+        counters_.backpressure_max_duration_ms = duration;
+      blocked_since_ms_ = 0;
+      result.backpressure_event = true;
+      result.backpressure_duration_ms = duration;
+    }
+  }
+  if (blocked_since_ms_ != 0 && config_.stall_timeout_ms > 0 &&
+      now_ms - blocked_since_ms_ >= config_.stall_timeout_ms) {
+    abortQueuedFrames();
+    counters_.connection_epoch++;
+    blocked_since_ms_ = 0;
+    result.epoch_changed = true;
+  }
+#else
+  (void)byte_budget;
+  (void)now_ms;
+  (void)now_us;
+#endif
+  return result;
+}
+
+void UsbCdcSink::abortQueuedFrames() {
+  const uint32_t bytes = queue_.clear();
+  if (bytes > 0) {
+    counters_.queue_abort_total++;
+    counters_.queue_aborted_bytes_total += bytes;
+  }
+}
+
+bool UsbCdcSink::updateConnectionState() {
+  const bool now_connected = connected();
+  if (now_connected == connected_last_) return false;
+  connected_last_ = now_connected;
+  blocked_since_ms_ = 0;
+  abortQueuedFrames();
+  counters_.connection_epoch++;
+  if (now_connected) counters_.connect_total++;
+  else counters_.disconnect_total++;
+  return true;
+}
+
+void UsbCdcSink::noteBackpressure(uint32_t now_ms, SinkServiceResult& result) {
+  if (blocked_since_ms_ == 0) {
+    blocked_since_ms_ = now_ms == 0 ? 1 : now_ms;
+    counters_.backpressure_total++;
+    result.backpressure_event = true;
+  } else {
+    const uint32_t duration = now_ms - blocked_since_ms_;
+    if (duration > counters_.backpressure_max_duration_ms)
+      counters_.backpressure_max_duration_ms = duration;
+    result.backpressure_duration_ms = duration;
+  }
+}
+
+}  // namespace csm::board::uplink

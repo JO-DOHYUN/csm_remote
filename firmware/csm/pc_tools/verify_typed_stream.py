@@ -74,6 +74,21 @@ EVENT_NAMES = {
     24: "SERIAL_TX_BACKPRESSURE_RECOVERY",
     25: "SERIAL_TX_RING_CLEAR",
     26: "CAN_RX_SEGMENT_ENQUEUE_FAILED",
+    27: "USB_CDC_SESSION_OPEN",
+    28: "USB_CDC_SESSION_CLOSE",
+    29: "USB_CDC_DTR_CHANGE",
+    30: "USB_HOST_ABSENT_CAN_DISCARD_SUMMARY",
+    31: "MCP_PASSIVE_MODE_READBACK",
+    32: "MCP_PASSIVE_MODE_VIOLATION",
+    33: "MCP_TXREQ_VIOLATION",
+    34: "TRANSCEIVER_SAFE_STATE_CHANGED",
+    35: "USB_POWER_OR_RESET_SUSPECTED",
+    36: "CAN_FRONTEND_PRESESSION_HOLD",
+    37: "CAN_FRONTEND_SESSION_READY",
+    38: "CAN_FRONTEND_SESSION_INIT_FAILED",
+    39: "CAN_FRONTEND_FAULT_HOLD",
+    40: "WIFI_TX_BACKPRESSURE",
+    41: "RUNTIME_BREADCRUMB_RECOVERED",
 }
 
 
@@ -311,6 +326,11 @@ def describe(frame):
             detail = u16(payload, 10)
             counter = u32(payload, 12)
             stage = (detail >> 8) & 0xFF
+            if stage == 0:
+                return (
+                    f"[{name}] seq={seq} mono_us={u64(payload, 0)} code={code} "
+                    f"name={event_name} operation={counter} mcp_error={detail}"
+                )
             canintf = detail & 0xFF
             eflg = (counter >> 24) & 0xFF
             canctrl = (counter >> 16) & 0xFF
@@ -327,7 +347,7 @@ def describe(frame):
 
     if rtype == 8 and len(payload) >= 52:
         extra = ""
-        if len(payload) >= 128 and payload[52] in (2, 4, 5, 6):
+        if len(payload) >= 128 and payload[52] >= 2:
             extra = (
                 f" health_v={payload[52]} safety_v2={payload[54]} fault_bits=0x{payload[55]:02X}"
                 f" heartbeat_age_ms={u32(payload, 56)} lease_ms={u32(payload, 60)}"
@@ -336,6 +356,8 @@ def describe(frame):
                 f" mcp_tx={u32(payload, 80)} mcp_fail={u32(payload, 84)}"
                 f" builtin_tx={u32(payload, 88)} builtin_fail={u32(payload, 92)}"
                 f" mcp_spi_err={u32(payload, 96)} mcp_err_flags={u32(payload, 100)}"
+                f" mcp_canintf=0x{payload[104]:02X} mcp_eflg=0x{payload[105]:02X}"
+                f" mcp_canctrl=0x{payload[106]:02X} mcp_int_low={payload[107]}"
                 f" heartbeat_total={u32(payload, 120)} session_total={u32(payload, 124)}"
             )
         if len(payload) >= 192 and payload[52] >= 4:
@@ -375,6 +397,35 @@ def describe(frame):
                 f" usb_forced_reset={u32(payload, 248)}"
                 f" passive_violation=0x{u32(payload, 252):08X}"
                 f" capture_invalid_reason=0x{u32(payload, 256):08X}"
+            )
+        if len(payload) >= 296 and payload[52] >= 7:
+            extra += (
+                f" host_absent_bus0_discard={u32(payload, 260)}"
+                f" host_absent_bus1_discard={u32(payload, 264)}"
+                f" host_absent_fifo_overflow={u32(payload, 268)}"
+                f" host_absent_mcp_error={u32(payload, 272)}"
+                f" host_absent_duration_ms={u32(payload, 276)}"
+                f" passive_readback={u32(payload, 280)}"
+                f" passive_readback_violation={u32(payload, 284)}"
+                f" txreq_violation={u32(payload, 288)}"
+                f" usb_dtr_change={u32(payload, 292)}"
+            )
+        if len(payload) >= 360 and payload[52] >= 8:
+            extra += (
+                f" publish_next={u64(payload, 296)}"
+                f" boot_session=0x{u64(payload, 304):016X}"
+                f" usb_epoch={u32(payload, 312)}"
+                f" usb_high={u32(payload, 316)}"
+                f" usb_overflow={u32(payload, 320)}"
+                f" usb_sent={u32(payload, 324)}"
+                f" wifi_epoch={u32(payload, 328)}"
+                f" wifi_high={u32(payload, 332)}"
+                f" wifi_overflow={u32(payload, 336)}"
+                f" wifi_sent={u32(payload, 340)}"
+                f" wifi_connect={u32(payload, 344)}"
+                f" wifi_disconnect={u32(payload, 348)}"
+                f" wifi_stall_close={u32(payload, 352)}"
+                f" no_sink_drop={u32(payload, 356)}"
             )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
@@ -516,6 +567,12 @@ class GapTracker:
                 "segment_enqueue_fail": u32(payload, 188),
                 "can_rx_dropped_total": u32(payload, 12),
                 "can_fifo_overflow_total": u32(payload, 16),
+                "mcp_spi_error": u32(payload, 96),
+                "mcp_error_flag": u32(payload, 100),
+                "mcp_last_canintf": payload[104],
+                "mcp_last_eflg": payload[105],
+                "mcp_last_canctrl": payload[106],
+                "mcp_last_int_low": payload[107],
             }
             if len(payload) >= 224 and payload[52] >= 5:
                 self.last_health.update({
@@ -538,6 +595,34 @@ class GapTracker:
                     "passive_violation": u32(payload, 252),
                     "capture_invalid_reason": u32(payload, 256),
                 })
+            if len(payload) >= 296 and payload[52] >= 7:
+                self.last_health.update({
+                    "host_absent_bus0_discard": u32(payload, 260),
+                    "host_absent_bus1_discard": u32(payload, 264),
+                    "host_absent_fifo_overflow": u32(payload, 268),
+                    "host_absent_mcp_error": u32(payload, 272),
+                    "host_absent_duration_ms": u32(payload, 276),
+                    "passive_readback": u32(payload, 280),
+                    "passive_readback_violation": u32(payload, 284),
+                    "txreq_violation": u32(payload, 288),
+                    "usb_dtr_change": u32(payload, 292),
+                })
+            if len(payload) >= 360 and payload[52] >= 8:
+                self.last_health.update({
+                    "publish_next": u64(payload, 296),
+                    "usb_epoch": u32(payload, 312),
+                    "usb_high": u32(payload, 316),
+                    "usb_overflow": u32(payload, 320),
+                    "usb_sent": u32(payload, 324),
+                    "wifi_epoch": u32(payload, 328),
+                    "wifi_high": u32(payload, 332),
+                    "wifi_overflow": u32(payload, 336),
+                    "wifi_sent": u32(payload, 340),
+                    "wifi_connect": u32(payload, 344),
+                    "wifi_disconnect": u32(payload, 348),
+                    "wifi_stall_close": u32(payload, 352),
+                    "no_sink_drop": u32(payload, 356),
+                })
 
     def summary(self) -> str:
         parts = [
@@ -556,6 +641,12 @@ class GapTracker:
             "can_fifo_overflow_total",
             "can_q_high",
             "mcp_drain_budget_hit",
+            "mcp_spi_error",
+            "mcp_error_flag",
+            "mcp_last_canintf",
+            "mcp_last_eflg",
+            "mcp_last_canctrl",
+            "mcp_last_int_low",
             "fw_profile",
             "vehicle_impact",
             "passive_violation",
@@ -566,6 +657,28 @@ class GapTracker:
             "descriptor_high",
             "usb_reconnect",
             "usb_forced_reset",
+            "capture_invalid_reason",
+            "host_absent_bus0_discard",
+            "host_absent_bus1_discard",
+            "host_absent_fifo_overflow",
+            "host_absent_mcp_error",
+            "host_absent_duration_ms",
+            "passive_readback",
+            "passive_readback_violation",
+            "txreq_violation",
+            "usb_dtr_change",
+            "usb_epoch",
+            "usb_high",
+            "usb_overflow",
+            "usb_sent",
+            "wifi_epoch",
+            "wifi_high",
+            "wifi_overflow",
+            "wifi_sent",
+            "wifi_connect",
+            "wifi_disconnect",
+            "wifi_stall_close",
+            "no_sink_drop",
         ):
             if key in self.last_health:
                 parts.append(f"{key}={self.last_health[key]}")

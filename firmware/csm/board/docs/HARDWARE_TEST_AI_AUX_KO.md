@@ -16,7 +16,7 @@
 ## 적용 범위
 - 적용: 배선, 전원, 전압 레벨, 핀맵, 포트 인식, 펌웨어 업로드, 실측 로그, CAN/encoder/IO bring-up.
 - 비적용: 일반 코드 리팩터링, 문서 정리, Qt 구현, shared record 계약 설계.
-- 충돌 시 우선순위는 기존 `board/AGENTS.md`, `board/BRIEF.md`, `shared/docs/*`, 현재 소스 코드가 먼저다. 이 문서는 하드웨어 시험 중 판단 보조용이다.
+- 충돌 시 `AGENTS.md`, 루트 제품·architecture 문서, `shared/docs/TRANSPORT_AND_RECORDS_KO.md`, 현재 소스 코드가 우선한다. 이 문서는 하드웨어 시험 중 판단 보조용이다.
 
 ## 시험 전 필수 구분
 하드웨어 시험 답변이나 다음 조치를 내기 전에 아래 네 가지를 먼저 구분한다.

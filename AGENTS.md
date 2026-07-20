@@ -1,67 +1,62 @@
-# AGENTS.md - CSM Remote Workspace Router
+# AGENTS.md
 
-## Scope
-This is the top-level agent instruction file for `C:\WORKS\VS\csm_remote`.
-It is the first routing authority for the CSM Remote product workspace.
+이 저장소는 무선 리모컨, Windows VSM USB CDC 관측, VSM Android Wi-Fi 관측을 동시에 제공하는 CSM 펌웨어의 정식 작업 공간이다. 실제 펌웨어는 `firmware/csm`에 있으며, VSM 앱 코드는 각 저장소에서 관리한다.
 
-Nested `AGENTS.md` files add local rules only. They must not override the remote
-product definition, M4/M7 responsibility split, authority policy, or evidence
-contract defined from this workspace root.
+## 진입 순서
 
-## Mandatory Entry Path
-For every task in this workspace:
+1. `BRIEF.md`
+2. 요청과 정확히 일치하는 권위 문서 하나
+3. 범위가 불명확하거나 두 계약을 함께 바꿀 때만 `INDEX.md`
 
-1. Read `README.md` for the current baseline and document priority.
-2. Read `docs/remote/AGENTS.md` for task-specific document routing.
-3. Load only the task-matched documents listed there.
-4. If the task enters `firmware/csm/**`, also read `firmware/csm/AGENTS.md`.
+모든 Markdown과 하위 폴더를 일괄 읽지 않는다. 이 파일 외에 별도 `AGENTS.md` 계층을 만들지 않는다.
 
-Do not bulk-load every Markdown file. The automatic path is this file first,
-then the scoped router for the touched path.
+## 권위와 원본
 
-## Product Authority
-The controlling product definition is:
+- 제품 정체성: `docs/product/PRODUCT_DEFINITION_KO.md`
+- 실사용 시나리오: `docs/product/OPERATING_SCENARIOS_KO.md`
+- 펌웨어 경계: `docs/architecture/FIRMWARE_ARCHITECTURE_KO.md`
+- uplink/fanout: `docs/architecture/UPLINK_TRANSPORT_ARCHITECTURE_KO.md`
+- typed wire: `firmware/csm/shared/docs/TRANSPORT_AND_RECORDS_KO.md`
+- 검증 등급: `docs/quality/VERIFICATION_POLICY_KO.md`
+- 현재 상태: `BRIEF.md`
+- 결정과 폐기 근거: `history/decisions/DECISION_LEDGER_KO.md`
 
-```text
-docs/remote/product/PRODUCT_DEFINITION_KO.md
-```
+하드웨어 문서는 실측·배선·bring-up 근거이며 제품 또는 wire 계약을 재정의하지 않는다.
 
-The English definition is a companion only. Original handoff and imported CSM
-documents are background unless the current scoped router explicitly promotes
-them for a task.
+## 절대 규칙
 
-## Non-Negotiable Invariants
-- No confirmed autonomy release means zero local vehicle CAN TX.
-- M4 is the RC receiver/parser frontend only.
-- M7 owns authority, safety, command limiting, vehicle mapping, and CAN TX gate.
-- VSM is observer-only by default.
-- `CONTROL_ACK` or an accepted command is not proof of physical CAN TX.
-- Actual CAN TX success requires explicit TX evidence such as `CAN_TX_RAW`.
-- Product/default builds must remain deny-first until hardware and evidence
-  decisions are explicitly closed.
+- 우선순위는 hard safety, upstream autonomy, RC remote, service host, monitoring 순이다.
+- M4는 RC 수신·파싱·정규화만 담당하고 M7만 권한·안전·차량 매핑·CAN TX를 소유한다.
+- Production VSM은 observer-only다. host 제어는 명시적인 Service/HIL profile에서만 허용한다.
+- RC/권한/CAN 수신 hot path는 USB·Wi-Fi telemetry보다 항상 우선한다.
+- typed record는 canonical publisher에서 한 번 순서화·직렬화한 뒤 USB와 Wi-Fi의 독립 bounded sink로 fanout한다.
+- 느리거나 끊긴 sink는 RC, CAN, publisher, 다른 sink를 막거나 공유 버퍼를 무기한 점유할 수 없다.
+- sink별 queue, drop, high-water, epoch, close reason을 숨기지 않는다.
+- `CONTROL_ACK`는 요청 판정 증거다. matching `CAN_TX_RAW` 없이는 실제 CAN 송신 성공으로 표시하지 않는다.
+- heap 기반 hot-path 할당, 무제한 backlog, 조용한 손실, 암묵적 재전송을 금지한다.
 
-## Path Routing
-- `docs/remote/**`: use `docs/remote/AGENTS.md`.
-- `firmware/csm/**`: use `firmware/csm/AGENTS.md`; remote product authority still
-  comes from this root and `docs/remote/**`.
-- `firmware/csm/src/board/remote/**`: RC frontend/parser/mailbox code. Keep it
-  independent from CAN IDs and vehicle mapping.
-- `firmware/csm/src/board/authority/**`: M7 authority and autonomy arbitration.
-- `firmware/csm/src/board/control/**`: operator command, limiter, mapper, and CAN
-  TX gate. Do not bypass `CanTxGateway`.
+## 구현 규칙
 
-## CSM Imported Documentation
-The imported CSM firmware carries older CSM/VSM/passive-product documents. Keep
-them as scoped firmware references. They are not allowed to redefine the CSM
-Remote product unless `docs/remote/product/PRODUCT_DEFINITION_KO.md` is updated
-in the same change.
+- 코드 전에 최종 owner, 입력·출력 type, queue 한계, 실패 동작, 검증 gate를 확정한다.
+- `main.cpp`는 생성·wiring·상위 loop 조정만 소유한다. 임시 기능을 몰아넣지 않는다.
+- production 경로에 나중에 분리할 구조를 넣지 않는다.
+- 설계 변경 시 구형 code path, flag, test, 문서, build env를 검색해 삭제하거나 공존 근거를 decision ledger에 남긴다.
+- wire 변경은 canonical wire 문서와 소비자 호환 fixture를 같은 변경에서 다룬다.
+- build, upload, bench, HIL, 차량 성공은 실제 수행한 범위만 주장한다.
 
-Do not delete imported CSM documents just because they are not always read. They
-preserve baseline, hardware, passive product, and wire-contract evidence.
+## 작업 라우팅
 
-## Verification Policy
-- Docs/harness-only changes: run `git diff --check` and targeted `rg` searches.
-- Remote Phase 1 skeleton guard: run `python firmware/csm/tools/remote_phase1_guard.py`.
-- Firmware changes: build the affected PlatformIO env from `firmware/csm`.
-- Upload is never implicit verification. Upload only when explicitly requested
-  and when the hardware context is safe.
+- 제품 방향·사용 시나리오: product 및 decision ledger
+- M4/M7, authority, CAN TX: firmware architecture
+- USB/Wi-Fi, publisher, queue, backpressure: uplink architecture
+- record ID·payload·CRC: canonical typed wire
+- 빌드·PC 설정: development setup
+- 부하·동시 운용·release: verification policy
+
+## 결과 보고
+
+- 변경·삭제 파일
+- 데이터 흐름과 경계 변화
+- 실행한 guard/build/test
+- 실제 보드·RC·USB·Wi-Fi·HIL 확인 여부
+- 남은 field risk와 다음 gate

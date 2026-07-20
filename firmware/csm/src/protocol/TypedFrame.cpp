@@ -54,6 +54,9 @@ uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
 }
 
 uint64_t mono64_us() {
+#if defined(CSM_TYPED_FRAME_NATIVE)
+  return 0;
+#else
   static uint32_t last = 0;
   static uint64_t high = 0;
 
@@ -63,6 +66,7 @@ uint64_t mono64_us() {
   }
   last = now;
   return high | now;
+#endif
 }
 
 bool encode_typed_frame(uint8_t* frame, size_t capacity, RecordType type,
@@ -101,6 +105,7 @@ bool encode_typed_frame(uint8_t* frame, size_t capacity, RecordType type,
   return true;
 }
 
+#if !defined(CSM_TYPED_FRAME_NATIVE)
 bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
                        uint16_t len, uint16_t& seq, uint8_t flags) {
   if (len > kMaxPayloadLen) {
@@ -117,5 +122,6 @@ bool emit_typed_record(Stream& serial, RecordType type, const uint8_t* payload,
   serial.write(frame, pos);
   return true;
 }
+#endif
 
 }  // namespace csm

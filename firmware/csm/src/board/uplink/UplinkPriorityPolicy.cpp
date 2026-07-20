@@ -11,9 +11,9 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
     case csm::RecordType::ControlAck:
       return UplinkPriority::Critical;
     case csm::RecordType::Capability:
-      return UplinkPriority::Critical;
+    case csm::RecordType::StreamSession:
     case csm::RecordType::BoardHealth:
-      return UplinkPriority::Normal;
+      return UplinkPriority::Critical;
     case csm::RecordType::BoardEvent:
       return UplinkPriority::Normal;
     default:

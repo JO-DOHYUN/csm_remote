@@ -1,12 +1,18 @@
 param(
-  [string]$ExpectedEnv = "portenta_h7_m7_mid_mcp2515_j4_dual_csm"
+  [string]$ExpectedEnv = "portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $root
 
-$required = @("platformio.ini", "src\main.cpp", "board\AGENTS.md", "shared\docs\TRANSPORT_AND_RECORDS_KO.md")
+$required = @(
+  "platformio.ini",
+  "src\main.cpp",
+  "shared\docs\TRANSPORT_AND_RECORDS_KO.md",
+  "..\..\AGENTS.md",
+  "..\..\BRIEF.md"
+)
 foreach ($path in $required) {
   if (!(Test-Path -LiteralPath $path)) {
     throw "Missing required CSM file: $path"

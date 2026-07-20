@@ -14,6 +14,17 @@ Transport frame:
 - CRC range: from `version` through final payload byte, excluding SOF and trailer
 - receiver recovery: scan SOF, validate length, validate CRC, then dispatch
 
+2026-07-15 canonical publisher rule:
+- The v1 frame layout is preserved for Windows VSM compatibility.
+- `seq u16` is assigned by `CanonicalPublisher` before USB/Wi-Fi fanout and is
+  the low 16 bits of `publish_seq64`.
+- Both sinks receive byte-identical encoded frames from the same publication.
+- `STREAM_SESSION` anchors `boot_session_id` and the full `publish_seq64` at
+  boot, sink epoch changes, and every low-16 sequence wrap.
+- A receiver must not infer board reboot from `seq u16` alone.
+- Sink queue loss remains sink-local. Source admission loss, canonical publish,
+  and sink delivery counters are separate evidence.
+
 Record types:
 - `1 CAN_RX_RAW`
 - `2 CAN_TX_RAW`
@@ -31,9 +42,25 @@ Record types:
 - `14 HOST_QUERY_CAPABILITY` host-to-board downlink only
 - `15 HOST_CLEAR_FAULT_LOCKOUT` host-to-board downlink only
 - `16 CAN_RX_SEGMENT`
+- `17 STREAM_SESSION`
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
+
+`STREAM_SESSION` payload, 32 bytes:
+- `0 schema_version u8`, currently `1`
+- `1 reason u8`: `1 boot`, `2 sink epoch changed`, `3 sequence wrap`,
+  `4 periodic`
+- `2..3 flags u16`, bit0 means the boot identity used hardware TRNG
+- `4 transport_version u8`, currently `1`
+- `5..7 reserved`
+- `8..15 boot_session_id u64`
+- `16..23 publish_seq64 u64`: full identity of this `STREAM_SESSION` frame
+- `24..31 mono_us u64`
+
+`STREAM_SESSION` is critical evidence. On reconnect, a host waits for a valid
+session anchor before claiming full publication continuity. The board does not
+replay the disconnected interval.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
 - `0..7 mono_us u64`
@@ -74,15 +101,17 @@ Sequence meanings are intentionally separate:
   CAN frame before segment packing.
 - `segment_seq64`: `CAN_RX_SEGMENT` creation sequence. It increases once per
   emitted segment attempt.
-- typed transport `seq`: typed record frame sequence. It increases once per
-  encoded typed frame.
+- canonical `publish_seq64`: sink-independent typed publication sequence. It
+  increases only when at least one sink accepts the byte-identical encoded frame.
+- typed transport `seq`: low 16 bits of `publish_seq64`.
 
 Gap interpretation:
 - `capture_seq64` gap means loss around CAN receive queueing or segment
   construction.
 - `segment_seq64` gap means `CAN_RX_SEGMENT` record-level loss.
-- typed transport `seq` gap means typed stream transport/parser loss after a
-  typed frame was encoded.
+- typed transport `seq` gap means the observing sink or host missed a canonical
+  publication. Use the nearest `STREAM_SESSION`, source counters, and sink
+  counters to locate the loss.
 
 Current board baseline:
 - MCP2515 receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
@@ -172,6 +201,21 @@ Current board host TX policy:
   MCP2515/TJA1050 and `bus=1` Mid Carrier J4/U2.
 - Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
 - Extended and RTR frames are rejected in this baseline.
+- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` additionally allows
+  standard IDs `0x100` and `0x200`, DLC 1, for the temporary Android joystick
+  bench only. This exception is not part of the observer or production allowlist.
+- The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
+  client. USB CDC remains an independent observation sink and is not a second
+  host-control source in that profile.
+- The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
+  socket is nonblocking; TX, downlink RX, and close are serviced only from the
+  bounded main-loop pump. Product firmware must not wrap the accepted socket in
+  Arduino `WiFiClient`, start its internal RX thread, or add an independent Wi-Fi
+  writer thread because either path can starve or join-block the CAN/main loop.
+- A single active TCP client is allowed. Extra clients are accepted and closed
+  without entering the canonical sink. Disconnect or stall handling clears only
+  that sink's queued copies and advances its connection epoch; it never clears
+  source truth or another sink.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 
@@ -276,6 +320,23 @@ Current `BOARD_EVENT` codes used by the reference firmware:
 - `39` CAN front-end fault hold. A passive readback, TXREQ, SPI all-ones, or
   deferred-init fault forced the product back to no-ACK hold. This is
   product-blocking evidence until inspected.
+- `40` Wi-Fi TX backpressure close. `detail` is the continuous no-progress
+  duration in milliseconds saturated at `0xFFFF`; `counter` is
+  `wifi_stall_close_total`. The event is published after the blocked Wi-Fi
+  client is closed, so USB can retain the exact close context and a later
+  Wi-Fi epoch observes the updated health counter.
+- `41` retained runtime breadcrumb recovered. The firmware writes two
+  checksum-protected slots in the Portenta `.keep.uninitialized` region before
+  and after external driver calls. On the next boot, a valid slot from the same
+  firmware build is published once a sink connects. `detail low byte` is the
+  in-progress stage, `detail high byte` is the stage substep, and `counter` is
+  the previous boot uptime in milliseconds. Stages are `0 idle`, `1 USB
+  connection poll`, `2 Wi-Fi connection poll`, `3 canonical publish`, `4 USB
+  transmit`, `5 Wi-Fi transmit`, `6 host downlink`, `7 MCP entry drain`, `8 MCP
+  interleave drain`, `9 MCP main drain`, `10 built-in CAN drain`, `11 CAN record
+  drain`, `12 status/sensors`, `13 health publish`, and `14 setup`. A missing
+  breadcrumb is valid evidence for memory loss or a different firmware build;
+  it must not be converted into a fabricated stage.
 
 Serial CDC uplink policy:
 - Connected CDC backpressure must never clear queued/staged uplink data.
@@ -523,6 +584,9 @@ transceiver state.
 
 Extended 128-byte `BOARD_HEALTH` payload:
 - `0..51`: same prefix as the original 52-byte health payload.
+- Prefix byte `46 timer_ok` means the configured encoder-timer requirement is
+  satisfied. It is `1` when the encoder lane is disabled; only an enabled lane
+  whose timer initialization failed reports `0`.
 - `52 health_payload_version u8`: `2` for the old extended payload, `4` for the
   high-load CSM payload
 - `53 health_payload_len u8`
@@ -600,6 +664,60 @@ Extended 296-byte `BOARD_HEALTH v7` payload:
 - `284..287 passive_readback_violation_total u32`
 - `288..291 txreq_violation_total u32`
 - `292..295 usb_cdc_dtr_change_total u32`
+
+Extended 360-byte `BOARD_HEALTH v8` payload:
+- `0..295`: same as the 296-byte v7 payload.
+- `296..303 canonical_publish_seq_next u64`
+- `304..311 boot_session_id u64`
+- `312..315 usb_connection_epoch u32`
+- `316..319 usb_queue_high_water_bytes u32`
+- `320..323 usb_offer_overflow_total u32`
+- `324..327 usb_frame_sent_total u32`
+- `328..331 wifi_connection_epoch u32`
+- `332..335 wifi_queue_high_water_bytes u32`
+- `336..339 wifi_offer_overflow_total u32`
+- `340..343 wifi_frame_sent_total u32`
+- `344..347 wifi_connect_total u32`
+- `348..351 wifi_disconnect_total u32`
+- `352..355 wifi_stall_close_total u32`
+- `356..359 publisher_no_sink_drop_total u32`
+
+Extended 384-byte `BOARD_HEALTH v9` payload:
+- `0..359`: same as the 360-byte v8 payload.
+- `360..363 wifi_socket_error_total u32`: non-`WOULD_BLOCK` socket errors from
+  accept, send, receive, or close.
+- `364..367 wifi_send_budget_overrun_total u32`: send calls whose measured
+  duration exceeded the configured Wi-Fi drain time budget.
+- `368..371 wifi_send_call_max_us u32`
+- `372..375 wifi_recv_call_max_us u32`
+- `376..379 wifi_close_call_max_us u32`
+- `380..383 main_loop_max_gap_us u32`: maximum interval observed between main
+  loop iterations since boot.
+
+Extended 392-byte `BOARD_HEALTH v10` payload:
+- `0..383`: same as the 384-byte v9 payload.
+- `384..387 reset_cause_bits u32`: normalized boot reset causes. Bits are
+  `0x00000001 power-on`, `0x00000002 brownout`, `0x00000004 pin`,
+  `0x00000008 software`, `0x00000010 independent watchdog`,
+  `0x00000020 window watchdog`, `0x00000040 CPU`, `0x00000080 domain 1`,
+  `0x00000100 domain 2`, `0x00000200 low-power wake`, and
+  `0x80000000 unknown`.
+- `388..391 reset_status_raw u32`: platform reset-status evidence captured at
+  boot. On current Portenta bootloader/framework builds, mbed can report
+  `unknown` with raw value `0`; hosts must preserve that result and use a changed
+  `boot_session_id` as the authoritative reboot boundary instead of inventing a
+  reset cause.
+
+Extended 408-byte `BOARD_HEALTH v11` payload:
+- `0..391`: same as the 392-byte v10 payload.
+- `392..395 previous_runtime_breadcrumb_valid u32`: `1` only when a
+  checksum-valid retained slot from the same firmware build was recovered.
+- `396..399 previous_runtime_breadcrumb_stage u32`: low byte is the stage and
+  byte 1 is the substep, using the `BOARD_EVENT 41` stage table above.
+- `400..403 previous_runtime_breadcrumb_uptime_ms u32`
+- `404..407 previous_runtime_breadcrumb_write_sequence u32`
+- These fields remain stable for the full new boot so sinks that connect after
+  the one-shot event still receive the same reset-boundary evidence.
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - Passive Product and Full Instrumented both expose `bus_count=2` for the
