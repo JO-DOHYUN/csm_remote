@@ -46,6 +46,8 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   source_config.drive_channel_index = 1;
   source_config.steering_channel_index = 3;
   source_config.auxiliary_channel_index = 4;
+  source_config.steering_overlay_channel_index = 9;
+  source_config.momentary_overlay_channel_index = 10;
   source_config.steering_deadband_permille = config.steering_deadband_permille;
   source_config.auxiliary_threshold_permille = config.auxiliary_threshold_permille;
   source_config.invert_drive = config.invert_drive;

@@ -183,7 +183,7 @@ void frozenMailboxCannotRemainFresh() {
   CHECK(reader.snapshot().age_ms == 101);
 }
 
-void remotePreemptsAutonomyAndMapsCh4Ch5() {
+void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   using namespace csm::board;
   authority::AuthorityManager authority_manager;
   control::CommandLimiter limiter;
@@ -234,6 +234,8 @@ void remotePreemptsAutonomyAndMapsCh4Ch5() {
   source_config.drive_channel_index = 1;
   source_config.steering_channel_index = 3;
   source_config.auxiliary_channel_index = 4;
+  source_config.steering_overlay_channel_index = 9;
+  source_config.momentary_overlay_channel_index = 10;
   source_config.steering_deadband_permille = 20;
   source_config.auxiliary_threshold_permille = 500;
   CHECK(orchestrator.configureRemoteSource(source_config));
@@ -247,6 +249,8 @@ void remotePreemptsAutonomyAndMapsCh4Ch5() {
   inputs.mailbox_snapshot.sample.ch[1] = 1000;
   inputs.mailbox_snapshot.sample.ch[3] = -1000;
   inputs.mailbox_snapshot.sample.ch[4] = 0;
+  inputs.mailbox_snapshot.sample.ch[9] = 0;
+  inputs.mailbox_snapshot.sample.ch[10] = -1000;
   inputs.output_sequence = 7;
   inputs.autonomy_state = authority::AutonomyAuthorityState::InactiveConfirmed;
   inputs.local_tx_inhibit_latched = false;
@@ -291,7 +295,9 @@ void remotePreemptsAutonomyAndMapsCh4Ch5() {
   CHECK(auxiliary_negative.command.throttle_permille == 0);
   CHECK(auxiliary_negative.command.steer_permille == 0);
   CHECK(auxiliary_negative.command.auxiliary_permille == -1000);
-  CHECK(auxiliary_negative.frames[0].data[0] == control::kRemoteSteeringCenter);
+  for (uint8_t index = 0; index < 7; ++index) {
+    CHECK(auxiliary_negative.frames[0].data[index] == 0);
+  }
   CHECK(auxiliary_negative.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
 
   inputs.output_sequence = 10;
@@ -299,7 +305,9 @@ void remotePreemptsAutonomyAndMapsCh4Ch5() {
   auto auxiliary_positive = orchestrator.tick(80, inputs, deps);
   CHECK(auxiliary_positive.accepted);
   CHECK(auxiliary_positive.command.auxiliary_permille == 1000);
-  CHECK(auxiliary_positive.frames[0].data[0] == control::kRemoteSteeringCenter);
+  for (uint8_t index = 0; index < 7; ++index) {
+    CHECK(auxiliary_positive.frames[0].data[index] == 0);
+  }
   CHECK(auxiliary_positive.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
 
   inputs.output_sequence = 11;
@@ -308,6 +316,37 @@ void remotePreemptsAutonomyAndMapsCh4Ch5() {
   CHECK(steering_positive.accepted);
   CHECK(steering_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
   CHECK(steering_positive.frames[0].data[7] == 0);
+
+  inputs.output_sequence = 12;
+  inputs.mailbox_snapshot.sample.ch[9] = 1000;
+  auto steering_overlay_positive = orchestrator.tick(120, inputs, deps);
+  CHECK(steering_overlay_positive.accepted);
+  CHECK(steering_overlay_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(steering_overlay_positive.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
+
+  inputs.output_sequence = 13;
+  inputs.mailbox_snapshot.sample.ch[9] = -1000;
+  auto steering_overlay_negative = orchestrator.tick(140, inputs, deps);
+  CHECK(steering_overlay_negative.accepted);
+  CHECK(steering_overlay_negative.frames[0].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(steering_overlay_negative.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
+
+  inputs.output_sequence = 14;
+  inputs.mailbox_snapshot.sample.ch[9] = 1000;
+  inputs.mailbox_snapshot.sample.ch[10] = 1000;
+  auto momentary_overlay_positive = orchestrator.tick(160, inputs, deps);
+  CHECK(momentary_overlay_positive.accepted);
+  CHECK(momentary_overlay_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(momentary_overlay_positive.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
+
+  inputs.output_sequence = 15;
+  inputs.mailbox_snapshot.sample.ch[4] = 1000;
+  auto auxiliary_precedence = orchestrator.tick(180, inputs, deps);
+  CHECK(auxiliary_precedence.accepted);
+  for (uint8_t index = 0; index < 7; ++index) {
+    CHECK(auxiliary_precedence.frames[0].data[index] == 0);
+  }
+  CHECK(auxiliary_precedence.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
 }
 
 void runtimeHandoffLossAndFaultPolicy() {
@@ -471,7 +510,7 @@ int main() {
   crsfChannelsDecodeAndNormalize();
   upstreamAutonomyPrecedesRemoteReservation();
   frozenMailboxCannotRemainFresh();
-  remotePreemptsAutonomyAndMapsCh4Ch5();
+  remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11();
   runtimeHandoffLossAndFaultPolicy();
   if (failures != 0) {
     std::fprintf(stderr, "%d remote control contract checks failed\n", failures);

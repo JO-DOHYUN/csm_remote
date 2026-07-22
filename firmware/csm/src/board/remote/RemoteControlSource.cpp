@@ -28,13 +28,22 @@ void RemoteControlSource::begin(uint32_t now_ms) {
 }
 
 bool RemoteControlSource::configure(const RemoteControlSourceConfig& config) {
-  if (config.drive_channel_index >= kRcChannelCount ||
-      config.steering_channel_index >= kRcChannelCount ||
-      config.auxiliary_channel_index >= kRcChannelCount ||
-      config.drive_channel_index == config.steering_channel_index ||
-      config.drive_channel_index == config.auxiliary_channel_index ||
-      config.steering_channel_index == config.auxiliary_channel_index ||
-      config.steering_deadband_permille > 100 ||
+  const uint8_t channels[] = {
+      config.drive_channel_index,
+      config.steering_channel_index,
+      config.auxiliary_channel_index,
+      config.steering_overlay_channel_index,
+      config.momentary_overlay_channel_index,
+  };
+  constexpr uint8_t channel_count = sizeof(channels) / sizeof(channels[0]);
+  for (uint8_t index = 0; index < channel_count; ++index) {
+    if (channels[index] >= kRcChannelCount) return false;
+    for (uint8_t other = static_cast<uint8_t>(index + 1);
+         other < channel_count; ++other) {
+      if (channels[index] == channels[other]) return false;
+    }
+  }
+  if (config.steering_deadband_permille > 100 ||
       config.auxiliary_threshold_permille < 100 ||
       config.auxiliary_threshold_permille > 1000) {
     return false;
@@ -89,12 +98,20 @@ void RemoteControlSource::update(uint32_t now_ms,
   const int16_t auxiliary = quantizeAuxiliary(
       snapshot.sample.ch[config_.auxiliary_channel_index],
       config_.auxiliary_threshold_permille);
+  const int16_t steering_overlay = quantizeAuxiliary(
+      snapshot.sample.ch[config_.steering_overlay_channel_index],
+      config_.auxiliary_threshold_permille);
+  const int16_t momentary_overlay = quantizeAuxiliary(
+      snapshot.sample.ch[config_.momentary_overlay_channel_index],
+      config_.auxiliary_threshold_permille);
   command_.throttle_permille = config_.invert_drive ? -drive : drive;
   const int16_t directed_steering =
       config_.invert_steering ? -steering : steering;
   command_.steer_permille = applyDeadband(
       directed_steering, config_.steering_deadband_permille);
   command_.auxiliary_permille = auxiliary;
+  command_.steering_overlay_permille = steering_overlay;
+  command_.momentary_overlay_permille = momentary_overlay;
   if (auxiliary != 0) {
     command_.throttle_permille = 0;
     command_.steer_permille = 0;

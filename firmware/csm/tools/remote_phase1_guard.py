@@ -150,6 +150,7 @@ def main():
     require_patterns(errors, "VehicleCommandMapper.cpp", mapper, [
         "kRemoteSteeringCanId", "kRemoteSteeringCenter",
         "kRemoteAuxiliaryNegative", "kRemoteAuxiliaryPositive",
+        "steering_overlay_permille", "momentary_overlay_permille",
         "VehicleCommandMapping::MdpsBench0x007",
         "kDetailNoVehicleMapping", "result.mapped = true",
     ])

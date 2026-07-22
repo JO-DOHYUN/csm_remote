@@ -11,6 +11,8 @@ struct RemoteControlSourceConfig {
   uint8_t drive_channel_index = 1;     // CRSF CH2.
   uint8_t steering_channel_index = 3;  // CRSF CH4.
   uint8_t auxiliary_channel_index = 4; // CRSF CH5.
+  uint8_t steering_overlay_channel_index = 9; // CRSF CH10.
+  uint8_t momentary_overlay_channel_index = 10; // CRSF CH11.
   uint16_t steering_deadband_permille = 20;
   uint16_t auxiliary_threshold_permille = 500;
   bool invert_drive = false;

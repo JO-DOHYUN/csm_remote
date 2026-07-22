@@ -72,10 +72,20 @@ VehicleCommandMapResult VehicleCommandMapper::map(const OperatorCommand& command
   switch (profile_.mapping) {
     case VehicleCommandMapping::MdpsBench0x007: {
       CanFrameRequest frame = makeFrame(command, profile_, kRemoteSteeringCanId);
-      frame.data[0] = mapSteering(command.steer_permille);
-      frame.data[7] = command.auxiliary_permille < 0
-          ? kRemoteAuxiliaryNegative
-          : (command.auxiliary_permille > 0 ? kRemoteAuxiliaryPositive : 0u);
+      if (command.auxiliary_permille != 0) {
+        frame.data[7] = command.auxiliary_permille < 0
+            ? kRemoteAuxiliaryNegative
+            : kRemoteAuxiliaryPositive;
+      } else {
+        frame.data[0] = mapSteering(command.steer_permille);
+        if (command.momentary_overlay_permille > 0) {
+          frame.data[7] = kRemoteAuxiliaryNegative;
+        } else if (command.steering_overlay_permille < 0) {
+          frame.data[7] = kRemoteAuxiliaryNegative;
+        } else if (command.steering_overlay_permille > 0) {
+          frame.data[7] = kRemoteAuxiliaryPositive;
+        }
+      }
       result.frames[result.frame_count++] = frame;
       result.mapped = true;
       result.decision = authority::ControlDecisionCode::Accepted;

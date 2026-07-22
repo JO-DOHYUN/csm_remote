@@ -21,6 +21,8 @@ struct OperatorCommand {
   int16_t throttle_permille = 0;
   int16_t steer_permille = 0;
   int16_t auxiliary_permille = 0;
+  int16_t steering_overlay_permille = 0;
+  int16_t momentary_overlay_permille = 0;
   int16_t brake_permille = 0;
   uint8_t drive_mode = 0;
   uint16_t validity_flags = 0;
@@ -33,6 +35,10 @@ constexpr bool isWithinOperatorCommandRange(const OperatorCommand& command) {
          command.steer_permille <= kControlPermilleMax &&
          command.auxiliary_permille >= kControlPermilleMin &&
          command.auxiliary_permille <= kControlPermilleMax &&
+         command.steering_overlay_permille >= kControlPermilleMin &&
+         command.steering_overlay_permille <= kControlPermilleMax &&
+         command.momentary_overlay_permille >= kControlPermilleMin &&
+         command.momentary_overlay_permille <= kControlPermilleMax &&
          command.brake_permille >= kBrakePermilleMin &&
          command.brake_permille <= kBrakePermilleMax;
 }
