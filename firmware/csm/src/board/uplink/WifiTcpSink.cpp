@@ -57,10 +57,24 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
     return SinkOfferResult::Disconnected;
   }
   const WifiMailboxOfferResult offered = mailbox_.tryOffer(frame, millis());
-  if (offered == WifiMailboxOfferResult::Invalid) return SinkOfferResult::Invalid;
-  if (offered != WifiMailboxOfferResult::Accepted) {
-    counters_.offer_overflow_total++;
-    return SinkOfferResult::Overflow;
+  switch (offered) {
+    case WifiMailboxOfferResult::Accepted:
+      break;
+    case WifiMailboxOfferResult::Busy:
+      counters_.offer_busy_total++;
+      counters_.offer_overflow_total++;
+      return SinkOfferResult::Overflow;
+    case WifiMailboxOfferResult::Reserved:
+      counters_.offer_reserved_total++;
+      counters_.offer_overflow_total++;
+      return SinkOfferResult::Overflow;
+    case WifiMailboxOfferResult::Full:
+      counters_.offer_full_total++;
+      counters_.offer_overflow_total++;
+      return SinkOfferResult::Overflow;
+    case WifiMailboxOfferResult::Invalid:
+      counters_.offer_invalid_total++;
+      return SinkOfferResult::Invalid;
   }
   counters_.offer_accept_total++;
   if (!counters_.first_accepted_valid) {
@@ -159,6 +173,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.write_attempt_total = worker.write_attempt_total;
   counters_.partial_write_total = worker.partial_write_total;
   counters_.zero_write_total = worker.zero_write_total;
+  counters_.would_block_total = worker.would_block_total;
   counters_.backpressure_total = worker.backpressure_total;
   counters_.backpressure_max_duration_ms = worker.backpressure_max_duration_ms;
   counters_.queue_abort_total = worker.queue_abort_total;

@@ -34,7 +34,7 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   state_.worker_started = true;
   mailbox_.publishState(state_);
   thread_ = new (thread_storage_)
-      rtos::Thread(osPriorityBelowNormal, sizeof(thread_stack_), thread_stack_,
+      rtos::Thread(osPriorityNormal, sizeof(thread_stack_), thread_stack_,
                    "wifi-socket");
   const osStatus status = thread_->start(mbed::callback(this, &WifiSocketWorker::run));
   if (status != osOK) {
@@ -86,7 +86,7 @@ void WifiSocketWorker::run() {
       if (static_cast<uint32_t>(now_ms - last_accept_poll_ms_) >=
           BOARD_WIFI_ACCEPT_POLL_MS) {
         last_accept_poll_ms_ = now_ms;
-        serviceAccept(now_ms, false);
+        serviceAccept(now_ms);
       }
     } else {
       serviceClient(now_ms);
@@ -142,7 +142,7 @@ void WifiSocketWorker::serviceRequests() {
   const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
-    closeClient(false);
+    closeClient(WifiCloseReason::IsolationRequest);
   }
   applyAbortRequest();
 }
@@ -152,17 +152,11 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   serviceReceive(now_ms);
   if (client_ == nullptr) return;
   serviceTransmit(now_ms);
-  if (client_ == nullptr) return;
-  if (static_cast<uint32_t>(now_ms - last_extra_accept_ms_) >= 100u) {
-    last_extra_accept_ms_ = now_ms;
-    serviceAccept(now_ms, true);
-  }
 }
 
-void WifiSocketWorker::serviceAccept(uint32_t, bool extra) {
+void WifiSocketWorker::serviceAccept(uint32_t) {
   nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
-  beginCall(extra ? WifiWorkerCallPhase::AcceptExtraClient
-                  : WifiWorkerCallPhase::AcceptClient);
+  beginCall(WifiWorkerCallPhase::AcceptClient);
   TCPSocket* candidate = server_.acceptRaw(&error);
   endCall(error);
   if (candidate == nullptr) {
@@ -182,12 +176,6 @@ void WifiSocketWorker::serviceAccept(uint32_t, bool extra) {
   candidate->set_blocking(false);
   endCall(0);
 
-  if (extra) {
-    closeSocket(candidate, WifiWorkerCallPhase::CloseExtraClient);
-    state_.counters.extra_client_reject_total++;
-    return;
-  }
-
   uint32_t aborted_bytes = 0;
   while (!mailbox_.tryApplyAbort(aborted_bytes)) rtos::ThisThread::yield();
   if (aborted_bytes > 0) {
@@ -197,7 +185,7 @@ void WifiSocketWorker::serviceAccept(uint32_t, bool extra) {
   mailbox_.discardRx();
   client_ = candidate;
   state_.connected = true;
-  blocked_since_ms_ = 0;
+  tx_progress_.reset();
   state_.backpressure_active = false;
   state_.backpressure_duration_ms = 0;
   state_.counters.connection_epoch++;
@@ -214,22 +202,22 @@ void WifiSocketWorker::serviceReceive(uint32_t) {
   const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
-    closeClient(false);
+    closeClient(WifiCloseReason::IsolationRequest);
     applyAbortRequest();
     return;
   }
   if (received > 0) {
     if (!mailbox_.pushRx(rx_buffer_, static_cast<uint16_t>(received))) {
       state_.counters.rx_overflow_total++;
-      closeClient(true);
+      closeClient(WifiCloseReason::ReceiveOverflow);
     }
     return;
   }
   if (received == 0) {
-    closeClient(false);
+    closeClient(WifiCloseReason::PeerClosed);
   } else if (received != NSAPI_ERROR_WOULD_BLOCK) {
     noteSocketError(static_cast<nsapi_error_t>(received));
-    closeClient(false);
+    closeClient(WifiCloseReason::SocketError);
   }
 }
 
@@ -265,35 +253,34 @@ void WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
     state_.counters.late_send_result_total++;
-    closeClient(false);
+    closeClient(WifiCloseReason::IsolationRequest);
     applyAbortRequest();
     return;
   }
 
   if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
     noteSocketError(static_cast<nsapi_error_t>(sent));
-    closeClient(false);
+    closeClient(WifiCloseReason::SocketError);
     return;
   }
   if (sent <= 0) {
-    state_.counters.zero_write_total++;
-    if (blocked_since_ms_ == 0) {
-      blocked_since_ms_ = now_ms == 0 ? 1 : now_ms;
-      state_.counters.backpressure_total++;
+    if (sent == NSAPI_ERROR_WOULD_BLOCK) {
+      state_.counters.would_block_total++;
+    } else {
+      state_.counters.zero_write_total++;
     }
+    const WifiTxProgressObservation progress =
+        tx_progress_.observe(now_ms, false, config_.stall_timeout_ms);
+    if (progress.started) state_.counters.backpressure_total++;
     state_.backpressure_active = true;
-    state_.backpressure_duration_ms = now_ms - blocked_since_ms_;
+    state_.backpressure_duration_ms = progress.duration_ms;
     if (state_.backpressure_duration_ms >
         state_.counters.backpressure_max_duration_ms) {
       state_.counters.backpressure_max_duration_ms =
           state_.backpressure_duration_ms;
     }
-    const uint8_t normal_limit = static_cast<uint8_t>(
-        BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
-    if ((config_.stall_timeout_ms > 0 &&
-         state_.backpressure_duration_ms >= config_.stall_timeout_ms) ||
-        queued.queued_records >= normal_limit) {
-      closeClient(true);
+    if (progress.close_no_progress) {
+      closeClient(WifiCloseReason::TransmitNoProgress);
     }
     return;
   }
@@ -304,12 +291,12 @@ void WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
   pending_consume_ = true;
   if (pending_consumed_bytes_ < lease.length) state_.counters.partial_write_total++;
   applyPendingConsume();
-  if (blocked_since_ms_ != 0) {
-    const uint32_t duration = now_ms - blocked_since_ms_;
-    if (duration > state_.counters.backpressure_max_duration_ms) {
-      state_.counters.backpressure_max_duration_ms = duration;
+  const WifiTxProgressObservation progress =
+      tx_progress_.observe(now_ms, true, config_.stall_timeout_ms);
+  if (progress.recovered) {
+    if (progress.duration_ms > state_.counters.backpressure_max_duration_ms) {
+      state_.counters.backpressure_max_duration_ms = progress.duration_ms;
     }
-    blocked_since_ms_ = 0;
     state_.backpressure_active = false;
     state_.backpressure_duration_ms = 0;
   }
@@ -317,7 +304,7 @@ void WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
 
 bool WifiSocketWorker::applyPendingConsume() {
   if (!pending_consume_) return true;
-  FixedFrameQueue<BOARD_WIFI_SINK_QUEUE_RECORDS>::ConsumeResult consumed;
+  WifiWorkerMailbox::TxConsumeResult consumed;
   bool stale = false;
   if (!mailbox_.tryConsumeTx(pending_lease_, pending_consumed_bytes_, consumed,
                              stale)) {
@@ -336,11 +323,14 @@ bool WifiSocketWorker::applyPendingConsume() {
   return true;
 }
 
-void WifiSocketWorker::closeClient(bool stalled) {
+void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   const bool was_connected = client_ != nullptr || state_.connected;
-  closeSocket(client_, WifiWorkerCallPhase::CloseClient);
+  const uint32_t no_progress_duration_ms = state_.backpressure_duration_ms;
+  TCPSocket* closing = client_;
+  client_ = nullptr;
   state_.connected = false;
-  blocked_since_ms_ = 0;
+  state_.last_close_reason = reason;
+  tx_progress_.reset();
   state_.backpressure_active = false;
   state_.backpressure_duration_ms = 0;
   pending_consume_ = false;
@@ -351,14 +341,18 @@ void WifiSocketWorker::closeClient(bool stalled) {
     state_.counters.queue_abort_total++;
     state_.counters.queue_aborted_bytes_total += aborted_bytes;
   }
-  if (!was_connected) return;
-  state_.counters.connection_epoch++;
-  state_.counters.disconnect_total++;
-  if (stalled) {
+  if (was_connected) {
+    state_.counters.connection_epoch++;
+    state_.counters.disconnect_total++;
+  }
+  if (was_connected && reason == WifiCloseReason::TransmitNoProgress) {
     state_.counters.stall_close_total++;
-    state_.stall_event_duration_ms = config_.stall_timeout_ms;
+    state_.stall_event_duration_ms = no_progress_duration_ms;
     state_.stall_event_sequence++;
   }
+  // Publish disconnected state before entering a potentially slow vendor
+  // close. The facade must not misclassify the close itself as a new stall.
+  closeSocket(closing, WifiWorkerCallPhase::CloseClient);
 }
 
 void WifiSocketWorker::closeSocket(TCPSocket*& socket,

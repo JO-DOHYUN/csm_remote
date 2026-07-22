@@ -171,3 +171,14 @@
 - 결정: 기본 Remote Product의 fail-closed mapper `None`은 유지한다. 별도 `portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi`만 제품 authority/safety/limiter 아래 J4 `MdpsBench0x007` 송신을 연다. MCP2515는 normal-mode RX/ACK만 허용하며 MCP control TX, 모든 host TX/downlink는 금지한다.
 - wiring: 일반 제품은 `local_tx_inhibit=true`, autonomy `Unknown`으로 유지한다. upstream autonomy가 없는 명시적 MDPS bench artifact만 inhibit를 해제하고 autonomy를 `InactiveConfirmed`로 고정한다. 첫 업로드 관찰에서 이 wiring이 누락되어 RC accepted `+1985`에도 control cycle이 0인 결함을 확인해 교정했다.
 - 판정 경계: 이 artifact는 MDPS 단품/차량 벤치용이며 실제 5-ID vehicle mapping 또는 release artifact가 아니다. J4 `0x007` ID/payload/20 ms와 외부 analyzer 관측, MCP error-free ACK, RC/USB/Wi-Fi 동시 부하를 별도로 통과해야 한다.
+
+## D-015 Wi-Fi 정상 부하 무손실 envelope와 active-client 경계
+
+- 날짜: 2026-07-22
+- 상태: Active, 60초 I1 실보드 gate 통과. blocked-client/reconnect와 장시간 동시 HIL 대기.
+- 결함: active TCP client 중 100 ms마다 extra `accept()`를 호출해 vendor call isolation과 연결 종료를 유발했다. 또한 1 ms CAN segment flush, 512 B TX chunk, 48개 최대-frame 복사 queue가 약 130 CAN frame/s에서 canonical 생산율과 radio burst를 감당하지 못해 Wi-Fi sink loss를 만들었다.
+- 결정: active client 중 listener를 호출하지 않는다. queue 수위는 loss evidence일 뿐 close 조건이 아니며, 연결은 연속 5 s socket 무진행·peer close·실제 socket error·명시적 isolation만으로 닫는다. close 진입 전 disconnected state를 publish해 느린 vendor close를 새 call stall로 중복 판정하지 않는다.
+- 처리량: CAN truth는 최대 20 ms/15 frame으로 segment화하고, Normal-priority worker가 5 ms 주기에서 최대 1024 B를 nonblocking send한다. sink queue는 48 KiB byte pool+252 descriptor이며 2 KiB+4 descriptor를 critical에 예약한다. 이는 실측 약 8 KiB/s × 5 s timeout에 margin을 둔 정적 envelope다.
+- 진단: mailbox admission의 Busy/Reserved/Full/Invalid와 socket WouldBlock/zero write, close reason을 내부에서 분리한다. 기존 aggregate health counter와 epoch/identity는 wire 호환을 유지한다.
+- 실측: MDPS bench firmware source `0x27056BF3`, PCAN/J4 약 130 frame/s, PC TCP client 60 s에서 단일 boot sequence 7/session/epoch, 482,493 B/2,847 record를 수신했다. Wi-Fi disconnect/stall/socket error/overflow/no-sink drop, CAN source drop/FIFO, CRC, typed/segment/capture gap이 모두 0이었다. queue high-water는 24,831 B, main-loop max gap은 4,025 us, CAN RX task max는 555 us였다.
+- 자원: 제품 build RAM 440,360/523,624 B(84.1%), Flash 357,936/786,432 B(45.5%). 48 KiB를 초과하는 queue 확대는 새 부하 실측과 memory gate 없이는 금지한다.

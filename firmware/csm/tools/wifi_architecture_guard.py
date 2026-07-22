@@ -19,6 +19,13 @@ def fail(message):
 sink = SINK.read_text(encoding="utf-8")
 worker = WORKER.read_text(encoding="utf-8")
 contract = CONTRACT.read_text(encoding="utf-8")
+worker_header = (ROOT / "include" / "board" / "uplink" / "WifiSocketWorker.h").read_text(
+    encoding="utf-8"
+)
+mailbox_header = (ROOT / "include" / "board" / "uplink" / "WifiWorkerMailbox.h").read_text(
+    encoding="utf-8"
+)
+platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 
 for token in (
     "WiFi.",
@@ -40,11 +47,53 @@ for token in (
     "client_->send(",
     "client_->recv(",
     "owned->close(",
-    "osPriorityBelowNormal",
+    "osPriorityNormal",
     "BOARD_WIFI_ACCEPT_POLL_MS",
 ):
     if token not in worker:
         fail(f"socket worker is missing required ownership marker {token!r}")
+
+if "osPriorityBelowNormal" in worker:
+    fail("socket worker may be starved by always-runnable normal-priority threads")
+
+if "#define BOARD_WIFI_TX_CHUNK_BYTES 1024" not in worker_header:
+    fail("Wi-Fi TX chunk must match the 1024-byte bounded pump budget")
+
+if "FixedFrameByteQueue" not in mailbox_header or "FixedFrameQueue<" in mailbox_header:
+    fail("Wi-Fi mailbox must use the bounded byte-pool queue")
+for token in (
+    "BOARD_WIFI_SINK_QUEUE_RECORDS=252",
+    "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
+    "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2048",
+    "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
+):
+    if token not in platformio:
+        fail(f"product throughput envelope is missing {token!r}")
+
+if "WifiTxProgressTracker" not in contract:
+    fail("TX progress tracker is missing from the Wi-Fi contract")
+for token in (
+    "tx_progress_",
+    "progress.close_no_progress",
+    "WifiCloseReason::TransmitNoProgress",
+):
+    if token not in worker:
+        fail(f"socket worker is missing deterministic TX progress policy {token!r}")
+
+for token in (
+    "queued.queued_records >= normal_limit",
+    "queued.queued_records >= BOARD_WIFI",
+):
+    if token in worker:
+        fail(f"queue occupancy must not close a live client: found {token!r}")
+
+for token in (
+    "AcceptExtraClient",
+    "CloseExtraClient",
+    "last_extra_accept_ms_",
+):
+    if token in worker:
+        fail(f"active-client path must not poll the listening socket: found {token!r}")
 
 for token in ("delete owned", "delete client_", "delete candidate"):
     if token in worker:

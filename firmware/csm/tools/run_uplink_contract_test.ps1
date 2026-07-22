@@ -19,6 +19,7 @@ $sources = @(
   (Join-Path $project "test\uplink_contract_test.cpp"),
   (Join-Path $project "src\protocol\TypedFrame.cpp"),
   (Join-Path $project "src\board\uplink\CanonicalPublisher.cpp"),
+  (Join-Path $project "src\board\uplink\CanRxSegmentBuilder.cpp"),
   (Join-Path $project "src\board\uplink\RecordAdmission.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '

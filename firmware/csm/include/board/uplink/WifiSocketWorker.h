@@ -12,7 +12,7 @@
 #endif
 
 #ifndef BOARD_WIFI_TX_CHUNK_BYTES
-#define BOARD_WIFI_TX_CHUNK_BYTES 512
+#define BOARD_WIFI_TX_CHUNK_BYTES 1024
 #endif
 
 #ifndef BOARD_WIFI_SOCKET_WORKER_STACK_BYTES
@@ -51,8 +51,7 @@ class WifiSocketWorker final {
   bool pending_consume_ = false;
   uint32_t handled_abort_sequence_ = 0;
   uint32_t handled_disconnect_sequence_ = 0;
-  uint32_t blocked_since_ms_ = 0;
-  uint32_t last_extra_accept_ms_ = 0;
+  WifiTxProgressTracker tx_progress_;
   uint32_t last_accept_poll_ms_ = 0;
   uint32_t last_stack_sample_ms_ = 0;
   uint32_t next_startup_attempt_ms_ = 0;
@@ -68,11 +67,11 @@ class WifiSocketWorker final {
   bool initializeNetwork();
   void serviceRequests();
   void serviceClient(uint32_t now_ms);
-  void serviceAccept(uint32_t now_ms, bool extra);
+  void serviceAccept(uint32_t now_ms);
   void serviceReceive(uint32_t now_ms);
   void serviceTransmit(uint32_t now_ms);
   bool applyPendingConsume();
-  void closeClient(bool stalled);
+  void closeClient(WifiCloseReason reason);
   void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);
   void applyAbortRequest();
   void noteSocketError(nsapi_error_t error);

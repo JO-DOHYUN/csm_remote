@@ -2,7 +2,9 @@
 #include <cstring>
 
 #include "board/uplink/CanonicalPublisher.h"
+#include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/FixedFrameQueue.h"
+#include "board/uplink/FixedFrameByteQueue.h"
 #include "protocol/TypedRecords.h"
 
 using csm::RecordType;
@@ -128,6 +130,38 @@ void fixed_queue_batches_without_losing_frame_boundaries() {
   CHECK(queue.empty());
 }
 
+void byte_queue_wraps_without_losing_frame_boundaries() {
+  using namespace csm::board::uplink;
+  FixedFrameByteQueue<4, 523> queue;
+  uint8_t first[400] = {};
+  uint8_t second[100] = {};
+  uint8_t third[200] = {};
+  for (uint16_t index = 0; index < sizeof(first); ++index) first[index] = 1;
+  for (uint16_t index = 0; index < sizeof(second); ++index) second[index] = 2;
+  for (uint16_t index = 0; index < sizeof(third); ++index) third[index] = 3;
+  PublishedFrameView first_view{first, sizeof(first), 1, RecordType::BoardEvent,
+                                UplinkPriority::Normal};
+  PublishedFrameView second_view{second, sizeof(second), 2, RecordType::BoardEvent,
+                                 UplinkPriority::Normal};
+  PublishedFrameView third_view{third, sizeof(third), 3, RecordType::BoardEvent,
+                                UplinkPriority::Normal};
+  CHECK(queue.push(first_view));
+  CHECK(queue.push(second_view));
+  auto consumed = queue.consumeMany(450);
+  CHECK(consumed.frames == 1);
+  CHECK(consumed.last_publish_seq == 1);
+  CHECK(queue.push(third_view));
+  uint8_t copied[250] = {};
+  CHECK(queue.copyFrontBytes(copied, sizeof(copied)) == sizeof(copied));
+  for (uint16_t index = 0; index < 50; ++index) CHECK(copied[index] == 2);
+  for (uint16_t index = 50; index < sizeof(copied); ++index) CHECK(copied[index] == 3);
+  consumed = queue.consumeMany(sizeof(copied));
+  CHECK(consumed.frames == 2);
+  CHECK(consumed.last_publish_seq == 3);
+  CHECK(queue.empty());
+  CHECK(queue.highWaterBytes() == 500);
+}
+
 void runtime_diagnostic_layout_is_fixed_and_bounded() {
   CHECK(static_cast<uint8_t>(RecordType::RuntimeDiagnostic) == 19);
   CHECK(csm::kRuntimeDiagnosticSchema == 2);
@@ -143,6 +177,47 @@ void runtime_diagnostic_layout_is_fixed_and_bounded() {
         csm::kRuntimeDiagnosticPayloadLen);
 }
 
+struct SegmentCapture {
+  uint32_t emits = 0;
+  uint8_t count = 0;
+  uint64_t sequence = 0;
+};
+
+bool captureSegment(void* context,
+                    const csm::board::uplink::CanRxSegmentItem*, uint8_t count,
+                    uint64_t sequence) {
+  auto* capture = static_cast<SegmentCapture*>(context);
+  capture->emits++;
+  capture->count = count;
+  capture->sequence = sequence;
+  return true;
+}
+
+void can_segment_batches_with_bounded_latency() {
+  using namespace csm::board::uplink;
+  constexpr uint32_t kProductFlushUs = 20000;
+  SegmentCapture capture;
+  CanRxSegmentBuilder builder;
+  builder.begin(captureSegment, &capture, kProductFlushUs);
+  CanRxSegmentItem item;
+
+  CHECK(builder.push(item, 1000));
+  CHECK(builder.push(item, 8700));
+  CHECK(builder.pendingCount() == 2);
+  CHECK(builder.flushIfDue(20999));
+  CHECK(capture.emits == 0);
+  CHECK(builder.flushIfDue(21000));
+  CHECK(capture.emits == 1);
+  CHECK(capture.count == 2);
+  CHECK(capture.sequence == 0);
+
+  CHECK(builder.push(item, UINT32_MAX - 10000u));
+  CHECK(builder.flushIfDue(9999));
+  CHECK(capture.emits == 2);
+  CHECK(capture.count == 1);
+  CHECK(capture.sequence == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -150,7 +225,9 @@ int main() {
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();
   fixed_queue_batches_without_losing_frame_boundaries();
+  byte_queue_wraps_without_losing_frame_boundaries();
   runtime_diagnostic_layout_is_fixed_and_bounded();
+  can_segment_batches_with_bounded_latency();
   if (failures != 0) return 1;
   std::puts("PASS: canonical publisher fanout contract");
   return 0;

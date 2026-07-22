@@ -14,7 +14,7 @@ Record producers
        - typed frame encode once
        - one immutable encoded frame view per publication
   -> UsbCdcSink fixed queue
-  -> WifiTcpSink fixed queue
+  -> WifiTcpSink fixed byte pool + frame descriptor queue
 ```
 
 ### PriorityAdmission
@@ -53,8 +53,10 @@ v1 header의 `seq u16`은 fanout 전 `CanonicalPublisher`가 배정하는 `publi
 - 초기 Wi-Fi 제품은 Android observer 1대만 허용한다.
 - TCP는 전송 순서와 신뢰성을 제공하지만 application loss/session 의미를 대신하지 않는다.
 - Wi-Fi write가 일시적으로 0을 반환해도 즉시 장애로 단정하지 않는다. 현재 stalled-client close 기준은 5 s이며 queue와 write는 계속 bounded/nonblocking이다.
-- Wi-Fi observer와 Service/HIL profile은 48-record fixed sink queue를 사용하고 그중 4개를 critical health/control evidence에 예약한다. CAN truth는 레코드 2개 또는 최대 75 ms까지 모아 한 socket write로 전송하며, critical health/control evidence는 즉시 flush한다.
-- 48-record 수치는 20 Hz CAN1 bench에서 약 1 s Wi-Fi write 정지와 32-record queue overflow 4건이 실측되어 transient를 흡수하도록 정한 현재 기준이다. Remote Product의 정적 `CAPABILITY`는 session 시작·재연결 시 광고한다. periodic 광고는 reset 실험의 변수를 줄이기 위해 현재 Off지만, 과거 reset을 해당 광고나 정확히 3초 watchdog으로 확정하지 않는다.
+- Wi-Fi observer와 Service/HIL profile은 48 KiB byte pool과 252개 frame descriptor를 사용한다. 2 KiB byte와 4개 descriptor는 critical health/control evidence에 예약한다. 이 구조는 `record 수 × 최대 frame 크기` 메모리 낭비 없이 실제 적재 byte를 기준으로 bounded된다.
+- queue envelope는 5 s 연속 무진행 close 정책과 실측 약 8 KiB/s canonical 부하를 곱해 정했다. 5 s 미만 radio 정체는 queue가 흡수하고, 5 s 연속 무진행만 새 sink epoch로 닫는다. queue 수위 자체는 연결 종료 조건이 아니다.
+- Remote Product의 CAN truth는 최대 20 ms 동안 최대 15 frame을 segment로 묶고, Wi-Fi worker는 최대 1024 B를 한 nonblocking send로 전달한다. critical record는 batch 대기 없이 전송 대상이 된다.
+- Remote Product의 정적 `CAPABILITY`는 session 시작·재연결 시 광고한다. periodic 광고는 reset 실험의 변수를 줄이기 위해 현재 Off지만, 과거 reset을 해당 광고나 정확히 3초 watchdog으로 확정하지 않는다.
 - 기본 Remote Product와 reset experiment는 외부 MCP2515를 compile-out하고 J4 built-in CAN을 관측한다. 명시적 MDPS bench profile만 MCP2515를 normal-mode RX/ACK로 열며 MCP/host control TX는 계속 금지한다. MCP2515를 RP2040 feeder로 교체할지는 별도 hardware/product gate이며 아직 확정하지 않는다. 외부 frontend를 바꾸더라도 authority와 canonical publish identity는 M7이 소유한다.
 - Wi-Fi backpressure 전환마다 같은 혼잡 sink에 `BOARD_EVENT`를 재주입하지 않는다. queue high-water, overflow, stall/epoch counter를 `BOARD_HEALTH`에서 집계해 피드백 데이터 스톰을 방지한다.
 
@@ -85,10 +87,14 @@ CanonicalPublisher
 - Mbed `TCPSocket::accept()`가 반환한 factory socket은 `close()`가 객체까지 해제한다. worker는 close 뒤 포인터를 참조하거나 별도 `delete`하지 않는다.
 - 워커는 static 16 KiB stack의 단일 수명 thread이며 재생성하지 않는다.
   실제 free/max-used stack은 debug record에서 1초 주기로 계측한다.
-- RC/CAN/main은 Wi-Fi worker보다 높은 scheduler priority를 사용하고 메인은
-  끝에서 1 ms slice만 양보한다. 이는 application thread 간 우선순위 계약이지,
+- Wi-Fi worker는 bounded nonblocking send/recv 한 회 뒤 5 ms sleep하는 Normal priority이며
+  메인은 끝에서 1 ms slice를 양보한다. BelowNormal worker가 항상 runnable인 system
+  thread에 굶어 canonical 생산율보다 낮아지던 경로는 제거했다. 이는 application thread 간 실행 계약이지,
   같은 M7의 vendor driver/kernel/IRQ stall이나 radio·전원 장애로부터 물리
   격리한다는 뜻은 아니다. 연결 전 accept poll 요청은 25 ms다.
+- active client가 존재하는 동안 listener `accept()`를 다시 호출하지 않는다.
+  제품은 observer 1대만 허용하며, 불필요한 extra-client poll이 active TX/RX
+  진행과 250 ms call-isolation 판정을 교란하지 않게 한다.
 - TX queue lock은 socket 호출 전에 해제한다. abort generation이 바뀐
   늦은 send 결과는 새 epoch queue에 적용하지 않는다.
 - RX mailbox overflow는 부분 downlink를 숨기지 않고 Wi-Fi epoch를 닫는다.
@@ -114,6 +120,7 @@ CanonicalPublisher
 - CSM AP direct, TCP `192.168.4.1:3333`, observer client 1개
 - sink epoch, overflow, high-water, frame progress, stalled-client close 계측
 - Wi-Fi record batching, critical 즉시 flush, critical queue reserve
+- 20 ms CAN segment aggregation, 1024 B TX chunk, 48 KiB/252 descriptor sink envelope
 - Wi-Fi 비활성 profile에서 Wi-Fi library와 queue를 링크하지 않는 build 분리
 - reset experiment의 Wi-Fi Off/AP-only/Full runtime mode와 startup 1회 제한
 
@@ -123,6 +130,9 @@ CanonicalPublisher
 - AP 생성, Android TCP connect, `STREAM_SESSION`/`BOARD_HEALTH` 수신
 - 60 s status-stream 동안 sink disconnect/stall/overflow와 앱 integrity 오류 0
 - Service/HIL profile에서 Kvaser CAN1 `0x50` 20 Hz를 30 s 계측해 CSM health-window `580/580`, CAN/FIFO/Wi-Fi drop 0, typed/segment/capture gap 0
+- MDPS bench profile과 PCAN/J4 약 130 frame/s 입력에서 PC TCP monitor 60 s 계측:
+  단일 boot/session/epoch, `wifi_disconnect/stall/socket_error/overflow=0`,
+  `CAN drop/FIFO=0`, CRC와 typed/segment/capture gap 0, queue high-water 24,831 B
 
 남은 gate:
 

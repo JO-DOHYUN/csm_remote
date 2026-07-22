@@ -21,6 +21,8 @@
 
 static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS < BOARD_WIFI_SINK_QUEUE_RECORDS,
               "Wi-Fi critical reserve must leave normal queue capacity");
+static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES < BOARD_WIFI_SINK_QUEUE_BYTES,
+              "Wi-Fi critical byte reserve must leave normal byte capacity");
 static_assert(BOARD_WIFI_STALL_TIMEOUT_MS > 0,
               "Wi-Fi backpressure timeout must be non-zero");
 static_assert(BOARD_WIFI_CALL_STALL_TIMEOUT_MS > 0,
@@ -42,11 +44,16 @@ struct WifiTcpSinkCounters {
   uint32_t offer_accept_total = 0;
   uint32_t offer_disconnected_total = 0;
   uint32_t offer_overflow_total = 0;
+  uint32_t offer_busy_total = 0;
+  uint32_t offer_reserved_total = 0;
+  uint32_t offer_full_total = 0;
+  uint32_t offer_invalid_total = 0;
   uint32_t bytes_sent_total = 0;
   uint32_t frame_sent_total = 0;
   uint32_t write_attempt_total = 0;
   uint32_t partial_write_total = 0;
   uint32_t zero_write_total = 0;
+  uint32_t would_block_total = 0;
   uint32_t backpressure_total = 0;
   uint32_t backpressure_max_duration_ms = 0;
   uint32_t queue_abort_total = 0;

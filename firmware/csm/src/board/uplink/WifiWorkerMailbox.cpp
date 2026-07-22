@@ -11,7 +11,8 @@ WifiWorkerMailbox::WifiWorkerMailbox() {
 
 WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     const PublishedFrameView& frame, uint32_t now_ms) {
-  if (frame.bytes == nullptr || frame.length == 0) {
+  if (frame.bytes == nullptr || frame.length == 0 ||
+      frame.length > csm::encoded_typed_frame_len(csm::kMaxPayloadLen)) {
     return WifiMailboxOfferResult::Invalid;
   }
   if (queue_lock_.test_and_set(std::memory_order_acquire)) {
@@ -20,11 +21,14 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
   WifiMailboxOfferResult result = WifiMailboxOfferResult::Accepted;
   const uint8_t normal_limit = static_cast<uint8_t>(
       BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
-  if (frame.priority != UplinkPriority::Critical && queue_.count() >= normal_limit) {
+  const uint32_t normal_byte_limit =
+      BOARD_WIFI_SINK_QUEUE_BYTES - BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES;
+  if (frame.priority != UplinkPriority::Critical &&
+      (queue_.count() >= normal_limit ||
+       queue_.queuedBytes() + frame.length > normal_byte_limit)) {
     result = WifiMailboxOfferResult::Reserved;
   } else if (!queue_.push(frame)) {
-    result = queue_.full() ? WifiMailboxOfferResult::Full
-                           : WifiMailboxOfferResult::Invalid;
+    result = WifiMailboxOfferResult::Full;
   } else {
     if (queue_.count() == 1) first_queued_ms_.store(now_ms, std::memory_order_relaxed);
     if (frame.priority == UplinkPriority::Critical) {
@@ -50,7 +54,7 @@ bool WifiWorkerMailbox::tryStageTx(uint8_t* destination, uint16_t capacity,
 
 bool WifiWorkerMailbox::tryConsumeTx(
     const WifiMailboxTxLease& lease, uint16_t bytes,
-    Queue::ConsumeResult& result, bool& stale_generation) {
+    TxConsumeResult& result, bool& stale_generation) {
   if (queue_lock_.test_and_set(std::memory_order_acquire)) return false;
   stale_generation = lease.generation != queue_generation_.load(std::memory_order_relaxed);
   if (!stale_generation) {

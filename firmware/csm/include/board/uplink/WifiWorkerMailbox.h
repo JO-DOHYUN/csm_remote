@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "board/uplink/FixedFrameQueue.h"
+#include "board/uplink/FixedFrameByteQueue.h"
 #include "board/uplink/WifiWorkerContract.h"
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
@@ -13,6 +13,14 @@
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
 #define BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS 4
+#endif
+
+#ifndef BOARD_WIFI_SINK_QUEUE_BYTES
+#define BOARD_WIFI_SINK_QUEUE_BYTES 4096
+#endif
+
+#ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES
+#define BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES 1024
 #endif
 
 #ifndef BOARD_WIFI_RX_MAILBOX_BYTES
@@ -45,6 +53,10 @@ struct WifiMailboxTxLease {
 
 class WifiWorkerMailbox {
  public:
+  using TxQueue = FixedFrameByteQueue<BOARD_WIFI_SINK_QUEUE_RECORDS,
+                                      BOARD_WIFI_SINK_QUEUE_BYTES>;
+  using TxConsumeResult = TxQueue::ConsumeResult;
+
   WifiWorkerMailbox();
 
   WifiMailboxOfferResult tryOffer(const PublishedFrameView& frame,
@@ -52,7 +64,7 @@ class WifiWorkerMailbox {
   bool tryStageTx(uint8_t* destination, uint16_t capacity,
                   WifiMailboxTxLease& lease);
   bool tryConsumeTx(const WifiMailboxTxLease& lease, uint16_t bytes,
-                    FixedFrameQueue<BOARD_WIFI_SINK_QUEUE_RECORDS>::ConsumeResult& result,
+                    TxConsumeResult& result,
                     bool& stale_generation);
   bool tryApplyAbort(uint32_t& aborted_bytes);
 
@@ -77,7 +89,7 @@ class WifiWorkerMailbox {
   bool tryReadState(WifiWorkerStateSnapshot& state) const;
 
  private:
-  using Queue = FixedFrameQueue<BOARD_WIFI_SINK_QUEUE_RECORDS>;
+  using Queue = TxQueue;
 
   Queue queue_;
   mutable std::atomic_flag queue_lock_ = ATOMIC_FLAG_INIT;

@@ -315,13 +315,18 @@ Current board host TX policy:
   host-control source in that profile.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
-  bounded main-loop pump. Product firmware must not wrap the accepted socket in
-  Arduino `WiFiClient`, start its internal RX thread, or add an independent Wi-Fi
-  writer thread because either path can starve or join-block the CAN/main loop.
-- A single active TCP client is allowed. Extra clients are accepted and closed
-  without entering the canonical sink. Disconnect or stall handling clears only
+  single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
+  socket in Arduino `WiFiClient`, create another socket owner, or perform vendor
+  socket calls from the CAN/main loop.
+- A single active TCP client is allowed. While it is active, the listener is not
+  polled; a second connection remains outside the canonical sink. Disconnect or
+  stall handling clears only
   that sink's queued copies and advances its connection epoch; it never clears
   source truth or another sink.
+- Queue occupancy is not a disconnect reason. Remote Product uses a 48 KiB byte
+  pool plus 252 frame descriptors, with 2 KiB plus four descriptors reserved for
+  critical evidence. A client closes only after 5 s continuous TX no-progress,
+  peer close, a non-`WOULD_BLOCK` socket error, RX overflow, or explicit isolation.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 

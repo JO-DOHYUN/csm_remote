@@ -64,5 +64,8 @@
 - RC/authority/CAN code: 관련 guard + M4/M7 build + unit/fixture
 - publisher/wire: H0 + C1 + USB byte parity
 - Wi-Fi sink: C1 + I1 blocked-client/reconnect
+- Wi-Fi queue/throughput: 선언 source byte율 × stall timeout으로 byte envelope를 정하고,
+  정상 client timed window에서 disconnect/stall/overflow와 typed/segment/capture gap이
+  모두 0이어야 한다. queue 증설만으로 평균 생산율 초과를 숨기지 않는다.
 - product profile: C1 + I2
 - release 주장: R1

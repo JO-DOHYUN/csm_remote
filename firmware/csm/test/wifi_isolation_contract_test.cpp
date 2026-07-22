@@ -55,7 +55,7 @@ void testQueueReserveAndAbortGeneration() {
   CHECK(mailbox.tryApplyAbort(aborted));
   CHECK(aborted == static_cast<uint32_t>(normal_capacity + 1u) * sizeof(bytes));
 
-  FixedFrameQueue<BOARD_WIFI_SINK_QUEUE_RECORDS>::ConsumeResult consumed;
+  WifiWorkerMailbox::TxConsumeResult consumed;
   bool stale = false;
   CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));
   CHECK(stale);
@@ -143,6 +143,33 @@ void testRuntimeModeContract() {
   CHECK(wifiRuntimeModeEnablesTcp(WifiRuntimeMode::FullTcp));
 }
 
+void testTransmitNoProgressPolicy() {
+  using namespace csm::board::uplink;
+  WifiTxProgressTracker tracker;
+  auto observed = tracker.observe(100, false, 5000);
+  CHECK(observed.started);
+  CHECK(!observed.close_no_progress);
+  CHECK(observed.duration_ms == 0);
+
+  observed = tracker.observe(4999, false, 5000);
+  CHECK(!observed.close_no_progress);
+  CHECK(observed.duration_ms == 4899);
+  observed = tracker.observe(5100, false, 5000);
+  CHECK(observed.close_no_progress);
+  CHECK(observed.duration_ms == 5000);
+
+  observed = tracker.observe(5101, true, 5000);
+  CHECK(observed.recovered);
+  CHECK(observed.duration_ms == 5001);
+  CHECK(!tracker.active());
+
+  // Millis wrap must retain unsigned elapsed-time semantics.
+  tracker.observe(UINT32_MAX - 10u, false, 25);
+  observed = tracker.observe(20, false, 25);
+  CHECK(observed.close_no_progress);
+  CHECK(observed.duration_ms == 31);
+}
+
 }  // namespace
 
 int main() {
@@ -150,6 +177,7 @@ int main() {
   testRxEpochDiscardAndOverflow();
   testCallBoundarySnapshot();
   testRuntimeModeContract();
+  testTransmitNoProgressPolicy();
   if (failures != 0) {
     std::cerr << failures << " Wi-Fi isolation contract checks failed\n";
     return 1;
