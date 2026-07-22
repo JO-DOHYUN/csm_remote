@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <cstring>
 #include <mbed.h>
+#include <new>
 #if DEVICE_RESET_REASON
 #include "drivers/ResetReason.h"
 #endif
@@ -13,6 +14,11 @@
 #include "board/HostDownlinkParser.h"
 #include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
+#include "board/can/BuiltinFdcanDiagnostics.h"
+#include "board/control/RemoteControlRuntime.h"
+#include "board/diagnostics/BootProgress.h"
+#include "board/diagnostics/RetainedCallLatch.h"
+#include "board/diagnostics/RuntimeSupervisor.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/CanonicalPublisher.h"
 #include "board/uplink/UplinkPriorityPolicy.h"
@@ -42,6 +48,22 @@
 #define CSM_FW_BUILD_ID 0
 #endif
 
+#ifndef CSM_FW_SOURCE_ID32
+#define CSM_FW_SOURCE_ID32 0
+#endif
+
+#ifndef CSM_FW_SOURCE_ID64
+#define CSM_FW_SOURCE_ID64 0ULL
+#endif
+
+#ifndef CSM_FW_RUNTIME_CONTRACT_ID64
+#define CSM_FW_RUNTIME_CONTRACT_ID64 0ULL
+#endif
+
+#ifndef CSM_FW_RUNTIME_CONTRACT_ID32
+#define CSM_FW_RUNTIME_CONTRACT_ID32 0
+#endif
+
 #ifndef BOARD_WIFI_AP_SSID
 #define BOARD_WIFI_AP_SSID "VSM-CSM-DEV"
 #endif
@@ -56,6 +78,10 @@
 
 #ifndef BOARD_WIFI_AP_CHANNEL
 #define BOARD_WIFI_AP_CHANNEL 6
+#endif
+
+#ifndef BOARD_WIFI_MAIN_IDLE_SLICE_MS
+#define BOARD_WIFI_MAIN_IDLE_SLICE_MS 1
 #endif
 
 #ifndef BOARD_HW_PROFILE_MID_TJA1051_DUAL
@@ -86,8 +112,21 @@
 #define BOARD_CSM_PROFILE_PASSIVE_PRODUCT 0
 #endif
 
+#ifndef BOARD_CSM_PROFILE_REMOTE_PRODUCT
+#define BOARD_CSM_PROFILE_REMOTE_PRODUCT 0
+#endif
+
 #ifndef BOARD_CSM_PROFILE_FULL_INSTRUMENTED
-#define BOARD_CSM_PROFILE_FULL_INSTRUMENTED (!BOARD_CSM_PROFILE_PASSIVE_PRODUCT)
+#define BOARD_CSM_PROFILE_FULL_INSTRUMENTED \
+  (!BOARD_CSM_PROFILE_PASSIVE_PRODUCT && !BOARD_CSM_PROFILE_REMOTE_PRODUCT)
+#endif
+
+#ifndef BOARD_ENABLE_REMOTE_CONTROL
+#define BOARD_ENABLE_REMOTE_CONTROL BOARD_CSM_PROFILE_REMOTE_PRODUCT
+#endif
+
+#ifndef BOARD_ENABLE_REMOTE_AUTHORITY
+#define BOARD_ENABLE_REMOTE_AUTHORITY BOARD_ENABLE_REMOTE_CONTROL
 #endif
 
 #ifndef BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE
@@ -240,6 +279,9 @@
 #ifndef BOARD_CAPABILITY_PERIOD_MS
 #define BOARD_CAPABILITY_PERIOD_MS 2000
 #endif
+#ifndef BOARD_ENABLE_PERIODIC_CAPABILITY
+#define BOARD_ENABLE_PERIODIC_CAPABILITY 1
+#endif
 
 #ifndef BOARD_UPLINK_BOOT_QUIET_MS
 #define BOARD_UPLINK_BOOT_QUIET_MS 2000
@@ -321,8 +363,40 @@
 #define BOARD_ENABLE_HOST_CAN_TX_MCP2515 0
 #endif
 
+#ifndef BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX
+#define BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX 0
+#endif
+
+#ifndef BOARD_ENABLE_MDPS_BENCH_MAPPING
+#define BOARD_ENABLE_MDPS_BENCH_MAPPING 0
+#endif
+
+// A remote input pipeline is not, by itself, a vehicle-control capability.
+// Product/local CAN TX is advertised only when an explicit vehicle mapping is
+// selected and the diagnostic safety interlock has not suppressed output.
+#define BOARD_REMOTE_LOCAL_CAN_TX_ENABLED \
+  (BOARD_ENABLE_REMOTE_CONTROL && BOARD_ENABLE_MDPS_BENCH_MAPPING && \
+   !BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX)
+
+#ifndef BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS
+#define BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS 100
+#endif
+
+#ifndef BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US
+#define BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US 5000
+#endif
+
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
-#define BOARD_ENABLE_BUILTIN_CAN_LANE (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN)
+#define BOARD_APPLICATION_CAN_DATA_TX_ENABLED                               \
+  (BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_ENABLE_MCP2515_TX_TEST ||          \
+   BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)
+#define BOARD_ENABLE_BUILTIN_CAN_LANE \
+  (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || \
+   BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL)
+
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS && !BOARD_ENABLE_BUILTIN_CAN_LANE
+#error "Runtime diagnostics require the built-in FDCAN lane"
+#endif
 
 #ifndef BOARD_ENABLE_HOST_DOWNLINK
 #define BOARD_ENABLE_HOST_DOWNLINK BOARD_ENABLE_HOST_CAN_TX_ANY
@@ -436,6 +510,7 @@
 #if BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515
 #error "Passive Product must compile out host CAN TX paths"
 #endif
+
 #if BOARD_ENABLE_HOST_DOWNLINK
 #error "Passive Product must compile out HostDownlinkParser processing"
 #endif
@@ -456,6 +531,21 @@
 #endif
 #if !BOARD_ENABLE_BUILTIN_CAN_RX
 #error "Passive Product must expose both vehicle CAN buses; fewer than two RX buses is invalid"
+#endif
+#endif
+
+#if BOARD_CSM_PROFILE_REMOTE_PRODUCT
+#if !BOARD_ENABLE_REMOTE_CONTROL || !BOARD_ENABLE_REMOTE_AUTHORITY
+#error "Remote Product requires the RC frontend and authority boundary"
+#endif
+#if BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515
+#error "Remote Product keeps app/host control compiled out; use a separately qualified service profile"
+#endif
+#if BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
+#error "Remote Product must compile out CAN TX test paths"
+#endif
+#if !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#error "Remote Product requires the built-in vehicle CAN control lane"
 #endif
 #endif
 
@@ -480,6 +570,7 @@ static constexpr bool kTestMode = false;
 static constexpr uint8_t kFirmwareProfileUnknown = 0;
 static constexpr uint8_t kFirmwareProfilePassiveProduct = 1;
 static constexpr uint8_t kFirmwareProfileFullInstrumented = 2;
+static constexpr uint8_t kFirmwareProfileRemoteProduct = 3;
 static constexpr uint8_t kProfileLockCompileTime = 1;
 static constexpr uint8_t kVehicleImpactUnknown = 0;
 static constexpr uint8_t kVehicleImpactPossible = 1;
@@ -530,6 +621,7 @@ using csm::kBoardHealthV8PayloadLen;
 using csm::kBoardHealthV9PayloadLen;
 using csm::kBoardHealthV10PayloadLen;
 using csm::kBoardHealthV11PayloadLen;
+using csm::kBoardHealthV13PayloadLen;
 using csm::kCanRxSegmentEntryLen;
 using csm::kCanRxSegmentHeaderLen;
 using csm::kCanRxSegmentMaxFrames;
@@ -594,6 +686,8 @@ enum BoardEventCode : uint16_t {
   EventCanFrontendFaultHold = csm::kBoardEventCanFrontendFaultHoldCode,
   EventWifiTxBackpressure = csm::kBoardEventWifiTxBackpressureCode,
   EventRuntimeBreadcrumbRecovered = csm::kBoardEventRuntimeBreadcrumbRecoveredCode,
+  EventRemoteControlInitFailed = csm::kBoardEventRemoteControlInitFailedCode,
+  EventRemoteControlStateChanged = csm::kBoardEventRemoteControlStateChangedCode,
 };
 
 enum RuntimeBreadcrumbStage : uint8_t {
@@ -627,6 +721,55 @@ struct RuntimeBreadcrumbSlot {
 
 static_assert(sizeof(RuntimeBreadcrumbSlot) == 32,
               "retained runtime breadcrumb must remain one cache line");
+
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+enum RuntimeDiagnosticBootPhase : uint8_t {
+  RuntimeDiagBootNone = 0,
+  RuntimeDiagBootSetupEnter = 1,
+  RuntimeDiagBootResetCaptured = 2,
+  RuntimeDiagBootSafetyWatchdogReady = 3,
+  RuntimeDiagBootUsbReady = 4,
+  RuntimeDiagBootWifiReady = 5,
+  RuntimeDiagBootPublisherReady = 6,
+  RuntimeDiagBootMcpInitEnter = 7,
+  RuntimeDiagBootMcpInitReturn = 8,
+  RuntimeDiagBootFdcanConstructEnter = 9,
+  RuntimeDiagBootFdcanConstructReturn = 10,
+  RuntimeDiagBootFdcan500kEnter = 11,
+  RuntimeDiagBootFdcan500kReturn = 12,
+  RuntimeDiagBootRemoteRuntimeEnter = 13,
+  RuntimeDiagBootRemoteRuntimeReturn = 14,
+  RuntimeDiagBootM4Issued = 15,
+  RuntimeDiagBootSetupComplete = 16,
+  RuntimeDiagBootFirstLoop = 17,
+};
+
+struct alignas(32) RuntimeDiagnosticRetainedSlot {
+  uint32_t magic;
+  uint32_t firmware_build_id;
+  uint32_t write_sequence;
+  uint32_t checksum;
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  uint32_t reserved[4];
+};
+
+static_assert(sizeof(RuntimeDiagnosticRetainedSlot) == 160,
+              "runtime diagnostic retained slot must cover five cache lines");
+
+struct RuntimeDiagnosticPendingTx {
+  bool active;
+  bool outcome_captured;
+  uint16_t reserved;
+  uint32_t request_mask;
+  uint32_t attempt_sequence;
+  uint32_t can_id_flags;
+  uint32_t started_us;
+  uint32_t write_duration_us;
+  int32_t write_result;
+  csm::board::can::BuiltinFdcanSnapshot before;
+  uint8_t outcome_payload[csm::kRuntimeDiagnosticPayloadLen];
+};
+#endif
 
 using CanRxItem = CanRxSegmentItem;
 
@@ -744,11 +887,29 @@ static Mcp2515ServiceState mcp_service = {};
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+using RuntimeDiagnosticCan = csm::board::can::BuiltinFdcanDiagnosticCan;
+alignas(RuntimeDiagnosticCan) static uint8_t
+    runtime_diagnostic_can_storage[sizeof(RuntimeDiagnosticCan)];
+static RuntimeDiagnosticCan* runtime_diagnostic_can = nullptr;
+static csm::board::can::BuiltinFdcanDiagnostics builtin_fdcan_diagnostics;
+
+static bool construct_builtin_can_for_runtime_diagnostics() {
+  if (runtime_diagnostic_can != nullptr) return builtin_fdcan_diagnostics.valid();
+  runtime_diagnostic_can =
+      new (runtime_diagnostic_can_storage) RuntimeDiagnosticCan(PIN_CAN0_RX, PIN_CAN0_TX);
+  return builtin_fdcan_diagnostics.attach(*runtime_diagnostic_can);
+}
+
+static mbed::CAN& builtin_can_ref() { return *runtime_diagnostic_can; }
+#else
 static mbed::CAN builtin_can(PIN_CAN0_RX, PIN_CAN0_TX);
+static mbed::CAN& builtin_can_ref() { return builtin_can; }
+#endif
 static bool builtin_can_tx_ok = false;
 #endif
 
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
 static uint32_t builtin_can_tx_total = 0;
 static uint32_t builtin_can_tx_failed_total = 0;
 #endif
@@ -796,6 +957,13 @@ static bool field_power_prev = true;
 static bool estop_prev = false;
 static csm::board::SafetySupervisor safety_supervisor;
 static SafetyState safety_state = SafetyState::MonitorOnly;
+#if BOARD_ENABLE_REMOTE_CONTROL
+static csm::board::control::RemoteControlRuntime remote_control_runtime;
+static bool remote_control_runtime_ok = false;
+static uint32_t last_remote_state_emit_ms = 0;
+static uint32_t remote_state_transition_total = 0;
+static uint16_t last_remote_state_signature = 0xFFFFu;
+#endif
 
 static uint32_t last_health_ms = 0;
 static uint32_t last_capability_ms = 0;
@@ -828,8 +996,64 @@ static uint32_t main_loop_last_entry_us = 0;
 static uint32_t main_loop_max_gap_us = 0;
 static uint32_t boot_reset_cause_bits = 0;
 static uint32_t boot_reset_status_raw = 0;
-static volatile RuntimeBreadcrumbSlot retained_runtime_breadcrumb[2]
-    __attribute__((section(".keep.uninitialized"), used, aligned(32)));
+
+static bool prepare_boot_recovery_storage(void* context, void* storage,
+                                          size_t bytes);
+static void commit_boot_recovery_storage(void* context, const void* address,
+                                         size_t bytes);
+static void boot_recovery_barrier(void* context);
+
+static constexpr uintptr_t kBootRecoveryRetainedOffset = 512u;
+static constexpr uintptr_t kBootRecoveryRetainedAddress =
+    D3_BKPSRAM_BASE + kBootRecoveryRetainedOffset;
+static_assert(kBootRecoveryRetainedOffset +
+                      csm::board::diagnostics::BootRecovery::kRequiredStorageBytes <=
+                  4096u,
+              "boot recovery and deep diagnostics must fit backup SRAM");
+
+static csm::board::diagnostics::RuntimeSupervisor runtime_supervisor(
+    reinterpret_cast<void*>(kBootRecoveryRetainedAddress),
+    csm::board::diagnostics::BootRecovery::kRequiredStorageBytes,
+    csm::board::diagnostics::BootRecoveryConfig{30000u, 2u},
+    csm::board::diagnostics::RetainedStorageAdapter{
+        nullptr, prepare_boot_recovery_storage, commit_boot_recovery_storage,
+        boot_recovery_barrier});
+#if BOARD_ENABLE_WIFI_UPLINK
+static constexpr uintptr_t kWifiCallLatchRetainedOffset = 3072u;
+static constexpr uintptr_t kWifiCallLatchRetainedAddress =
+    D3_BKPSRAM_BASE + kWifiCallLatchRetainedOffset;
+static_assert(kBootRecoveryRetainedOffset +
+                      csm::board::diagnostics::BootRecovery::kRequiredStorageBytes <=
+                  kWifiCallLatchRetainedOffset,
+              "retained call latch must not overlap BootRecovery");
+static_assert(kWifiCallLatchRetainedOffset +
+                      csm::board::diagnostics::RetainedCallLatch::kRequiredStorageBytes <=
+                  4096u,
+              "retained call latch must fit backup SRAM");
+static csm::board::diagnostics::RetainedCallLatch wifi_call_latch(
+    reinterpret_cast<void*>(kWifiCallLatchRetainedAddress),
+    csm::board::diagnostics::RetainedCallLatch::kRequiredStorageBytes,
+    csm::board::diagnostics::RetainedStorageAdapter{
+        nullptr, prepare_boot_recovery_storage, commit_boot_recovery_storage,
+        boot_recovery_barrier});
+static csm::board::diagnostics::RetainedCallSnapshot
+    previous_wifi_call_latch{};
+#endif
+static bool runtime_watchdog_requested = false;
+static bool runtime_watchdog_start_called = false;
+static bool runtime_watchdog_start_succeeded = false;
+static bool runtime_watchdog_effective = false;
+static bool runtime_watchdog_timeout_matches = false;
+static uint32_t runtime_watchdog_observed_timeout_ms = 0;
+#if BOARD_ENABLE_WIFI_UPLINK
+static csm::board::uplink::WifiRuntimeMode requested_wifi_runtime_mode =
+    csm::board::uplink::WifiRuntimeMode::Disabled;
+static csm::board::uplink::WifiRuntimeMode effective_wifi_runtime_mode =
+    csm::board::uplink::WifiRuntimeMode::Disabled;
+#endif
+
+static volatile RuntimeBreadcrumbSlot* const retained_runtime_breadcrumb =
+    reinterpret_cast<volatile RuntimeBreadcrumbSlot*>(D3_BKPSRAM_BASE);
 static uint32_t runtime_breadcrumb_write_sequence = 0;
 static bool previous_runtime_breadcrumb_valid = false;
 static bool previous_runtime_breadcrumb_pending = false;
@@ -837,6 +1061,42 @@ static uint8_t previous_runtime_breadcrumb_stage = RuntimeStageIdle;
 static uint8_t previous_runtime_breadcrumb_detail = 0;
 static uint32_t previous_runtime_breadcrumb_uptime_ms = 0;
 static uint32_t previous_runtime_breadcrumb_sequence = 0;
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+static volatile RuntimeDiagnosticRetainedSlot* const retained_runtime_diagnostic =
+    reinterpret_cast<volatile RuntimeDiagnosticRetainedSlot*>(
+        D3_BKPSRAM_BASE + sizeof(RuntimeBreadcrumbSlot) * 2u);
+static_assert(sizeof(RuntimeBreadcrumbSlot) * 2u +
+                      sizeof(RuntimeDiagnosticRetainedSlot) * 2u <=
+                  4096u,
+              "runtime retained evidence must fit backup SRAM");
+static uint32_t runtime_diagnostic_retained_sequence = 0;
+static uint8_t runtime_diagnostic_previous_payload[csm::kRuntimeDiagnosticPayloadLen] = {};
+static bool runtime_diagnostic_previous_pending = false;
+static bool runtime_diagnostic_previous_different_build = false;
+static uint8_t runtime_diagnostic_boot_history[18][csm::kRuntimeDiagnosticPayloadLen] = {};
+static uint8_t runtime_diagnostic_boot_history_count = 0;
+static uint8_t runtime_diagnostic_boot_history_next = 0;
+static RuntimeDiagnosticBootPhase runtime_diagnostic_boot_phase = RuntimeDiagBootNone;
+static RuntimeBreadcrumbStage runtime_diagnostic_runtime_stage = RuntimeStageIdle;
+static uint8_t runtime_diagnostic_runtime_detail = 0;
+static uint32_t runtime_diagnostic_attempt_sequence = 0;
+static uint32_t runtime_diagnostic_last_can_id_flags = 0;
+static uint32_t runtime_diagnostic_last_write_duration_us = 0;
+static int32_t runtime_diagnostic_last_write_result = 0;
+static bool runtime_diagnostic_write_in_progress = false;
+static csm::board::can::BuiltinFdcanSnapshot runtime_diagnostic_before = {};
+static csm::board::can::BuiltinFdcanSnapshot runtime_diagnostic_after = {};
+static RuntimeDiagnosticPendingTx runtime_diagnostic_pending_tx[8] = {};
+static uint32_t runtime_diagnostic_last_periodic_ms = 0;
+static bool runtime_diagnostic_first_loop_recorded = false;
+static csm::board::diagnostics::BootRecoveryEvent
+    runtime_recovery_event_replay[
+        csm::board::diagnostics::BootRecovery::kEventSlotCount] = {};
+static uint8_t runtime_recovery_event_replay_count = 0;
+static uint8_t runtime_recovery_event_replay_next = 0;
+static uint32_t runtime_recovery_replay_last_ms = 0;
+static bool previous_wifi_call_latch_pending = false;
+#endif
 static uint32_t uplink_pool_high_water_bytes = 0;
 static uint32_t capture_invalid_reason = 0;
 static uint32_t host_absent_rx_discard_total[2] = {0, 0};
@@ -865,6 +1125,62 @@ static uint32_t last_can_frontend_init_attempt_ms = 0;
 
 static constexpr uint32_t kRuntimeBreadcrumbMagic = 0x43534D42u;  // "CSMB"
 static constexpr uint32_t kRuntimeBreadcrumbChecksumSeed = 0xA53C91E7u;
+
+static void __attribute__((unused)) clean_retained_dcache(
+    const volatile void* address, size_t length) {
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+  const void* const nonvolatile = const_cast<const void*>(address);
+  const uintptr_t raw_start = reinterpret_cast<uintptr_t>(nonvolatile);
+  const uintptr_t start = raw_start & ~static_cast<uintptr_t>(31u);
+  const uintptr_t end = (raw_start + length + 31u) & ~static_cast<uintptr_t>(31u);
+  SCB_CleanDCache_by_Addr(reinterpret_cast<uint32_t*>(start),
+                          static_cast<int32_t>(end - start));
+  __DSB();
+#else
+  (void)address;
+  (void)length;
+#endif
+}
+
+static void enable_runtime_retained_storage() {
+  RCC->AHB4ENR |= RCC_AHB4ENR_BKPRAMEN;
+  (void)RCC->AHB4ENR;
+  PWR->CR1 |= PWR_CR1_DBP;
+  PWR->CR2 |= PWR_CR2_BREN;
+  __DSB();
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+  SCB_InvalidateDCache_by_Addr(
+      reinterpret_cast<uint32_t*>(D3_BKPSRAM_BASE), 4096);
+  __DSB();
+#endif
+}
+
+static bool prepare_boot_recovery_storage(void* context, void* storage,
+                                          size_t bytes) {
+  (void)context;
+  const uintptr_t start = reinterpret_cast<uintptr_t>(storage);
+  const uintptr_t retained_start = static_cast<uintptr_t>(D3_BKPSRAM_BASE);
+  const uintptr_t retained_end = retained_start + 4096u;
+  if (start < retained_start || bytes > 4096u || start > retained_end - bytes) {
+    return false;
+  }
+  // This is the first retained-memory operation in setup(). It enables backup
+  // SRAM and invalidates stale cache lines before any recovery read.
+  enable_runtime_retained_storage();
+  return true;
+}
+
+static void commit_boot_recovery_storage(void* context, const void* address,
+                                         size_t bytes) {
+  (void)context;
+  clean_retained_dcache(address, bytes);
+}
+
+static void boot_recovery_barrier(void* context) {
+  (void)context;
+  __DMB();
+  __DSB();
+}
 
 static uint32_t runtime_breadcrumb_checksum(uint32_t firmware_build_id,
                                             uint32_t write_sequence,
@@ -909,6 +1225,10 @@ static void recover_runtime_breadcrumb() {
 
 static void record_runtime_breadcrumb(RuntimeBreadcrumbStage stage,
                                       uint8_t detail = 0) {
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_runtime_stage = stage;
+  runtime_diagnostic_runtime_detail = detail;
+#endif
   const uint32_t sequence = ++runtime_breadcrumb_write_sequence;
   volatile RuntimeBreadcrumbSlot& slot = retained_runtime_breadcrumb[sequence & 1u];
   const uint32_t uptime_ms = millis();
@@ -924,8 +1244,276 @@ static void record_runtime_breadcrumb(RuntimeBreadcrumbStage stage,
   slot.checksum = runtime_breadcrumb_checksum(
       slot.firmware_build_id, slot.write_sequence, slot.stage, slot.detail,
       slot.uptime_ms);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  clean_retained_dcache(&slot, sizeof(slot));
+#endif
   __DSB();
 }
+
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+static constexpr uint32_t kRuntimeDiagnosticMagic = 0x43534D44u;  // "CSMD"
+static constexpr uint32_t kRuntimeDiagnosticChecksumSeed = 2166136261u;
+
+static uint32_t runtime_diagnostic_checksum(uint32_t firmware_build_id,
+                                            uint32_t write_sequence,
+                                            const uint8_t* payload) {
+  uint32_t hash = kRuntimeDiagnosticChecksumSeed;
+  const uint32_t header[] = {kRuntimeDiagnosticMagic, firmware_build_id,
+                             write_sequence};
+  for (uint32_t word : header) {
+    for (uint8_t shift = 0; shift < 32; shift += 8) {
+      hash ^= static_cast<uint8_t>(word >> shift);
+      hash *= 16777619u;
+    }
+  }
+  for (uint16_t index = 0; index < csm::kRuntimeDiagnosticPayloadLen; ++index) {
+    hash ^= payload[index];
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+static bool runtime_diagnostic_slot_valid(
+    const volatile RuntimeDiagnosticRetainedSlot& slot) {
+  if (slot.magic != kRuntimeDiagnosticMagic) return false;
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  for (uint16_t index = 0; index < sizeof(payload); ++index) {
+    payload[index] = slot.payload[index];
+  }
+  return slot.checksum == runtime_diagnostic_checksum(
+                              slot.firmware_build_id, slot.write_sequence,
+                              payload);
+}
+
+static void recover_runtime_diagnostic() {
+  const bool valid0 = runtime_diagnostic_slot_valid(retained_runtime_diagnostic[0]);
+  const bool valid1 = runtime_diagnostic_slot_valid(retained_runtime_diagnostic[1]);
+  if (!valid0 && !valid1) return;
+
+  uint8_t selected = 0;
+  if (!valid0 ||
+      (valid1 && static_cast<int32_t>(retained_runtime_diagnostic[1].write_sequence -
+                                     retained_runtime_diagnostic[0].write_sequence) > 0)) {
+    selected = 1;
+  }
+  const volatile RuntimeDiagnosticRetainedSlot& slot =
+      retained_runtime_diagnostic[selected];
+  runtime_diagnostic_retained_sequence = slot.write_sequence;
+  for (uint16_t index = 0; index < csm::kRuntimeDiagnosticPayloadLen; ++index) {
+    runtime_diagnostic_previous_payload[index] = slot.payload[index];
+  }
+  runtime_diagnostic_previous_different_build =
+      slot.firmware_build_id != static_cast<uint32_t>(CSM_FW_BUILD_ID);
+  runtime_diagnostic_previous_pending = true;
+}
+
+static void runtime_diagnostic_write_registers(
+    uint8_t* payload, uint8_t offset,
+    const csm::board::can::BuiltinFdcanSnapshot& snapshot) {
+  const uint32_t registers[csm::kRuntimeDiagnosticRegisterCount] = {
+      snapshot.cccr, snapshot.psr, snapshot.ecr, snapshot.txfqs,
+      snapshot.txbrp, snapshot.txbto, snapshot.txbcf, snapshot.ir};
+  for (uint8_t index = 0; index < csm::kRuntimeDiagnosticRegisterCount; ++index) {
+    wr_u32_le(&payload[offset + index * 4u], registers[index]);
+  }
+}
+
+static uint8_t runtime_diagnostic_flags(
+    const csm::board::can::BuiltinFdcanSnapshot& after,
+    int32_t write_result, bool write_in_progress,
+    bool recovered = false, bool different_build = false) {
+  uint8_t flags = 0;
+  if (after.valid) flags |= csm::kRuntimeDiagnosticFlagFdcanValid;
+  if (write_in_progress) flags |= csm::kRuntimeDiagnosticFlagWriteInProgress;
+  if (write_result > 0) flags |= csm::kRuntimeDiagnosticFlagWriteAccepted;
+  if (after.valid && after.latest_tx_request_mask != 0) {
+    const uint32_t mask = after.latest_tx_request_mask;
+    if ((after.txbto & mask) != 0) flags |= csm::kRuntimeDiagnosticFlagTxOccurred;
+    if ((after.txbrp & mask) != 0) flags |= csm::kRuntimeDiagnosticFlagTxPending;
+    if ((after.txbcf & mask) != 0) flags |= csm::kRuntimeDiagnosticFlagTxCancelled;
+  }
+  if (recovered) flags |= csm::kRuntimeDiagnosticFlagRecovered;
+  if (different_build) flags |= csm::kRuntimeDiagnosticFlagDifferentBuild;
+  return flags;
+}
+
+static void runtime_diagnostic_make_payload(
+    uint8_t* payload, uint8_t phase, uint32_t attempt_sequence,
+    uint32_t can_id_flags, uint32_t write_duration_us, int32_t write_result,
+    bool write_in_progress,
+    const csm::board::can::BuiltinFdcanSnapshot& before,
+    const csm::board::can::BuiltinFdcanSnapshot& after) {
+  memset(payload, 0, csm::kRuntimeDiagnosticPayloadLen);
+  wr_u64_le(&payload[csm::kRuntimeDiagnosticMonoUsOffset], mono64_us());
+  payload[csm::kRuntimeDiagnosticSchemaOffset] = csm::kRuntimeDiagnosticSchema;
+  payload[csm::kRuntimeDiagnosticPhaseOffset] = phase;
+  payload[csm::kRuntimeDiagnosticBootPhaseOffset] =
+      static_cast<uint8_t>(runtime_diagnostic_boot_phase);
+  payload[csm::kRuntimeDiagnosticFlagsOffset] =
+      runtime_diagnostic_flags(after, write_result, write_in_progress);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticAttemptSequenceOffset], attempt_sequence);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticCanIdFlagsOffset], can_id_flags);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWriteDurationUsOffset], write_duration_us);
+  wr_i32_le(&payload[csm::kRuntimeDiagnosticWriteResultOffset], write_result);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticLatestTxRequestMaskOffset],
+            after.valid ? after.latest_tx_request_mask
+                        : before.latest_tx_request_mask);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticHalStateOffset],
+            after.valid ? after.hal_state : before.hal_state);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticHalErrorOffset],
+            after.valid ? after.hal_error : before.hal_error);
+  const csm::board::can::BuiltinFdcanSnapshot& fdcan =
+      phase == csm::kRuntimeDiagnosticPhaseTxWriteBefore ? before : after;
+  runtime_diagnostic_write_registers(
+      payload, csm::kRuntimeDiagnosticFdcanRegistersOffset, fdcan);
+  wr_u64_le(&payload[csm::kRuntimeDiagnosticBootSessionOffset],
+            canonical_publisher.bootSessionId());
+  const uint32_t runtime_stage =
+      static_cast<uint32_t>(runtime_diagnostic_runtime_stage) |
+      (static_cast<uint32_t>(runtime_diagnostic_runtime_detail) << 8u) |
+      ((runtime_breadcrumb_write_sequence & 0xFFFFu) << 16u);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRuntimeStageOffset], runtime_stage);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticFirmwareBuildIdOffset], CSM_FW_BUILD_ID);
+#if BOARD_ENABLE_WIFI_UPLINK
+  const csm::board::uplink::WifiWorkerCallSnapshot wifi_call =
+      wifi_tcp_sink.workerCallSnapshot();
+  const csm::board::uplink::WifiWorkerStateSnapshot wifi_state =
+      wifi_tcp_sink.workerStateSnapshot();
+  payload[csm::kRuntimeDiagnosticWifiCallPhaseOffset] =
+      static_cast<uint8_t>(wifi_call.phase);
+  uint8_t wifi_flags = 0;
+  if (wifi_call.in_progress) {
+    wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagInProgress;
+  }
+  if (wifi_tcp_sink.connected()) {
+    wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagSinkConnected;
+  }
+  const uint32_t wifi_heartbeat_age_ms =
+      wifi_tcp_sink.workerHeartbeatAgeMs(millis());
+  if (wifi_heartbeat_age_ms >= BOARD_WIFI_CALL_STALL_TIMEOUT_MS) {
+    wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagWorkerHeartbeatStale;
+  }
+  if (wifi_state.running) {
+    wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagWorkerRunning;
+  }
+  if (wifi_state.network_ready) {
+    wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagNetworkReady;
+  }
+  payload[csm::kRuntimeDiagnosticWifiCallFlagsOffset] = wifi_flags;
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallSequenceOffset],
+            wifi_call.sequence);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallStartedMsOffset],
+            wifi_call.started_ms);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallDurationUsOffset],
+            wifi_call.duration_us);
+  wr_i32_le(&payload[csm::kRuntimeDiagnosticWifiCallResultOffset],
+            wifi_call.result);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiWorkerHeartbeatAgeMsOffset],
+            wifi_heartbeat_age_ms);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallStallTotalOffset],
+            wifi_tcp_sink.counters().tx_worker_stall_total);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiConnectionEpochOffset],
+            wifi_tcp_sink.counters().connection_epoch);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiWorkerStackFreeOffset],
+            wifi_state.stack_free_bytes);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiWorkerStackMaxUsedOffset],
+            wifi_state.stack_max_used_bytes);
+#endif
+}
+
+static void runtime_diagnostic_commit_payload(const uint8_t* payload) {
+  const uint32_t sequence = ++runtime_diagnostic_retained_sequence;
+  volatile RuntimeDiagnosticRetainedSlot& slot =
+      retained_runtime_diagnostic[sequence & 1u];
+  slot.checksum = 0;
+  slot.magic = kRuntimeDiagnosticMagic;
+  slot.firmware_build_id = static_cast<uint32_t>(CSM_FW_BUILD_ID);
+  slot.write_sequence = sequence;
+  for (uint16_t index = 0; index < csm::kRuntimeDiagnosticPayloadLen; ++index) {
+    slot.payload[index] = payload[index];
+  }
+  for (uint8_t index = 0; index < 4; ++index) slot.reserved[index] = 0;
+  __DMB();
+  slot.checksum = runtime_diagnostic_checksum(
+      slot.firmware_build_id, slot.write_sequence, payload);
+  __DMB();
+  clean_retained_dcache(&slot, sizeof(slot));
+}
+
+static void runtime_diagnostic_boot_checkpoint(RuntimeDiagnosticBootPhase phase) {
+  runtime_diagnostic_boot_phase = phase;
+  const csm::board::can::BuiltinFdcanSnapshot current =
+      builtin_fdcan_diagnostics.snapshot();
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  runtime_diagnostic_make_payload(
+      payload, csm::kRuntimeDiagnosticPhaseBoot,
+      runtime_diagnostic_attempt_sequence, runtime_diagnostic_last_can_id_flags,
+      runtime_diagnostic_last_write_duration_us,
+      runtime_diagnostic_last_write_result, false, current, current);
+  runtime_diagnostic_commit_payload(payload);
+  if (runtime_diagnostic_boot_history_count <
+      static_cast<uint8_t>(sizeof(runtime_diagnostic_boot_history) /
+                           sizeof(runtime_diagnostic_boot_history[0]))) {
+    memcpy(runtime_diagnostic_boot_history[runtime_diagnostic_boot_history_count],
+           payload, sizeof(payload));
+    ++runtime_diagnostic_boot_history_count;
+  }
+}
+
+static void runtime_diagnostic_before_can_write(uint32_t can_id_flags) {
+  runtime_diagnostic_last_can_id_flags = can_id_flags;
+  runtime_diagnostic_last_write_duration_us = 0;
+  runtime_diagnostic_last_write_result = INT32_MIN;
+  runtime_diagnostic_write_in_progress = true;
+  ++runtime_diagnostic_attempt_sequence;
+  runtime_diagnostic_before = builtin_fdcan_diagnostics.snapshot();
+  runtime_diagnostic_after = runtime_diagnostic_before;
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  runtime_diagnostic_make_payload(
+      payload, csm::kRuntimeDiagnosticPhaseTxWriteBefore,
+      runtime_diagnostic_attempt_sequence, can_id_flags, 0, INT32_MIN, true,
+      runtime_diagnostic_before, runtime_diagnostic_before);
+  runtime_diagnostic_commit_payload(payload);
+}
+
+static void runtime_diagnostic_after_can_write(uint32_t started_us,
+                                               int32_t write_result) {
+  runtime_diagnostic_last_write_duration_us = micros() - started_us;
+  runtime_diagnostic_last_write_result = write_result;
+  runtime_diagnostic_write_in_progress = false;
+  runtime_diagnostic_after = builtin_fdcan_diagnostics.snapshot();
+  if (write_result <= 0) {
+    runtime_diagnostic_after.latest_tx_request_mask = 0;
+  }
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  runtime_diagnostic_make_payload(
+      payload, csm::kRuntimeDiagnosticPhaseTxWriteReturn,
+      runtime_diagnostic_attempt_sequence, runtime_diagnostic_last_can_id_flags,
+      runtime_diagnostic_last_write_duration_us, write_result, false,
+      runtime_diagnostic_before, runtime_diagnostic_after);
+  runtime_diagnostic_commit_payload(payload);
+
+  RuntimeDiagnosticPendingTx* free_slot = nullptr;
+  for (RuntimeDiagnosticPendingTx& pending : runtime_diagnostic_pending_tx) {
+    if (!pending.active) {
+      free_slot = &pending;
+      break;
+    }
+  }
+  if (free_slot == nullptr) {
+    free_slot = &runtime_diagnostic_pending_tx[0];
+  }
+  free_slot->active = true;
+  free_slot->outcome_captured = false;
+  free_slot->request_mask = runtime_diagnostic_after.latest_tx_request_mask;
+  free_slot->attempt_sequence = runtime_diagnostic_attempt_sequence;
+  free_slot->can_id_flags = runtime_diagnostic_last_can_id_flags;
+  free_slot->started_us = started_us;
+  free_slot->write_duration_us = runtime_diagnostic_last_write_duration_us;
+  free_slot->write_result = write_result;
+  free_slot->before = runtime_diagnostic_before;
+}
+#endif
 
 static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -938,6 +1526,8 @@ static void __attribute__((unused)) latch_passive_violation(uint32_t mask) {
 static uint8_t firmware_profile_id() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   return kFirmwareProfilePassiveProduct;
+#elif BOARD_CSM_PROFILE_REMOTE_PRODUCT
+  return kFirmwareProfileRemoteProduct;
 #elif BOARD_CSM_PROFILE_FULL_INSTRUMENTED
   return kFirmwareProfileFullInstrumented;
 #else
@@ -1173,6 +1763,13 @@ static bool should_suppress_low_value_record(RecordType type, UplinkPriority pri
   if (priority != UplinkPriority::Diagnostic) {
     return false;
   }
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  if (type == RecordType::RuntimeDiagnostic) {
+    // The first FDCAN outcomes are the evidence under test. Keep the bounded
+    // diagnostic lane active during boot, but still yield under real pressure.
+    return uplink_tx_pressure_active();
+  }
+#endif
   return uplink_boot_quiet_active() || uplink_tx_pressure_active();
 }
 
@@ -1189,22 +1786,323 @@ static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
   return emit_record(type, payload, len, csm::board::uplink::default_priority_for_record(type), flags);
 }
 
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+static void service_runtime_diagnostic_recovery_replay() {
+  if (!uplink_host_session_open()) return;
+
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (previous_wifi_call_latch_pending) {
+    uint8_t payload[csm::kRuntimeDiagnosticPayloadLen] = {};
+    wr_u64_le(&payload[csm::kRuntimeDiagnosticMonoUsOffset], mono64_us());
+    payload[csm::kRuntimeDiagnosticSchemaOffset] =
+        csm::kRuntimeDiagnosticSchema;
+    payload[csm::kRuntimeDiagnosticPhaseOffset] =
+        csm::kRuntimeDiagnosticPhaseRecoveredWifiCall;
+    payload[csm::kRuntimeDiagnosticBootPhaseOffset] =
+        static_cast<uint8_t>(previous_wifi_call_latch.owner);
+    payload[csm::kRuntimeDiagnosticFlagsOffset] =
+        csm::kRuntimeDiagnosticFlagRecovered;
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveredCallBootSequenceOffset],
+              previous_wifi_call_latch.boot_sequence);
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveredCallCompletedMsOffset],
+              previous_wifi_call_latch.completed_uptime_ms);
+    wr_u64_le(&payload[csm::kRuntimeDiagnosticRecoveredCallContractIdOffset],
+              previous_wifi_call_latch.runtime_contract_id);
+    payload[csm::kRuntimeDiagnosticWifiCallPhaseOffset] =
+        static_cast<uint8_t>(previous_wifi_call_latch.operation);
+    uint8_t call_flags = csm::kRuntimeDiagnosticWifiCallFlagRecovered;
+    if (previous_wifi_call_latch.in_progress) {
+      call_flags |= csm::kRuntimeDiagnosticWifiCallFlagInProgress;
+    }
+    if (previous_wifi_call_latch.completed) {
+      call_flags |= csm::kRuntimeDiagnosticWifiCallFlagCompleted;
+    }
+    if (previous_wifi_call_latch.contract_changed) {
+      call_flags |= csm::kRuntimeDiagnosticWifiCallFlagContractChanged;
+    }
+    payload[csm::kRuntimeDiagnosticWifiCallFlagsOffset] = call_flags;
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallSequenceOffset],
+              previous_wifi_call_latch.call_sequence);
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallStartedMsOffset],
+              previous_wifi_call_latch.started_uptime_ms);
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticWifiCallDurationUsOffset],
+              previous_wifi_call_latch.duration_us);
+    wr_i32_le(&payload[csm::kRuntimeDiagnosticWifiCallResultOffset],
+              previous_wifi_call_latch.result);
+    wr_u64_le(&payload[csm::kRuntimeDiagnosticBootSessionOffset],
+              canonical_publisher.bootSessionId());
+    wr_u32_le(&payload[csm::kRuntimeDiagnosticFirmwareBuildIdOffset],
+              CSM_FW_BUILD_ID);
+    if (emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+                    UplinkPriority::Critical)) {
+      previous_wifi_call_latch_pending = false;
+    }
+    return;
+  }
+#endif
+
+  if (runtime_recovery_event_replay_next >=
+      runtime_recovery_event_replay_count) {
+    return;
+  }
+  const uint32_t now_ms = millis();
+  if (static_cast<uint32_t>(now_ms - runtime_recovery_replay_last_ms) < 20u) {
+    return;
+  }
+  const csm::board::diagnostics::BootRecoveryEvent& event =
+      runtime_recovery_event_replay[runtime_recovery_event_replay_next];
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen] = {};
+  wr_u64_le(&payload[csm::kRuntimeDiagnosticMonoUsOffset], mono64_us());
+  payload[csm::kRuntimeDiagnosticSchemaOffset] = csm::kRuntimeDiagnosticSchema;
+  payload[csm::kRuntimeDiagnosticPhaseOffset] =
+      csm::kRuntimeDiagnosticPhaseRecoveryEvent;
+  payload[csm::kRuntimeDiagnosticRecoveryEventTypeOffset] =
+      static_cast<uint8_t>(event.type);
+  payload[csm::kRuntimeDiagnosticFlagsOffset] =
+      csm::kRuntimeDiagnosticFlagRecovered;
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventSequenceOffset],
+            event.sequence);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventBootSequenceOffset],
+            event.boot_sequence);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventUptimeMsOffset],
+            event.uptime_ms);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventValueOffset],
+            event.value);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventCodeOffset],
+            event.code);
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticRecoveryEventIdentityTagOffset],
+            event.firmware_identity_tag);
+  wr_u64_le(&payload[csm::kRuntimeDiagnosticBootSessionOffset],
+            canonical_publisher.bootSessionId());
+  wr_u32_le(&payload[csm::kRuntimeDiagnosticFirmwareBuildIdOffset],
+            CSM_FW_BUILD_ID);
+  if (emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+                  UplinkPriority::Diagnostic)) {
+    ++runtime_recovery_event_replay_next;
+    runtime_recovery_replay_last_ms = now_ms;
+  }
+}
+
+static void service_runtime_diagnostic_recovered() {
+  if (!runtime_diagnostic_previous_pending || !uplink_host_session_open()) return;
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  memcpy(payload, runtime_diagnostic_previous_payload, sizeof(payload));
+  payload[csm::kRuntimeDiagnosticPhaseOffset] =
+      csm::kRuntimeDiagnosticPhaseRecovered;
+  payload[csm::kRuntimeDiagnosticFlagsOffset] |=
+      csm::kRuntimeDiagnosticFlagRecovered;
+  if (runtime_diagnostic_previous_different_build) {
+    payload[csm::kRuntimeDiagnosticFlagsOffset] |=
+        csm::kRuntimeDiagnosticFlagDifferentBuild;
+  }
+  if (emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+                  UplinkPriority::Critical)) {
+    runtime_diagnostic_previous_pending = false;
+  }
+}
+
+static void service_runtime_diagnostic_boot_history() {
+  if (runtime_diagnostic_boot_history_next >=
+      runtime_diagnostic_boot_history_count || !uplink_host_session_open()) {
+    return;
+  }
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  memcpy(payload, runtime_diagnostic_boot_history[runtime_diagnostic_boot_history_next],
+         sizeof(payload));
+  wr_u64_le(&payload[csm::kRuntimeDiagnosticBootSessionOffset],
+            canonical_publisher.bootSessionId());
+  if (emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+                  UplinkPriority::Diagnostic)) {
+    ++runtime_diagnostic_boot_history_next;
+  }
+}
+
+static void service_runtime_diagnostic_tx_outcomes() {
+  const csm::board::can::BuiltinFdcanSnapshot current =
+      builtin_fdcan_diagnostics.snapshot();
+  const uint32_t now_us = micros();
+  for (RuntimeDiagnosticPendingTx& pending : runtime_diagnostic_pending_tx) {
+    if (!pending.active) continue;
+
+    if (!pending.outcome_captured) {
+      csm::board::can::BuiltinFdcanSnapshot outcome = current;
+      outcome.latest_tx_request_mask = pending.request_mask;
+      bool final = pending.write_result <= 0 || pending.request_mask == 0 ||
+                   (pending.request_mask & ~0x7u) != 0 || !outcome.valid;
+      if (outcome.valid && pending.request_mask != 0 &&
+          (pending.request_mask & ~0x7u) == 0) {
+        const uint32_t mask = pending.request_mask;
+        const bool occurred = (outcome.txbto & mask) != 0;
+        const bool cancelled = (outcome.txbcf & mask) != 0;
+        const bool still_pending = (outcome.txbrp & mask) != 0;
+        final = occurred || cancelled || !still_pending ||
+                static_cast<uint32_t>(now_us - pending.started_us) >=
+                    BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US;
+      }
+      if (!final) continue;
+
+      runtime_diagnostic_make_payload(
+          pending.outcome_payload, csm::kRuntimeDiagnosticPhaseTxOutcome,
+          pending.attempt_sequence, pending.can_id_flags,
+          pending.write_duration_us, pending.write_result, false,
+          pending.before, outcome);
+      runtime_diagnostic_commit_payload(pending.outcome_payload);
+      pending.outcome_captured = true;
+    }
+
+    if (emit_record(RecordType::RuntimeDiagnostic, pending.outcome_payload,
+                    sizeof(pending.outcome_payload), UplinkPriority::Diagnostic)) {
+      pending.active = false;
+      pending.outcome_captured = false;
+    }
+  }
+}
+
+static void service_runtime_diagnostics() {
+  service_runtime_diagnostic_recovery_replay();
+  service_runtime_diagnostic_recovered();
+  service_runtime_diagnostic_boot_history();
+  service_runtime_diagnostic_tx_outcomes();
+
+  const uint32_t now_ms = millis();
+  if (static_cast<uint32_t>(now_ms - runtime_diagnostic_last_periodic_ms) <
+      BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS) {
+    return;
+  }
+  runtime_diagnostic_last_periodic_ms = now_ms;
+  const csm::board::can::BuiltinFdcanSnapshot current =
+      builtin_fdcan_diagnostics.snapshot();
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  runtime_diagnostic_make_payload(
+      payload, csm::kRuntimeDiagnosticPhasePeriodic,
+      runtime_diagnostic_attempt_sequence, runtime_diagnostic_last_can_id_flags,
+      runtime_diagnostic_last_write_duration_us,
+      runtime_diagnostic_last_write_result,
+      runtime_diagnostic_write_in_progress, current, current);
+  runtime_diagnostic_commit_payload(payload);
+  emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+              UplinkPriority::Diagnostic);
+}
+#endif
+
 #if BOARD_ENABLE_STATUS_LED
 static void init_status_led() {
   status_led.begin();
 }
 
+static bool required_can_lanes_ok() {
+  bool any_required = false;
+  bool all_ready = true;
+#if BOARD_ENABLE_MCP2515_INIT
+  any_required = true;
+  all_ready = all_ready && can_backend_ok;
+#endif
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  any_required = true;
+  all_ready = all_ready && builtin_can_tx_ok;
+#endif
+  return any_required && all_ready;
+}
+
 static void service_status_led() {
-  status_led.service(can_backend_ok);
+  status_led.service(required_can_lanes_ok());
 }
 #else
 static void init_status_led() {}
 static void service_status_led() {}
 #endif
 
+static void record_boot_progress(csm::board::diagnostics::BootProgress progress,
+                                 uint32_t detail = 0) {
+  runtime_supervisor.recordProgress(progress, detail, millis());
+}
+
+#if BOARD_ENABLE_WIFI_UPLINK
+static csm::board::uplink::WifiRuntimeMode to_wifi_runtime_mode(
+    csm::board::diagnostics::ResetExperimentWifiRuntimeMode selected) {
+  using ExperimentMode =
+      csm::board::diagnostics::ResetExperimentWifiRuntimeMode;
+  using RuntimeMode = csm::board::uplink::WifiRuntimeMode;
+  switch (selected) {
+    case ExperimentMode::Off:
+      return RuntimeMode::Disabled;
+    case ExperimentMode::ApOnly:
+      return RuntimeMode::AccessPointOnly;
+    case ExperimentMode::Full:
+      return RuntimeMode::FullTcp;
+  }
+  return RuntimeMode::Disabled;
+}
+#endif
+
+#if BOARD_ENABLE_WIFI_UPLINK
+static constexpr uint16_t kRetainedCallOwnerWifiVendor = 1u;
+
+static void persist_wifi_call_enter(void* context, uint8_t operation,
+                                    uint32_t sequence,
+                                    uint32_t started_ms) {
+  if (context == nullptr) return;
+  static_cast<csm::board::diagnostics::RetainedCallLatch*>(context)->enter(
+      kRetainedCallOwnerWifiVendor, operation, sequence, started_ms);
+}
+
+static void persist_wifi_call_leave(void* context, int32_t result,
+                                    uint32_t duration_us,
+                                    uint32_t completed_ms) {
+  if (context == nullptr) return;
+  static_cast<csm::board::diagnostics::RetainedCallLatch*>(context)->leave(
+      result, duration_us, completed_ms);
+}
+#endif
+
+static void service_boot_recovery() {
+  const uint32_t now_ms = millis();
+  csm::board::diagnostics::RuntimeSupervisorObservation observation;
+  observation.now_ms = now_ms;
+  observation.watchdog_effective = runtime_watchdog_effective;
+  observation.watchdog_start_succeeded = runtime_watchdog_start_succeeded;
+  observation.watchdog_timeout_matches = runtime_watchdog_timeout_matches;
+
+#if BOARD_ENABLE_WIFI_UPLINK
+  const csm::board::uplink::WifiWorkerCallSnapshot wifi_call =
+      wifi_tcp_sink.workerCallSnapshot();
+  observation.wifi_present = true;
+  observation.wifi_call_phase = static_cast<uint8_t>(wifi_call.phase);
+  observation.wifi_call_in_progress = wifi_call.in_progress;
+  observation.wifi_call_slow =
+      wifi_call.in_progress &&
+      static_cast<uint32_t>(now_ms - wifi_call.started_ms) >=
+          BOARD_WIFI_CALL_STALL_TIMEOUT_MS;
+  observation.wifi_call_sequence = wifi_call.sequence;
+  observation.wifi_worker_heartbeat_age_ms =
+      wifi_tcp_sink.workerHeartbeatAgeMs(now_ms);
+#endif
+  runtime_supervisor.service(observation);
+}
+
 static void init_runtime_watchdog() {
+  runtime_watchdog_start_called = false;
+  runtime_watchdog_start_succeeded = false;
+  runtime_watchdog_effective = false;
+  runtime_watchdog_timeout_matches = false;
+  runtime_watchdog_observed_timeout_ms = 0;
 #if BOARD_ENABLE_RUNTIME_WATCHDOG
-  mbed::Watchdog::get_instance().start(BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS);
+  mbed::Watchdog& watchdog = mbed::Watchdog::get_instance();
+  if (runtime_watchdog_requested) {
+    runtime_watchdog_start_called = true;
+    runtime_watchdog_start_succeeded =
+        watchdog.start(BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS);
+  }
+  runtime_watchdog_effective = watchdog.is_running();
+  if (runtime_watchdog_effective) {
+    runtime_watchdog_observed_timeout_ms = watchdog.get_timeout();
+    runtime_watchdog_timeout_matches =
+        runtime_watchdog_requested &&
+        runtime_watchdog_observed_timeout_ms ==
+            BOARD_RUNTIME_WATCHDOG_TIMEOUT_MS;
+  }
+#else
+  runtime_watchdog_requested = false;
 #endif
 }
 
@@ -1301,7 +2199,7 @@ static void capture_boot_reset_cause() {
 
 static void kick_runtime_watchdog() {
 #if BOARD_ENABLE_RUNTIME_WATCHDOG
-  mbed::Watchdog::get_instance().kick();
+  if (runtime_watchdog_effective) mbed::Watchdog::get_instance().kick();
 #endif
 }
 
@@ -1443,7 +2341,7 @@ static void emit_capability() {
 #if BOARD_ENABLE_BUILTIN_CAN_RX
   lane_flags |= (1u << 1);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
   lane_flags |= (1u << 2);
 #endif
 #if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
@@ -1464,7 +2362,7 @@ static void emit_capability() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   limitation_flags |= (1u << 0);
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX_ANY
+#if BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
   limitation_flags |= (1u << 1);
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_MCP2515_TX_TEST
@@ -1489,6 +2387,14 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::Capability)) |
       (1u << static_cast<uint8_t>(RecordType::CanRxSegment)) |
       (1u << static_cast<uint8_t>(RecordType::StreamSession));
+#if BOARD_ENABLE_REMOTE_CONTROL
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::RemoteControlState));
+#endif
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::RuntimeDiagnostic));
+#endif
 #if BOARD_ENABLE_ENCODER_IO
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::EncEdgeRaw)) |
@@ -1498,6 +2404,10 @@ static void emit_capability() {
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
       (1u << static_cast<uint8_t>(RecordType::ControlAck));
+#endif
+#if BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::CanTxRaw));
 #endif
 #if BOARD_ENABLE_HOST_DOWNLINK
   config.supported_downlink_records =
@@ -1533,7 +2443,8 @@ static void emit_capability() {
   config.profile_lock_state = kProfileLockCompileTime;
   config.vehicle_impact_state = vehicle_impact_state();
   config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
-  config.control_path = BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0;
+  config.control_path = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED ? 2 :
+      (BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0);
   config.usb_backpressure_isolated = 1;
   config.dtr_reset_sensitive = BOARD_USB_CDC_RECONNECT_RESET_MS != 0 ? 1 : 0;
   config.passive_acceptance_allowed = passive_acceptance_allowed();
@@ -1598,8 +2509,11 @@ static void emit_capability() {
       2,
       3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
-      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST) ? 1 : 0,
-      BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED ? 1 : 0,
+      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
+       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
+      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
+       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
+        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
       0,
       0);
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -1667,6 +2581,10 @@ static void emit_capability() {
 
 static void service_capability_advertisement() {
   const uint32_t now_ms = millis();
+#if !BOARD_ENABLE_PERIODIC_CAPABILITY
+  last_capability_ms = now_ms;
+  return;
+#endif
   if (!uplink_host_session_open()) {
     last_capability_ms = now_ms;
     return;
@@ -1984,6 +2902,117 @@ static void __attribute__((unused)) emit_can_tx_raw(uint8_t bus, uint32_t can_id
   emit_record(RecordType::CanTxRaw, payload, sizeof(payload));
 }
 
+#if BOARD_ENABLE_REMOTE_CONTROL
+static void emit_remote_control_state() {
+  const auto& status = remote_control_runtime.status();
+  const auto& config = remote_control_runtime.config();
+  const auto& snapshot = remote_control_runtime.mailboxSnapshot();
+  const auto& diag = status.frontend_diagnostics;
+  uint8_t payload[csm::kRemoteControlStatePayloadLen];
+  memset(payload, 0, sizeof(payload));
+  wr_u64_le(&payload[csm::kRemoteControlStateMonoUsOffset], mono64_us());
+  payload[csm::kRemoteControlStateSchemaOffset] = csm::kRemoteControlStateSchema;
+  payload[csm::kRemoteControlStateLinkStateOffset] = static_cast<uint8_t>(status.link_state);
+  payload[csm::kRemoteControlStateAuthorityStateOffset] =
+      static_cast<uint8_t>(status.authority_state);
+  payload[csm::kRemoteControlStateActiveSourceOffset] =
+      static_cast<uint8_t>(status.active_source);
+  payload[csm::kRemoteControlStateFlagsOffset] =
+      (status.configured ? 0x01u : 0u) |
+      (status.frontend_alive ? 0x02u : 0u) |
+      (status.remote_reserved ? 0x04u : 0u) |
+      (status.remote_valid ? 0x08u : 0u) |
+      (status.neutral_now ? 0x10u : 0u) |
+      (status.handoff_qualified ? 0x20u : 0u) |
+      (status.release_qualified ? 0x40u : 0u) |
+      (status.host_control_allowed ? 0x80u : 0u);
+  payload[csm::kRemoteControlStateLinkQualityOffset] = status.link_quality;
+  payload[csm::kRemoteControlStateRssiOffset] = status.rssi_magnitude;
+  payload[csm::kRemoteControlStateLastCrsfTypeOffset] = diag.last_type;
+  wr_u32_le(&payload[csm::kRemoteControlStateM4BootIdOffset], status.m4_boot_id);
+  wr_u32_le(&payload[csm::kRemoteControlStateSharedSequenceOffset], status.shared_sequence);
+  wr_u32_le(&payload[csm::kRemoteControlStateSampleAgeOffset], status.sample_age_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateDriveOffset],
+            static_cast<uint16_t>(status.drive_permille));
+  wr_u16_le(&payload[csm::kRemoteControlStateSteeringOffset],
+            static_cast<uint16_t>(status.steering_permille));
+  wr_u16_le(&payload[csm::kRemoteControlStateRawCh2Offset], status.raw_ch2);
+  wr_u16_le(&payload[csm::kRemoteControlStateRawCh4Offset], status.raw_ch4);
+  wr_u32_le(&payload[csm::kRemoteControlStateUartBaudOffset], diag.uart_baud);
+  wr_u32_le(&payload[csm::kRemoteControlStateRxBytesOffset], diag.rx_bytes);
+  wr_u32_le(&payload[csm::kRemoteControlStateValidFramesOffset], diag.valid_frames);
+  wr_u32_le(&payload[csm::kRemoteControlStateRcFramesOffset], diag.rc_frames);
+  wr_u32_le(&payload[csm::kRemoteControlStateLinkFramesOffset], diag.link_frames);
+  wr_u32_le(&payload[csm::kRemoteControlStateRejectedLengthOffset], diag.rejected_length);
+  wr_u32_le(&payload[csm::kRemoteControlStateRejectedCrcOffset], diag.rejected_crc);
+  wr_u32_le(&payload[csm::kRemoteControlStateInterByteResetOffset], diag.inter_byte_resets);
+  wr_u32_le(&payload[csm::kRemoteControlStateMailboxPublishOffset], diag.mailbox_publishes);
+  wr_u32_le(&payload[csm::kRemoteControlStateTelemetryFramesOffset], diag.telemetry_tx_frames);
+  wr_u32_le(&payload[csm::kRemoteControlStateTelemetryBytesOffset], diag.telemetry_tx_bytes);
+  wr_u32_le(&payload[csm::kRemoteControlStateSerialWriteFailuresOffset],
+            diag.serial_write_failures);
+  wr_u32_le(&payload[csm::kRemoteControlStateControlCyclesOffset], status.control_cycles);
+  wr_u32_le(&payload[csm::kRemoteControlStateNeutralCyclesOffset], status.neutral_cycles);
+  wr_u32_le(&payload[csm::kRemoteControlStateDeadlineMissesOffset],
+            status.cycle_deadline_misses);
+  wr_u32_le(&payload[csm::kRemoteControlStateCanTxSuccessOffset], status.can_tx_success);
+  wr_u32_le(&payload[csm::kRemoteControlStateCanTxFailedOffset], status.can_tx_failed);
+  wr_u32_le(&payload[csm::kRemoteControlStateIpcRejectsOffset], status.ipc_rejects);
+  payload[csm::kRemoteControlStateDecisionOffset] = static_cast<uint8_t>(status.last_decision);
+  payload[csm::kRemoteControlStateLastAddressOffset] = diag.last_address;
+  payload[csm::kRemoteControlStateSampleStateOffset] =
+      static_cast<uint8_t>(snapshot.sample.sample_state);
+  payload[csm::kRemoteControlStateLastIpcRejectDetailOffset] =
+      status.last_ipc_reject_detail;
+  wr_u16_le(&payload[csm::kRemoteControlStateCyclePeriodOffset], config.cycle_period_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateFrameGapOffset], config.frame_gap_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateNeutralQualificationOffset],
+            config.neutral_qualification_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateReleaseQualificationOffset],
+            config.release_qualification_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateMaxForwardRpmOffset], config.max_forward_rpm);
+  wr_u16_le(&payload[csm::kRemoteControlStateMaxReverseRpmOffset], config.max_reverse_rpm);
+  wr_u16_le(&payload[csm::kRemoteControlStateMaxSteeringOffset],
+            config.max_steering_deci_degree);
+  wr_u16_le(&payload[csm::kRemoteControlStatePolicyIdOffset], config.policy_id);
+  for (uint8_t index = 0; index < csm::board::remote::kRcChannelCount; ++index) {
+    wr_u16_le(&payload[csm::kRemoteControlStateChannelsOffset + index * 2u],
+              static_cast<uint16_t>(snapshot.sample.ch[index]));
+  }
+  payload[csm::kRemoteControlStateLinkStatisticsValidOffset] =
+      diag.link_statistics_valid;
+  payload[csm::kRemoteControlStateUplinkRssiAnt1Offset] = diag.uplink_rssi_ant1;
+  payload[csm::kRemoteControlStateUplinkRssiAnt2Offset] = diag.uplink_rssi_ant2;
+  payload[csm::kRemoteControlStateUplinkSnrOffset] =
+      static_cast<uint8_t>(diag.uplink_snr);
+  payload[csm::kRemoteControlStateActiveAntennaOffset] = diag.active_antenna;
+  payload[csm::kRemoteControlStateRfProfileOffset] = diag.rf_profile;
+  payload[csm::kRemoteControlStateUplinkRfPowerOffset] = diag.uplink_rf_power;
+  payload[csm::kRemoteControlStateDownlinkRssiOffset] = diag.downlink_rssi;
+  payload[csm::kRemoteControlStateDownlinkLinkQualityOffset] =
+      diag.downlink_link_quality;
+  payload[csm::kRemoteControlStateDownlinkSnrOffset] =
+      static_cast<uint8_t>(diag.downlink_snr);
+  wr_u32_le(&payload[csm::kRemoteControlStateSharedPublishFailuresOffset],
+            diag.shared_publish_failures);
+  for (uint8_t index = 0; index < csm::board::remote::kRcChannelCount; ++index) {
+    wr_u16_le(&payload[csm::kRemoteControlStateRawChannelsOffset + index * 2u],
+              diag.raw_channels[index]);
+  }
+  wr_u32_le(&payload[csm::kRemoteControlStateAcceptedRcFramesOffset],
+            diag.accepted_rc_frames);
+  wr_u32_le(&payload[csm::kRemoteControlStateNormalizationRejectsOffset],
+            diag.normalization_rejects);
+  wr_u32_le(&payload[csm::kRemoteControlStateLastRcAgeOffset],
+            diag.last_rc_age_ms);
+  wr_u32_le(&payload[csm::kRemoteControlStateLastLinkStatisticsAgeOffset],
+            diag.last_link_statistics_age_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateLastNormalizeRejectDetailOffset],
+            diag.last_normalize_reject_detail);
+  emit_record(RecordType::RemoteControlState, payload, sizeof(payload));
+}
+#endif
+
 static void emit_board_health(const EncoderSnapshot& snap) {
   const uint32_t queued0 = (can_q_head[0] - can_q_tail[0]) & kCanQueueMask;
   const uint32_t queued1 = (can_q_head[1] - can_q_tail[1]) & kCanQueueMask;
@@ -2008,7 +3037,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
-  uint8_t payload[kBoardHealthV11PayloadLen];
+  uint8_t payload[csm::kBoardHealthV13PayloadLen];
   memset(payload, 0, sizeof(payload));
   wr_u64_le(&payload[0], mono64_us());
   wr_u32_le(&payload[8], can_rx_count_total);
@@ -2045,7 +3074,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
                      : 0;
   payload[47] |= admission_counters.record_drop_total > 0 ? (1u << 7) : 0;
   wr_u32_le(&payload[48], snap.fault_flags);
-  payload[52] = 11;  // BOARD_HEALTH payload version.
+  payload[52] = 13;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
   payload[54] = static_cast<uint8_t>(safety_supervisor.state());
   payload[55] = safety_supervisor.faultBits();
@@ -2059,7 +3088,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[80], mcp2515_tx_total);
   wr_u32_le(&payload[84], mcp2515_tx_failed_total);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   wr_u32_le(&payload[88], builtin_can_tx_total);
   wr_u32_le(&payload[92], builtin_can_tx_failed_total);
 #endif
@@ -2188,6 +3217,135 @@ static void emit_board_health(const EncoderSnapshot& snap) {
             previous_runtime_breadcrumb_uptime_ms);
   wr_u32_le(&payload[csm::kBoardHealthPreviousBreadcrumbSequenceOffset],
             previous_runtime_breadcrumb_sequence);
+
+  const csm::board::diagnostics::ProductRecoverySnapshot recovery =
+      runtime_supervisor.recoverySnapshot();
+  uint32_t recovery_flags = 0;
+  recovery_flags |= recovery.ready ? csm::kBoardHealthRecoveryFlagReady : 0u;
+  recovery_flags |= recovery.previous_boot_valid
+      ? csm::kBoardHealthRecoveryFlagPreviousValid : 0u;
+  recovery_flags |= recovery.previous_boot_stable
+      ? csm::kBoardHealthRecoveryFlagPreviousStable : 0u;
+  recovery_flags |= recovery.current_boot_stable
+      ? csm::kBoardHealthRecoveryFlagCurrentStable : 0u;
+  recovery_flags |= recovery.wifi_quarantined
+      ? csm::kBoardHealthRecoveryFlagWifiQuarantined : 0u;
+  recovery_flags |= recovery.wifi_start_allowed
+      ? csm::kBoardHealthRecoveryFlagWifiStartAllowed : 0u;
+  recovery_flags |= recovery.recovered_from_fallback
+      ? csm::kBoardHealthRecoveryFlagFallbackRecovered : 0u;
+  recovery_flags |= recovery.firmware_source_changed
+      ? csm::kBoardHealthRecoveryFlagSourceChanged : 0u;
+  recovery_flags |= recovery.firmware_build_changed
+      ? csm::kBoardHealthRecoveryFlagBuildChanged : 0u;
+  recovery_flags |= recovery.wifi_retry_active
+      ? csm::kBoardHealthRecoveryFlagRetryActive : 0u;
+  wr_u32_le(&payload[csm::kBoardHealthRecoveryFlagsOffset], recovery_flags);
+  wr_u32_le(&payload[csm::kBoardHealthFirmwareSourceId32Offset],
+            static_cast<uint32_t>(CSM_FW_SOURCE_ID32));
+  wr_u32_le(&payload[csm::kBoardHealthBootSequenceOffset],
+            recovery.boot_sequence);
+  wr_u32_le(&payload[csm::kBoardHealthConsecutiveEarlyResetsOffset],
+            recovery.consecutive_early_resets);
+  wr_u32_le(&payload[csm::kBoardHealthEarlyResetTotalOffset],
+            recovery.early_reset_total);
+  wr_u32_le(&payload[csm::kBoardHealthWifiQuarantineTotalOffset],
+            recovery.wifi_quarantine_total);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousBootSequenceOffset],
+            recovery.previous_boot_sequence);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousLastProgressIdOffset],
+            recovery.previous_last_progress_id);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousLastProgressDetailOffset],
+            recovery.previous_last_progress_detail);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousLastProgressUptimeMsOffset],
+            recovery.previous_last_progress_uptime_ms);
+  wr_u32_le(&payload[csm::kBoardHealthCurrentLastProgressIdOffset],
+            recovery.last_progress_id);
+  wr_u32_le(&payload[csm::kBoardHealthCurrentLastProgressDetailOffset],
+            recovery.last_progress_detail);
+  wr_u32_le(&payload[csm::kBoardHealthCurrentLastProgressUptimeMsOffset],
+            recovery.last_progress_uptime_ms);
+  wr_u32_le(&payload[csm::kBoardHealthRetainedEventSequenceOffset],
+            recovery.retained_event_sequence);
+
+  const csm::board::diagnostics::RuntimeSupervisorDecision& runtime_decision =
+      runtime_supervisor.decision();
+  uint8_t requested_mode = 0;
+  uint8_t effective_mode = 0;
+#if BOARD_ENABLE_WIFI_UPLINK
+  requested_mode = static_cast<uint8_t>(runtime_decision.requested_wifi_mode);
+  effective_mode = static_cast<uint8_t>(runtime_decision.effective_wifi_mode);
+#endif
+  uint8_t experiment_flags = 0;
+  experiment_flags |= runtime_watchdog_effective
+      ? csm::kBoardHealthResetExperimentFlagWatchdogEffective : 0u;
+  experiment_flags |= runtime_watchdog_requested
+      ? csm::kBoardHealthResetExperimentFlagWatchdogRequested : 0u;
+  experiment_flags |= runtime_watchdog_start_called
+      ? csm::kBoardHealthResetExperimentFlagWatchdogStartCalled : 0u;
+  experiment_flags |= runtime_watchdog_start_succeeded
+      ? csm::kBoardHealthResetExperimentFlagWatchdogStartSucceeded : 0u;
+  experiment_flags |= runtime_watchdog_timeout_matches
+      ? csm::kBoardHealthResetExperimentFlagWatchdogTimeoutMatches : 0u;
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  experiment_flags |= csm::kBoardHealthResetExperimentFlagRuntimeDiagnostics;
+#endif
+#if !BOARD_APPLICATION_CAN_DATA_TX_ENABLED
+  experiment_flags |=
+      csm::kBoardHealthResetExperimentFlagApplicationCanTxSuppressed;
+#endif
+  const uint32_t profile_word =
+      static_cast<uint32_t>(
+          csm::board::diagnostics::kResetExperimentProfile.selector) |
+      (static_cast<uint32_t>(requested_mode) << 8) |
+      (static_cast<uint32_t>(effective_mode) << 16) |
+      (static_cast<uint32_t>(experiment_flags) << 24);
+  wr_u32_le(&payload[csm::kBoardHealthResetExperimentProfileWordOffset],
+            profile_word);
+  const uint32_t valid_events = recovery.valid_retained_events > 0xFFFFu
+      ? 0xFFFFu : recovery.valid_retained_events;
+  const uint32_t corrupt_metadata = recovery.corrupt_metadata_slots > 0xFFu
+      ? 0xFFu : recovery.corrupt_metadata_slots;
+  const uint32_t corrupt_events = recovery.corrupt_event_slots > 0xFFu
+      ? 0xFFu : recovery.corrupt_event_slots;
+  const uint32_t integrity_word = valid_events |
+      (corrupt_metadata << 16) | (corrupt_events << 24);
+  wr_u32_le(&payload[csm::kBoardHealthRetainedIntegrityWordOffset],
+            integrity_word);
+  wr_u32_le(&payload[csm::kBoardHealthRuntimeContractId32Offset],
+            static_cast<uint32_t>(CSM_FW_RUNTIME_CONTRACT_ID32));
+  wr_u32_le(&payload[csm::kBoardHealthRecoveryIdentityId32Offset],
+            static_cast<uint32_t>(recovery.firmware_source_id));
+  wr_u32_le(&payload[csm::kBoardHealthWatchdogObservedTimeoutMsOffset],
+            runtime_watchdog_observed_timeout_ms);
+#if BOARD_ENABLE_WIFI_UPLINK
+  uint32_t previous_wifi_call_flags = previous_wifi_call_latch.valid
+      ? csm::kBoardHealthPreviousWifiCallFlagValid : 0u;
+  previous_wifi_call_flags |= previous_wifi_call_latch.in_progress
+      ? csm::kBoardHealthPreviousWifiCallFlagInProgress : 0u;
+  previous_wifi_call_flags |= previous_wifi_call_latch.completed
+      ? csm::kBoardHealthPreviousWifiCallFlagCompleted : 0u;
+  previous_wifi_call_flags |= previous_wifi_call_latch.contract_changed
+      ? csm::kBoardHealthPreviousWifiCallFlagContractChanged : 0u;
+  previous_wifi_call_flags |=
+      static_cast<uint32_t>(previous_wifi_call_latch.owner & 0xFFu)
+      << csm::kBoardHealthPreviousWifiCallOwnerShift;
+  previous_wifi_call_flags |=
+      static_cast<uint32_t>(previous_wifi_call_latch.operation & 0xFFu)
+      << csm::kBoardHealthPreviousWifiCallOperationShift;
+  wr_u32_le(&payload[csm::kBoardHealthPreviousWifiCallFlagsOffset],
+            previous_wifi_call_flags);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousWifiCallBootSequenceOffset],
+            previous_wifi_call_latch.boot_sequence);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousWifiCallSequenceOffset],
+            previous_wifi_call_latch.call_sequence);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousWifiCallStartedMsOffset],
+            previous_wifi_call_latch.started_uptime_ms);
+  wr_u32_le(&payload[csm::kBoardHealthPreviousWifiCallDurationUsOffset],
+            previous_wifi_call_latch.duration_us);
+  wr_i32_le(&payload[csm::kBoardHealthPreviousWifiCallResultOffset],
+            previous_wifi_call_latch.result);
+#endif
   emit_record(RecordType::BoardHealth, payload, sizeof(payload));
 }
 
@@ -2249,7 +3407,7 @@ static void enter_passive_can_frontend_fault_hold(uint16_t detail, uint32_t coun
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   if (builtin_can_tx_ok) {
-    builtin_can.monitor(true);
+    builtin_can_ref().monitor(true);
   }
 #endif
 
@@ -2497,7 +3655,7 @@ static bool __attribute__((unused)) control_backend_ready_for_bus(uint8_t bus) {
     return can_backend_ok && mcp2515 != nullptr;
   }
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   if (bus == BOARD_BUILTIN_CAN_BUS_ID) {
     return builtin_can_tx_ok;
   }
@@ -2510,7 +3668,7 @@ static bool any_control_backend_ready() {
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
   ready = ready || (can_backend_ok && mcp2515 != nullptr);
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   ready = ready || builtin_can_tx_ok;
 #endif
   return ready;
@@ -2570,6 +3728,99 @@ static void update_safety_state() {
   safety_state = safety_supervisor.state();
 #endif
 }
+
+#if BOARD_ENABLE_REMOTE_CONTROL
+static void service_remote_control() {
+  if (!remote_control_runtime_ok) return;
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  // Capture a completed request before Mbed can reuse the same three-element
+  // TX FIFO slot for the next remote frame.
+  service_runtime_diagnostic_tx_outcomes();
+#endif
+
+  const uint32_t now_ms = millis();
+  const csm::board::SafetyInputs safety_inputs = read_safety_inputs();
+  csm::board::control::RemoteControlRuntimeInputs inputs;
+  inputs.estop_asserted = safety_inputs.estop_asserted;
+  inputs.fault_lockout = safety_state == SafetyState::FaultLockout;
+  inputs.hard_safety_allows = !inputs.estop_asserted &&
+      safety_inputs.field_power_ok && !safety_inputs.encoder_fault &&
+      !inputs.fault_lockout;
+  inputs.hardware_gate_allows =
+      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
+      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
+  inputs.host_service_active = false;
+  inputs.autonomy_state = csm::board::authority::AutonomyAuthorityState::Unknown;
+  inputs.backend_state.ready =
+      builtin_can_tx_ok && (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
+  if (builtin_can_tx_ok) {
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+    const csm::board::can::BuiltinFdcanSnapshot fdcan_state =
+        builtin_fdcan_diagnostics.snapshot();
+    inputs.backend_state.error_passive =
+        fdcan_state.valid && ((fdcan_state.psr & (1u << 5)) != 0);
+    inputs.backend_state.bus_off =
+        fdcan_state.valid && ((fdcan_state.psr & (1u << 7)) != 0);
+#else
+    const uint8_t tx_error_count = builtin_can_ref().tderror();
+    inputs.backend_state.error_passive = tx_error_count >= 128u;
+    inputs.backend_state.bus_off = tx_error_count == 0xFFu;
+#endif
+  }
+
+  const csm::board::control::RemoteControlRuntimeOutput output =
+      remote_control_runtime.service(now_ms, inputs);
+  if (output.frame_ready) {
+    const auto& frame = output.frame;
+    const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
+    const bool rtr = (frame.can_id_flags & (1u << 30)) != 0;
+    const uint32_t can_id = frame.can_id_flags &
+        (extended ? 0x1FFFFFFFu : 0x7FFu);
+    const mbed::CANMessage message(
+        can_id, frame.data, frame.dlc,
+        rtr ? CANRemote : CANData,
+        extended ? CANExtended : CANStandard);
+    latch_passive_violation(kPassiveViolationCanTxCalled);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+    runtime_diagnostic_before_can_write(frame.can_id_flags);
+    const uint32_t runtime_diagnostic_write_started_us = micros();
+#endif
+    const int write_result = builtin_can_ref().write(message);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+    runtime_diagnostic_after_can_write(runtime_diagnostic_write_started_us,
+                                       write_result);
+#endif
+    const bool success = write_result > 0;
+    if (success) {
+      ++builtin_can_tx_total;
+      emit_can_tx_raw(frame.bus, frame.can_id_flags, frame.dlc, frame.data,
+                      builtin_can_tx_total, builtin_can_tx_failed_total);
+    } else {
+      ++builtin_can_tx_failed_total;
+    }
+    remote_control_runtime.noteCanTxResult(now_ms, success);
+  }
+
+  const auto& status = remote_control_runtime.status();
+  const uint16_t state_signature =
+      static_cast<uint16_t>(static_cast<uint8_t>(status.link_state)) |
+      (static_cast<uint16_t>(static_cast<uint8_t>(status.authority_state)) << 4u) |
+      (status.frontend_alive ? (1u << 8) : 0u) |
+      (status.remote_valid ? (1u << 9) : 0u) |
+      (status.handoff_qualified ? (1u << 10) : 0u) |
+      (status.release_qualified ? (1u << 11) : 0u);
+  if (state_signature != last_remote_state_signature) {
+    last_remote_state_signature = state_signature;
+    ++remote_state_transition_total;
+    emit_board_event(EventRemoteControlStateChanged, state_signature,
+                     remote_state_transition_total);
+  }
+  if (now_ms - last_remote_state_emit_ms >= 100u) {
+    emit_remote_control_state();
+    last_remote_state_emit_ms = now_ms;
+  }
+}
+#endif
 
 static void toggle_safety_watchdog_if_needed() {
 #if BOARD_ENABLE_SAFETY_IO
@@ -2998,16 +4249,16 @@ static void pump_can_rx_to_queue(int budget) {
 
 static bool __attribute__((unused)) init_builtin_can_lane() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-  if (builtin_can.frequency(500000) != 1) {
+  if (builtin_can_ref().frequency(500000) != 1) {
     emit_board_event(EventBuiltinCanBeginFailed, 0, 1);
     return false;
   }
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
-  builtin_can.monitor(true);
+  builtin_can_ref().monitor(true);
 #else
-  builtin_can.monitor(false);
+  builtin_can_ref().monitor(false);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   builtin_can_tx_total = 0;
   builtin_can_tx_failed_total = 0;
 #endif
@@ -3048,7 +4299,7 @@ static void set_can_observe_mode_for_session(bool enabled, bool force) {
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   if (builtin_can_tx_ok) {
-    builtin_can.monitor(!target_ack_observe);
+    builtin_can_ref().monitor(!target_ack_observe);
   }
 #endif
 
@@ -3074,7 +4325,7 @@ static void service_builtin_can_rx_to_queue(int budget) {
   }
 
   mbed::CANMessage msg;
-  while (budget-- > 0 && builtin_can.read(msg) > 0) {
+  while (budget-- > 0 && builtin_can_ref().read(msg) > 0) {
     if (msg.type != CANData) {
       continue;
     }
@@ -3114,7 +4365,7 @@ static void __attribute__((unused)) service_builtin_can_rx_host_absent_drain(int
     return;
   }
   mbed::CANMessage msg;
-  while (budget-- > 0 && builtin_can.read(msg) > 0) {
+  while (budget-- > 0 && builtin_can_ref().read(msg) > 0) {
     host_absent_rx_discard_total[BOARD_BUILTIN_CAN_BUS_ID & 0x01u]++;
   }
 #else
@@ -3460,7 +4711,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
 
   const mbed::CANMessage msg(can_id, data, dlc, CANData, extended ? CANExtended : CANStandard);
   latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = builtin_can.write(msg);
+  const int rc = builtin_can_ref().write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
     host_can_tx_rejected_total++;
@@ -3698,7 +4949,7 @@ static void service_builtin_can_tx_test() {
 
   const mbed::CANMessage msg(BOARD_BUILTIN_CAN_TX_TEST_ID, data, sizeof(data), CANData, CANStandard);
   latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = builtin_can.write(msg);
+  const int rc = builtin_can_ref().write(msg);
   if (rc <= 0) {
     builtin_can_tx_failed_total++;
     if ((builtin_can_tx_failed_total & 0x0F) == 1) {
@@ -3842,22 +5093,89 @@ static void service_encoder() {
 }
 
 void setup() {
+  // Capture what the current Arduino/bootloader layer still exposes before
+  // any risky peripheral starts. Exact reset-latch preservation below the
+  // bootloader remains a separate hardware/boot-chain gate.
+  capture_boot_reset_cause();
+  csm::board::diagnostics::RuntimeSupervisorBootInfo boot_start;
+  boot_start.firmware.build_id = static_cast<uint64_t>(CSM_FW_BUILD_ID);
+  boot_start.firmware.source_id = static_cast<uint64_t>(CSM_FW_SOURCE_ID64);
+  boot_start.firmware.runtime_contract_id =
+      static_cast<uint64_t>(CSM_FW_RUNTIME_CONTRACT_ID64);
+  boot_start.reset_cause_bits = boot_reset_cause_bits;
+  boot_start.uptime_ms = millis();
+  boot_start.watchdog_compiled = BOARD_ENABLE_RUNTIME_WATCHDOG != 0;
+  const csm::board::diagnostics::RuntimeSupervisorDecision runtime_decision =
+      runtime_supervisor.begin(boot_start);
+  runtime_watchdog_requested = runtime_decision.watchdog_requested;
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_recovery_event_replay_count = static_cast<uint8_t>(
+      runtime_supervisor.readRecentEvents(
+          runtime_recovery_event_replay,
+          csm::board::diagnostics::BootRecovery::kEventSlotCount));
+  runtime_recovery_event_replay_next = 0;
+#endif
+#if BOARD_ENABLE_WIFI_UPLINK
+  const csm::board::diagnostics::ProductRecoverySnapshot recovery_boot =
+      runtime_supervisor.recoverySnapshot();
+  const uint64_t call_latch_contract_id =
+      recovery_boot.firmware_source_id != 0
+          ? recovery_boot.firmware_source_id
+          : static_cast<uint64_t>(CSM_FW_RUNTIME_CONTRACT_ID64);
+  if (wifi_call_latch.beginSession(call_latch_contract_id,
+                                   recovery_boot.boot_sequence, millis())) {
+    previous_wifi_call_latch = wifi_call_latch.previousSnapshot();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+    previous_wifi_call_latch_pending = previous_wifi_call_latch.valid;
+#endif
+  }
+#endif
+  if (!runtime_decision.recovery_ready) {
+    // Keep legacy/deep diagnostic recovery available even if the product
+    // black-box metadata itself was unavailable.
+    enable_runtime_retained_storage();
+  }
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  recover_runtime_diagnostic();
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootSetupEnter);
+#endif
   recover_runtime_breadcrumb();
   record_runtime_breadcrumb(RuntimeStageSetup);
+  record_boot_progress(csm::board::diagnostics::BootProgress::SetupEntered);
   uplink_boot_ms = millis();
-  capture_boot_reset_cause();
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::ResetEvidenceCaptured,
+      boot_reset_cause_bits);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootResetCaptured);
+#endif
   init_safety_pins();
   init_status_led();
   init_runtime_watchdog();
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::WatchdogConfigured,
+      runtime_watchdog_observed_timeout_ms);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootSafetyWatchdogReady);
+#endif
   Serial.begin(115200);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootUsbReady);
+#endif
 
   csm::board::uplink::UsbCdcSinkConfig usb_sink_config;
   usb_sink_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
   usb_sink_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
   usb_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
   usb_cdc_sink.begin(usb_sink_config);
+  record_boot_progress(csm::board::diagnostics::BootProgress::UsbSinkReady);
 #if BOARD_ENABLE_WIFI_UPLINK
   csm::board::uplink::WifiTcpSinkConfig wifi_sink_config;
+  requested_wifi_runtime_mode =
+      to_wifi_runtime_mode(runtime_decision.requested_wifi_mode);
+  effective_wifi_runtime_mode =
+      to_wifi_runtime_mode(runtime_decision.effective_wifi_mode);
+  wifi_sink_config.runtime_mode = effective_wifi_runtime_mode;
   wifi_sink_config.ap_ssid = BOARD_WIFI_AP_SSID;
   wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
   wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
@@ -3865,7 +5183,24 @@ void setup() {
   wifi_sink_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
   wifi_sink_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
   wifi_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
-  wifi_tcp_sink.begin(wifi_sink_config);
+  wifi_sink_config.startup_attempt_limit = 1;
+  wifi_sink_config.call_persistence.context = &wifi_call_latch;
+  wifi_sink_config.call_persistence.enter = persist_wifi_call_enter;
+  wifi_sink_config.call_persistence.leave = persist_wifi_call_leave;
+  const uint32_t wifi_mode_detail =
+      static_cast<uint32_t>(requested_wifi_runtime_mode) |
+      (static_cast<uint32_t>(effective_wifi_runtime_mode) << 8) |
+      (runtime_supervisor.wifiQuarantined() ? (1u << 16) : 0u);
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::WifiStartRequested,
+      wifi_mode_detail);
+  const bool wifi_sink_started = wifi_tcp_sink.begin(wifi_sink_config);
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::WifiStartReturned,
+      wifi_mode_detail | (wifi_sink_started ? (1u << 24) : 0u));
+#endif
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootWifiReady);
 #endif
   const uint64_t boot_session_id =
       (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 33) ^
@@ -3875,6 +5210,11 @@ void setup() {
   canonical_publisher.begin(boot_session_id, &usb_cdc_sink, &wifi_tcp_sink);
 #else
   canonical_publisher.begin(boot_session_id, &usb_cdc_sink);
+#endif
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::CanonicalPublisherReady);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootPublisherReady);
 #endif
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
 
@@ -3901,6 +5241,11 @@ void setup() {
   emit_board_event(EventCan0BackendUnavailable, 0, 1);
 #endif
 
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootMcpInitEnter);
+#endif
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::McpFrontendInitEntered);
   if (!kTestMode && BOARD_ENABLE_MCP2515_INIT &&
       (!BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION || uplink_host_session_open())) {
     can_backend_ok = init_can_backend();
@@ -3912,13 +5257,80 @@ void setup() {
       reset_can_init_retry_backoff();
     }
   }
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootMcpInitReturn);
+#endif
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::McpFrontendInitReturned,
+      can_backend_ok ? 1u : 0u);
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::BuiltinCanInitEntered);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructEnter);
+  construct_builtin_can_for_runtime_diagnostics();
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructReturn);
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcan500kEnter);
+#endif
 #if BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION
   builtin_can_tx_ok = false;
 #else
   builtin_can_tx_ok = init_builtin_can_lane();
 #endif
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcan500kReturn);
+#endif
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::BuiltinCanInitReturned,
+      builtin_can_tx_ok ? 1u : 0u);
+#endif
+
+#if BOARD_ENABLE_REMOTE_CONTROL
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::RemoteRuntimeInitEntered);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootRemoteRuntimeEnter);
+#endif
+  csm::board::control::RemoteControlRuntimeConfig remote_config;
+  remote_config.configured = true;
+  remote_config.local_can_tx_enabled =
+      (BOARD_ENABLE_MDPS_BENCH_MAPPING != 0) &&
+      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
+  remote_config.mapping = BOARD_ENABLE_MDPS_BENCH_MAPPING
+      ? csm::board::control::VehicleCommandMapping::MdpsBench0x007
+      : csm::board::control::VehicleCommandMapping::None;
+  remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
+  remote_config.policy_id = 0x5243u;
+  remote_config.cycle_period_ms = 20;
+  remote_config.frame_gap_ms = 2;
+  remote_config.m4_heartbeat_timeout_ms = 100;
+  remote_config.neutral_qualification_ms = 500;
+  remote_config.release_qualification_ms = 1000;
+  remote_config.neutral_deadband_permille = 50;
+  remote_config.steering_deadband_permille = 20;
+  remote_config.auxiliary_threshold_permille = 500;
+  remote_config.steering_step_permille = 30;
+  remote_config.steering_return_step_permille = 50;
+  remote_config.max_forward_rpm = 500;
+  remote_config.max_reverse_rpm = 500;
+  remote_config.max_steering_deci_degree = 450;
+  remote_control_runtime_ok = remote_control_runtime.begin(
+      millis(), static_cast<uint32_t>(boot_session_id), remote_config);
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::RemoteRuntimeInitReturned,
+      remote_control_runtime_ok ? 1u : 0u);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootRemoteRuntimeReturn);
+#endif
+  if (remote_control_runtime_ok) {
+    bootM4();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+    runtime_diagnostic_boot_checkpoint(RuntimeDiagBootM4Issued);
+#endif
+  } else {
+    emit_board_event(EventRemoteControlInitFailed, 1, 1);
+  }
 #endif
 
   emit_capability();
@@ -3928,9 +5340,20 @@ void setup() {
   last_encoder_derived_ms = millis();
   last_watchdog_toggle_ms = millis();
   record_runtime_breadcrumb(RuntimeStageIdle);
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::SetupCompleted);
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootSetupComplete);
+#endif
 }
 
 void loop() {
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  if (!runtime_diagnostic_first_loop_recorded) {
+    runtime_diagnostic_first_loop_recorded = true;
+    runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFirstLoop);
+  }
+#endif
   const uint32_t loop_entry_us = micros();
   if (main_loop_last_entry_us != 0) {
     const uint32_t loop_gap_us = loop_entry_us - main_loop_last_entry_us;
@@ -3943,6 +5366,9 @@ void loop() {
   poll_uplink_connections(millis());
   service_uplink_session_state();
   service_recovered_runtime_breadcrumb();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
     update_safety_state();
@@ -3950,6 +5376,7 @@ void loop() {
     service_status_led();
     service_capability_advertisement();
     service_uplink(1024);
+    service_boot_recovery();
     kick_runtime_watchdog();
     return;
   }
@@ -3972,6 +5399,7 @@ void loop() {
     toggle_safety_watchdog_if_needed();
     service_status_led();
     last_health_ms = millis();
+    service_boot_recovery();
     kick_runtime_watchdog();
     return;
   }
@@ -3988,6 +5416,12 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageIdle);
   update_safety_state();
   toggle_safety_watchdog_if_needed();
+#if BOARD_ENABLE_REMOTE_CONTROL
+  service_remote_control();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
+#endif
 
   if (kTestMode) {
     test_push_fake_can_if_needed();
@@ -4016,6 +5450,12 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageBuiltinCanDrain);
   service_builtin_can_rx_to_queue(128);
   record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_REMOTE_CONTROL
+  service_remote_control();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
+#endif
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   service_builtin_can_tx_test();
 #endif
@@ -4043,6 +5483,12 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageStatusAndSensors, 1);
   service_voltage_adc_lane();
   record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_REMOTE_CONTROL
+  service_remote_control();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
+#endif
 
   const uint32_t now_ms = millis();
   if (!uplink_host_session_open()) {
@@ -4056,7 +5502,17 @@ void loop() {
   }
   service_uplink(1024);
   service_deferred_loss_events();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
   service_usb_cdc_reconnect_watchdog();
+  service_boot_recovery();
   kick_runtime_watchdog();
   record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_WIFI_UPLINK
+  // The socket worker is deliberately below the safety/control main thread.
+  // Give it one bounded slice without allowing a Wi-Fi driver busy loop to
+  // starve RC, CAN, USB, or the main-loop watchdog heartbeat.
+  delay(BOARD_WIFI_MAIN_IDLE_SLICE_MS);
+#endif
 }

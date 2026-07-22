@@ -70,6 +70,156 @@ static constexpr uint8_t kStreamSessionProtocolVersionOffset = 4;
 static constexpr uint8_t kStreamSessionBootIdOffset = 8;
 static constexpr uint8_t kStreamSessionPublishSeqOffset = 16;
 static constexpr uint8_t kStreamSessionMonoUsOffset = 24;
+static constexpr uint16_t kRemoteControlStatePayloadLen = 228;
+static constexpr uint8_t kRemoteControlStateSchema = 2;
+static constexpr uint8_t kRemoteControlStateMonoUsOffset = 0;
+static constexpr uint8_t kRemoteControlStateSchemaOffset = 8;
+static constexpr uint8_t kRemoteControlStateLinkStateOffset = 9;
+static constexpr uint8_t kRemoteControlStateAuthorityStateOffset = 10;
+static constexpr uint8_t kRemoteControlStateActiveSourceOffset = 11;
+static constexpr uint8_t kRemoteControlStateFlagsOffset = 12;
+static constexpr uint8_t kRemoteControlStateLinkQualityOffset = 13;
+static constexpr uint8_t kRemoteControlStateRssiOffset = 14;
+static constexpr uint8_t kRemoteControlStateLastCrsfTypeOffset = 15;
+static constexpr uint8_t kRemoteControlStateM4BootIdOffset = 16;
+static constexpr uint8_t kRemoteControlStateSharedSequenceOffset = 20;
+static constexpr uint8_t kRemoteControlStateSampleAgeOffset = 24;
+static constexpr uint8_t kRemoteControlStateDriveOffset = 28;
+static constexpr uint8_t kRemoteControlStateSteeringOffset = 30;
+static constexpr uint8_t kRemoteControlStateRawCh2Offset = 32;
+static constexpr uint8_t kRemoteControlStateRawCh4Offset = 34;
+static constexpr uint8_t kRemoteControlStateUartBaudOffset = 36;
+static constexpr uint8_t kRemoteControlStateRxBytesOffset = 40;
+static constexpr uint8_t kRemoteControlStateValidFramesOffset = 44;
+static constexpr uint8_t kRemoteControlStateRcFramesOffset = 48;
+static constexpr uint8_t kRemoteControlStateLinkFramesOffset = 52;
+static constexpr uint8_t kRemoteControlStateRejectedLengthOffset = 56;
+static constexpr uint8_t kRemoteControlStateRejectedCrcOffset = 60;
+static constexpr uint8_t kRemoteControlStateInterByteResetOffset = 64;
+static constexpr uint8_t kRemoteControlStateMailboxPublishOffset = 68;
+static constexpr uint8_t kRemoteControlStateTelemetryFramesOffset = 72;
+static constexpr uint8_t kRemoteControlStateTelemetryBytesOffset = 76;
+static constexpr uint8_t kRemoteControlStateSerialWriteFailuresOffset = 80;
+static constexpr uint8_t kRemoteControlStateControlCyclesOffset = 84;
+static constexpr uint8_t kRemoteControlStateNeutralCyclesOffset = 88;
+static constexpr uint8_t kRemoteControlStateDeadlineMissesOffset = 92;
+static constexpr uint8_t kRemoteControlStateCanTxSuccessOffset = 96;
+static constexpr uint8_t kRemoteControlStateCanTxFailedOffset = 100;
+static constexpr uint8_t kRemoteControlStateIpcRejectsOffset = 104;
+static constexpr uint8_t kRemoteControlStateDecisionOffset = 108;
+static constexpr uint8_t kRemoteControlStateLastAddressOffset = 109;
+static constexpr uint8_t kRemoteControlStateSampleStateOffset = 110;
+static constexpr uint8_t kRemoteControlStateLastIpcRejectDetailOffset = 111;
+static constexpr uint8_t kRemoteControlStateCyclePeriodOffset = 112;
+static constexpr uint8_t kRemoteControlStateFrameGapOffset = 114;
+static constexpr uint8_t kRemoteControlStateNeutralQualificationOffset = 116;
+static constexpr uint8_t kRemoteControlStateReleaseQualificationOffset = 118;
+static constexpr uint8_t kRemoteControlStateMaxForwardRpmOffset = 120;
+static constexpr uint8_t kRemoteControlStateMaxReverseRpmOffset = 122;
+static constexpr uint8_t kRemoteControlStateMaxSteeringOffset = 124;
+static constexpr uint8_t kRemoteControlStatePolicyIdOffset = 126;
+static constexpr uint8_t kRemoteControlStateChannelsOffset = 128;
+static constexpr uint8_t kRemoteControlStateLinkStatisticsValidOffset = 160;
+static constexpr uint8_t kRemoteControlStateUplinkRssiAnt1Offset = 161;
+static constexpr uint8_t kRemoteControlStateUplinkRssiAnt2Offset = 162;
+static constexpr uint8_t kRemoteControlStateUplinkSnrOffset = 163;
+static constexpr uint8_t kRemoteControlStateActiveAntennaOffset = 164;
+static constexpr uint8_t kRemoteControlStateRfProfileOffset = 165;
+static constexpr uint8_t kRemoteControlStateUplinkRfPowerOffset = 166;
+static constexpr uint8_t kRemoteControlStateDownlinkRssiOffset = 167;
+static constexpr uint8_t kRemoteControlStateDownlinkLinkQualityOffset = 168;
+static constexpr uint8_t kRemoteControlStateDownlinkSnrOffset = 169;
+static constexpr uint8_t kRemoteControlStateSharedPublishFailuresOffset = 170;
+static constexpr uint8_t kRemoteControlStateRawChannelsOffset = 176;
+static constexpr uint8_t kRemoteControlStateAcceptedRcFramesOffset = 208;
+static constexpr uint8_t kRemoteControlStateNormalizationRejectsOffset = 212;
+static constexpr uint8_t kRemoteControlStateLastRcAgeOffset = 216;
+static constexpr uint8_t kRemoteControlStateLastLinkStatisticsAgeOffset = 220;
+static constexpr uint8_t kRemoteControlStateLastNormalizeRejectDetailOffset = 224;
+static constexpr uint16_t kRuntimeDiagnosticPayloadLen = 128;
+static constexpr uint8_t kRuntimeDiagnosticSchema = 2;
+static constexpr uint8_t kRuntimeDiagnosticMonoUsOffset = 0;
+static constexpr uint8_t kRuntimeDiagnosticSchemaOffset = 8;
+static constexpr uint8_t kRuntimeDiagnosticPhaseOffset = 9;
+static constexpr uint8_t kRuntimeDiagnosticBootPhaseOffset = 10;
+static constexpr uint8_t kRuntimeDiagnosticFlagsOffset = 11;
+static constexpr uint8_t kRuntimeDiagnosticAttemptSequenceOffset = 12;
+static constexpr uint8_t kRuntimeDiagnosticCanIdFlagsOffset = 16;
+static constexpr uint8_t kRuntimeDiagnosticWriteDurationUsOffset = 20;
+static constexpr uint8_t kRuntimeDiagnosticWriteResultOffset = 24;
+static constexpr uint8_t kRuntimeDiagnosticLatestTxRequestMaskOffset = 28;
+static constexpr uint8_t kRuntimeDiagnosticHalStateOffset = 32;
+static constexpr uint8_t kRuntimeDiagnosticHalErrorOffset = 36;
+static constexpr uint8_t kRuntimeDiagnosticFdcanRegistersOffset = 40;
+static constexpr uint8_t kRuntimeDiagnosticBeforeRegistersOffset =
+    kRuntimeDiagnosticFdcanRegistersOffset;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallPhaseOffset = 72;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagsOffset = 73;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallSequenceOffset = 76;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallStartedMsOffset = 80;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallDurationUsOffset = 84;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallResultOffset = 88;
+static constexpr uint8_t kRuntimeDiagnosticWifiWorkerHeartbeatAgeMsOffset = 92;
+static constexpr uint8_t kRuntimeDiagnosticWifiCallStallTotalOffset = 96;
+static constexpr uint8_t kRuntimeDiagnosticWifiConnectionEpochOffset = 100;
+static constexpr uint8_t kRuntimeDiagnosticBootSessionOffset = 104;
+static constexpr uint8_t kRuntimeDiagnosticRuntimeStageOffset = 112;
+static constexpr uint8_t kRuntimeDiagnosticWifiWorkerStackFreeOffset = 116;
+static constexpr uint8_t kRuntimeDiagnosticWifiWorkerStackMaxUsedOffset = 120;
+static constexpr uint8_t kRuntimeDiagnosticFirmwareBuildIdOffset = 124;
+static constexpr uint8_t kRuntimeDiagnosticRegisterCount = 8;
+static constexpr uint8_t kRuntimeDiagnosticPhaseBoot = 1;
+static constexpr uint8_t kRuntimeDiagnosticPhasePeriodic = 2;
+static constexpr uint8_t kRuntimeDiagnosticPhaseTxWriteBefore = 3;
+static constexpr uint8_t kRuntimeDiagnosticPhaseTxWriteReturn = 4;
+static constexpr uint8_t kRuntimeDiagnosticPhaseTxOutcome = 5;
+static constexpr uint8_t kRuntimeDiagnosticPhaseRecovered = 6;
+static constexpr uint8_t kRuntimeDiagnosticPhaseRecoveryEvent = 7;
+static constexpr uint8_t kRuntimeDiagnosticPhaseRecoveredWifiCall = 8;
+static constexpr uint8_t kRuntimeDiagnosticFlagFdcanValid = (1u << 0);
+static constexpr uint8_t kRuntimeDiagnosticFlagWriteInProgress = (1u << 1);
+static constexpr uint8_t kRuntimeDiagnosticFlagWriteAccepted = (1u << 2);
+static constexpr uint8_t kRuntimeDiagnosticFlagTxOccurred = (1u << 3);
+static constexpr uint8_t kRuntimeDiagnosticFlagTxPending = (1u << 4);
+static constexpr uint8_t kRuntimeDiagnosticFlagTxCancelled = (1u << 5);
+static constexpr uint8_t kRuntimeDiagnosticFlagRecovered = (1u << 6);
+static constexpr uint8_t kRuntimeDiagnosticFlagDifferentBuild = (1u << 7);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagInProgress = (1u << 0);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagSinkConnected = (1u << 1);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagWorkerHeartbeatStale = (1u << 2);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagWorkerRunning = (1u << 3);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagNetworkReady = (1u << 4);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagRecovered = (1u << 5);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagCompleted = (1u << 6);
+static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagContractChanged = (1u << 7);
+
+// Phase 7 projects one BootRecovery ring entry without exposing retained-memory
+// layout. The generic field aliases are phase-specific and preserve the v2
+// payload size used by existing decoders.
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventTypeOffset =
+    kRuntimeDiagnosticBootPhaseOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventSequenceOffset =
+    kRuntimeDiagnosticAttemptSequenceOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventBootSequenceOffset =
+    kRuntimeDiagnosticCanIdFlagsOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventUptimeMsOffset =
+    kRuntimeDiagnosticWriteDurationUsOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventValueOffset =
+    kRuntimeDiagnosticWriteResultOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventCodeOffset =
+    kRuntimeDiagnosticLatestTxRequestMaskOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveryEventIdentityTagOffset =
+    kRuntimeDiagnosticHalStateOffset;
+
+// Phase 8 projects the newest checksum-valid Wi-Fi call latch recovered from
+// the preceding boot. A set InProgress bit means reset occurred after Enter
+// was committed and before Leave returned.
+static constexpr uint8_t kRuntimeDiagnosticRecoveredCallBootSequenceOffset =
+    kRuntimeDiagnosticCanIdFlagsOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveredCallCompletedMsOffset =
+    kRuntimeDiagnosticWriteDurationUsOffset;
+static constexpr uint8_t kRuntimeDiagnosticRecoveredCallContractIdOffset =
+    kRuntimeDiagnosticHalStateOffset;
 static constexpr uint16_t kControlAckPayloadLen = 28;
 static constexpr uint8_t kControlAckMonoUsOffset = 0;
 static constexpr uint8_t kControlAckCommandIdOffset = 8;
@@ -126,6 +276,8 @@ static constexpr uint16_t kBoardEventCanFrontendSessionInitFailedCode = 38;
 static constexpr uint16_t kBoardEventCanFrontendFaultHoldCode = 39;
 static constexpr uint16_t kBoardEventWifiTxBackpressureCode = 40;
 static constexpr uint16_t kBoardEventRuntimeBreadcrumbRecoveredCode = 41;
+static constexpr uint16_t kBoardEventRemoteControlInitFailedCode = 42;
+static constexpr uint16_t kBoardEventRemoteControlStateChangedCode = 43;
 static constexpr uint16_t kBoardHealthPayloadLen = 52;
 static constexpr uint16_t kBoardHealthV1PayloadLen = 52;
 static constexpr uint16_t kBoardHealthV2PayloadLen = 128;
@@ -137,6 +289,8 @@ static constexpr uint16_t kBoardHealthV8PayloadLen = 360;
 static constexpr uint16_t kBoardHealthV9PayloadLen = 384;
 static constexpr uint16_t kBoardHealthV10PayloadLen = 392;
 static constexpr uint16_t kBoardHealthV11PayloadLen = 408;
+static constexpr uint16_t kBoardHealthV12PayloadLen = 472;
+static constexpr uint16_t kBoardHealthV13PayloadLen = 508;
 static constexpr uint8_t kBoardHealthMonoUsOffset = 0;
 static constexpr uint8_t kBoardHealthCanRxTotalOffset = 8;
 static constexpr uint8_t kBoardHealthCanDropTotalOffset = 12;
@@ -238,6 +392,82 @@ static constexpr uint16_t kBoardHealthPreviousBreadcrumbValidOffset = 392;
 static constexpr uint16_t kBoardHealthPreviousBreadcrumbStageOffset = 396;
 static constexpr uint16_t kBoardHealthPreviousBreadcrumbUptimeMsOffset = 400;
 static constexpr uint16_t kBoardHealthPreviousBreadcrumbSequenceOffset = 404;
+static constexpr uint16_t kBoardHealthRecoveryFlagsOffset = 408;
+static constexpr uint16_t kBoardHealthFirmwareSourceId32Offset = 412;
+static constexpr uint16_t kBoardHealthBootSequenceOffset = 416;
+static constexpr uint16_t kBoardHealthConsecutiveEarlyResetsOffset = 420;
+static constexpr uint16_t kBoardHealthEarlyResetTotalOffset = 424;
+static constexpr uint16_t kBoardHealthWifiQuarantineTotalOffset = 428;
+static constexpr uint16_t kBoardHealthPreviousBootSequenceOffset = 432;
+static constexpr uint16_t kBoardHealthPreviousLastProgressIdOffset = 436;
+static constexpr uint16_t kBoardHealthPreviousLastProgressDetailOffset = 440;
+static constexpr uint16_t kBoardHealthPreviousLastProgressUptimeMsOffset = 444;
+static constexpr uint16_t kBoardHealthCurrentLastProgressIdOffset = 448;
+static constexpr uint16_t kBoardHealthCurrentLastProgressDetailOffset = 452;
+static constexpr uint16_t kBoardHealthCurrentLastProgressUptimeMsOffset = 456;
+static constexpr uint16_t kBoardHealthRetainedEventSequenceOffset = 460;
+static constexpr uint16_t kBoardHealthResetExperimentProfileWordOffset = 464;
+static constexpr uint16_t kBoardHealthRetainedIntegrityWordOffset = 468;
+static constexpr uint16_t kBoardHealthRuntimeContractId32Offset = 472;
+static constexpr uint16_t kBoardHealthRecoveryIdentityId32Offset = 476;
+static constexpr uint16_t kBoardHealthWatchdogObservedTimeoutMsOffset = 480;
+static constexpr uint16_t kBoardHealthPreviousWifiCallFlagsOffset = 484;
+static constexpr uint16_t kBoardHealthPreviousWifiCallBootSequenceOffset = 488;
+static constexpr uint16_t kBoardHealthPreviousWifiCallSequenceOffset = 492;
+static constexpr uint16_t kBoardHealthPreviousWifiCallStartedMsOffset = 496;
+static constexpr uint16_t kBoardHealthPreviousWifiCallDurationUsOffset = 500;
+static constexpr uint16_t kBoardHealthPreviousWifiCallResultOffset = 504;
+static constexpr uint32_t kBoardHealthRecoveryFlagReady = (1u << 0);
+static constexpr uint32_t kBoardHealthRecoveryFlagPreviousValid = (1u << 1);
+static constexpr uint32_t kBoardHealthRecoveryFlagPreviousStable = (1u << 2);
+static constexpr uint32_t kBoardHealthRecoveryFlagCurrentStable = (1u << 3);
+static constexpr uint32_t kBoardHealthRecoveryFlagWifiQuarantined = (1u << 4);
+static constexpr uint32_t kBoardHealthRecoveryFlagWifiStartAllowed = (1u << 5);
+static constexpr uint32_t kBoardHealthRecoveryFlagFallbackRecovered = (1u << 6);
+static constexpr uint32_t kBoardHealthRecoveryFlagSourceChanged = (1u << 7);
+static constexpr uint32_t kBoardHealthRecoveryFlagBuildChanged = (1u << 8);
+static constexpr uint32_t kBoardHealthRecoveryFlagRetryActive = (1u << 9);
+static constexpr uint32_t kBoardHealthResetExperimentSelectorMask = 0x000000FFu;
+static constexpr uint32_t kBoardHealthRequestedWifiModeMask = 0x0000FF00u;
+static constexpr uint32_t kBoardHealthEffectiveWifiModeMask = 0x00FF0000u;
+static constexpr uint32_t kBoardHealthResetExperimentFlagsMask = 0xFF000000u;
+static constexpr uint8_t kBoardHealthRequestedWifiModeShift = 8;
+static constexpr uint8_t kBoardHealthEffectiveWifiModeShift = 16;
+static constexpr uint8_t kBoardHealthResetExperimentFlagsShift = 24;
+static constexpr uint8_t kBoardHealthResetExperimentFlagWatchdogEffective = (1u << 0);
+static constexpr uint8_t kBoardHealthResetExperimentFlagRuntimeDiagnostics = (1u << 1);
+// Application data TX is compiled/gated out. This does not claim physical bus
+// silence: a controller in normal mode may still emit ACK/error bits.
+static constexpr uint8_t kBoardHealthResetExperimentFlagApplicationCanTxSuppressed =
+    (1u << 2);
+static constexpr uint8_t kBoardHealthResetExperimentFlagPhysicalCanTxSuppressed =
+    kBoardHealthResetExperimentFlagApplicationCanTxSuppressed;
+static constexpr uint8_t kBoardHealthResetExperimentFlagWatchdogRequested = (1u << 3);
+static constexpr uint8_t kBoardHealthResetExperimentFlagWatchdogStartCalled = (1u << 4);
+static constexpr uint8_t kBoardHealthResetExperimentFlagWatchdogStartSucceeded = (1u << 5);
+static constexpr uint8_t kBoardHealthResetExperimentFlagWatchdogTimeoutMatches = (1u << 6);
+static constexpr uint32_t kBoardHealthPreviousWifiCallFlagValid = (1u << 0);
+static constexpr uint32_t kBoardHealthPreviousWifiCallFlagInProgress = (1u << 1);
+static constexpr uint32_t kBoardHealthPreviousWifiCallFlagCompleted = (1u << 2);
+static constexpr uint32_t kBoardHealthPreviousWifiCallFlagContractChanged = (1u << 3);
+static constexpr uint8_t kBoardHealthPreviousWifiCallOwnerShift = 8;
+static constexpr uint8_t kBoardHealthPreviousWifiCallOperationShift = 16;
+static constexpr uint32_t kBoardHealthRetainedValidEventsMask = 0x0000FFFFu;
+static constexpr uint32_t kBoardHealthRetainedCorruptMetadataMask = 0x00FF0000u;
+static constexpr uint32_t kBoardHealthRetainedCorruptEventMask = 0xFF000000u;
+static constexpr uint8_t kBoardHealthRetainedCorruptMetadataShift = 16;
+static constexpr uint8_t kBoardHealthRetainedCorruptEventShift = 24;
+static_assert(kBoardHealthRecoveryFlagsOffset == kBoardHealthV11PayloadLen,
+              "BOARD_HEALTH v12 must preserve the complete v11 prefix");
+static_assert(kBoardHealthRetainedIntegrityWordOffset + sizeof(uint32_t) ==
+                  kBoardHealthV12PayloadLen,
+              "BOARD_HEALTH v12 extension must exactly fill its payload");
+static_assert(kBoardHealthRuntimeContractId32Offset ==
+                  kBoardHealthV12PayloadLen,
+              "BOARD_HEALTH v13 must preserve the complete v12 prefix");
+static_assert(kBoardHealthPreviousWifiCallResultOffset + sizeof(uint32_t) ==
+                  kBoardHealthV13PayloadLen,
+              "BOARD_HEALTH v13 extension must exactly fill its payload");
 static constexpr uint32_t kResetCausePowerOn = 0x00000001;
 static constexpr uint32_t kResetCauseBrownout = 0x00000002;
 static constexpr uint32_t kResetCausePin = 0x00000004;

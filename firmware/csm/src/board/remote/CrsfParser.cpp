@@ -63,6 +63,58 @@ CrsfDecodeStatus decodeCrsfRcChannelsPacked(const CrsfFrame& frame,
   return CrsfDecodeStatus::Ok;
 }
 
+CrsfDecodeStatus decodeCrsfLinkStatistics(const CrsfFrame& frame,
+                                          CrsfLinkStatistics* statistics) {
+  if (statistics == nullptr) {
+    return CrsfDecodeStatus::NullOutput;
+  }
+  *statistics = {};
+  if (frame.type != kCrsfFrameTypeLinkStatistics) {
+    return CrsfDecodeStatus::WrongType;
+  }
+  if (frame.payload_len < kCrsfLinkStatisticsPayloadBytes) {
+    return CrsfDecodeStatus::BadLength;
+  }
+
+  statistics->uplink_rssi_ant1_dbm_magnitude = frame.payload[0];
+  statistics->uplink_rssi_ant2_dbm_magnitude = frame.payload[1];
+  statistics->uplink_link_quality = frame.payload[2];
+  statistics->uplink_snr_db = static_cast<int8_t>(frame.payload[3]);
+  statistics->active_antenna = frame.payload[4];
+  statistics->rf_profile = frame.payload[5];
+  statistics->uplink_rf_power = frame.payload[6];
+  statistics->downlink_rssi_dbm_magnitude = frame.payload[7];
+  statistics->downlink_link_quality = frame.payload[8];
+  statistics->downlink_snr_db = static_cast<int8_t>(frame.payload[9]);
+  return CrsfDecodeStatus::Ok;
+}
+
+uint8_t buildCrsfBroadcastFrame(uint8_t frame_type,
+                                const uint8_t* payload,
+                                uint8_t payload_len,
+                                uint8_t* output,
+                                uint8_t output_capacity,
+                                uint8_t sync_byte) {
+  const uint8_t total = static_cast<uint8_t>(payload_len + kCrsfFrameOverheadBytes);
+  if (output == nullptr || output_capacity < total ||
+      payload_len > kCrsfMaxPayloadBytes) {
+    return 0;
+  }
+  if (payload_len != 0 && payload == nullptr) {
+    return 0;
+  }
+
+  output[0] = sync_byte;
+  output[1] = static_cast<uint8_t>(payload_len + 2u);
+  output[2] = frame_type;
+  for (uint8_t i = 0; i < payload_len; ++i) {
+    output[3u + i] = payload[i];
+  }
+  output[total - 1u] = computeCrsfFrameCrc(&output[2],
+                                           static_cast<uint8_t>(payload_len + 1u));
+  return total;
+}
+
 void CrsfParser::reset() {
   pos_ = 0;
   expected_total_ = 0;

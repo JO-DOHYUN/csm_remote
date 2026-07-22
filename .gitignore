@@ -19,6 +19,7 @@ __pycache__/
 .pio/
 .pioenvs/
 .piolibdeps/
+firmware/csm/artifacts/
 
 # C/C++ build output
 build/
@@ -29,4 +30,3 @@ out/
 *.bin
 *.hex
 *.map
-

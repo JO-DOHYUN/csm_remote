@@ -8,11 +8,23 @@
 
 namespace csm::board::control {
 
-static constexpr uint8_t kVehicleCommandMapperMaxFrames = 4;
+static constexpr uint8_t kVehicleCommandMapperMaxFrames = 1;
+static constexpr uint32_t kRemoteSteeringCanId = 0x007;
+static constexpr uint8_t kRemoteSteeringMinimum = 10;
+static constexpr uint8_t kRemoteSteeringCenter = 130;
+static constexpr uint8_t kRemoteSteeringMaximum = 250;
+static constexpr uint8_t kRemoteAuxiliaryNegative = 0x01;
+static constexpr uint8_t kRemoteAuxiliaryPositive = 0x80;
+
+enum class VehicleCommandMapping : uint8_t {
+  None = 0,
+  MdpsBench0x007 = 1,
+};
 
 struct VehicleCommandProfile {
   bool configured = false;
   bool output_enabled = false;
+  VehicleCommandMapping mapping = VehicleCommandMapping::None;
   uint8_t bus = authority::kAuthorityNoBus;
   uint16_t policy_id = 0;
   int16_t throttle_limit_permille = 0;

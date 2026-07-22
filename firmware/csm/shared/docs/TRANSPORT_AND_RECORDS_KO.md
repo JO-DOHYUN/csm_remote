@@ -43,6 +43,8 @@ Record types:
 - `15 HOST_CLEAR_FAULT_LOCKOUT` host-to-board downlink only
 - `16 CAN_RX_SEGMENT`
 - `17 STREAM_SESSION`
+- `18 REMOTE_CONTROL_STATE`
+- `19 RUNTIME_DIAGNOSTIC` debug profile uplink only
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -61,6 +63,110 @@ parse by `payload_len` and skip unknown trailing bytes.
 `STREAM_SESSION` is critical evidence. On reconnect, a host waits for a valid
 session anchor before claiming full publication continuity. The board does not
 replay the disconnected interval.
+
+`REMOTE_CONTROL_STATE` schema 2 payload, 228 bytes:
+- `0..7 mono_us u64`
+- `8 schema u8`, currently `2`
+- `9 remote_link_state u8`, `10 authority_state u8`, `11 active_source u8`
+- `12 flags u8`: bit0 configured, bit1 M4 frontend alive, bit2 RC boundary
+  reserved, bit3 usable RC sample, bit4 CH2/CH4 neutral, bit5 neutral handoff
+  qualified, bit6 stable RC release qualified, bit7 service host allowed
+- `13 link_quality u8`, `14 RSSI dBm magnitude u8`, `15 last CRSF type u8`
+- `16..19 m4_boot_id u32`, `20..23 shared_sequence u32`
+- `24..27 mailbox_age_ms u32`: age of the last accepted M4 mailbox sequence;
+  this is IPC freshness, not RC channel-frame freshness
+- `28..29 CH2 drive permille i16`, `30..31 CH4 steering permille i16`
+- `32..33 raw CH2 u16`, `34..35 raw CH4 u16`
+- `36..39 uart_baud u32`, `40..83` CRSF parser, mailbox, and telemetry
+  counters in this order: RX bytes, valid frames, decoded RC frames, link frames,
+  rejected length, rejected CRC, inter-byte reset, mailbox publish, telemetry
+  frames, telemetry bytes, serial write failures
+- `84..107` M7 control counters in this order: control cycles, neutral cycles,
+  cycle deadline misses, successful CAN writes, failed CAN writes, IPC rejects
+- `108 last_decision u8`, `109 last CRSF address u8`, `110 sample_state u8`
+- `111 last_ipc_reject_detail u8`: `0` none, `1` bad shared header, `2` torn
+  commit, `3` checksum mismatch
+- `112..127` cycle period, inter-frame gap, neutral qualification, release
+  qualification, max forward RPM, max reverse RPM, max steering deci-degree,
+  and policy id as `u16` fields
+- `128..159 normalized channel[16] i16`
+- `160 link_statistics_valid u8`; `161..169` exact CRSF uplink/downlink RSSI,
+  SNR, antenna, RF profile, RF power, and downlink link quality fields
+- `170..173 shared_publish_failures u32`: M4-to-M7 shared-window publish
+  failures; this is separate from M7 IPC read rejects at `104..107`
+- `176..207 raw channel[16] u16`
+- `208..211 accepted_rc_frames u32`
+- `212..215 normalization_rejects u32`
+- `216..219 last_rc_frame_age_ms u32`
+- `220..223 last_link_statistics_age_ms u32`
+- `224..225 last_normalize_reject_detail u16`
+
+`RUNTIME_DIAGNOSTIC` schema 2 payload is exactly 128 bytes and exists only in
+explicit `*_runtime_diag` firmware profiles. Production profiles neither emit
+nor advertise it. Its purpose is reset-boundary diagnosis; it is not product
+telemetry and may be removed after the hardware boundary is closed.
+
+- `0..7 mono_us u64`
+- `8 schema u8`, currently `2`
+- `9 phase u8`: `1 boot checkpoint`, `2 periodic`, `3 retained TX-write-before`,
+  `4 retained TX-write-return`, `5 physical TX outcome`, `6 recovered snapshot`
+- `10 boot_phase u8`: setup entry through first loop, in execution order
+- `11 flags u8`: bit0 FDCAN handle valid, bit1 write in progress, bit2 FIFO
+  enqueue accepted, bit3 matching TX buffer `TXBTO`, bit4 `TXBRP` pending,
+  bit5 `TXBCF` cancelled, bit6 recovered, bit7 recovered from another build
+- `12..15 attempt_sequence u32`, `16..19 can_id_flags u32`
+- `20..23 write_duration_us u32`, `24..27 write_result i32`
+- `28..31 latest_tx_request_mask u32` (`1`, `2`, or `4` for the three Mbed
+  TX FIFO elements), `32..35 HAL state u32`,
+  `36..39 HAL ErrorCode u32`
+- `40..71 fdcan[8] u32`; phase 3 stores the pre-write snapshot and later phases
+  store the current/post-write snapshot. Register order is
+  `CCCR, PSR, ECR, TXFQS, TXBRP, TXBTO, TXBCF, IR`. These are read-only
+  snapshots; diagnostics must never clear the write-one-to-clear `IR` bits.
+- `72 wifi_call_phase u8`: IP configure, AP/server start, accept, client
+  configure, send, receive, close, delete의 정확한 워커 호출 경계
+- `73 wifi_call_flags u8`: bit0 호출 진행 중, bit1 sink 연결, bit2 워커
+  heartbeat stale, bit3 워커 실행, bit4 AP/server 준비
+- `76..79 wifi_call_sequence u32`, `80..83 wifi_call_started_ms u32`
+- `84..87 wifi_call_duration_us u32`, `88..91 wifi_call_result i32`
+- `92..95 wifi_worker_heartbeat_age_ms u32`
+- `96..99 wifi_call_stall_total u32`, `100..103 wifi_connection_epoch u32`
+- `104..111 boot_session_id u64`
+- `112..115 runtime_stage u32`: stage, detail, retained breadcrumb low sequence
+- `116..119 wifi_worker_stack_free_bytes u32`, `120..123
+  wifi_worker_stack_max_used_bytes u32`; 1초 주기로 worker 자체가 측정한다.
+  MCP 상태는 `BOARD_HEALTH` evidence를 사용한다.
+- `124..127 firmware_build_id u32`
+
+The retained slot is checksum-last, double-buffered in STM32H747 backup SRAM,
+and explicitly D-cache cleaned. It does not share the bootloader heap. A
+checksum-valid slot from a different build is emitted with bit7 set
+instead of being silently discarded. `write_result > 0` proves only that Mbed
+accepted the frame into the FDCAN FIFO. Actual transmission requires the same
+attempt's `TXBTO`, no `TXBCF/TXBRP`, and matching external Kvaser evidence.
+
+The M4-M7 shared-memory schema is version `2`. Product M4 and M7 artifacts must
+be deployed as a pair. The fixed 1 KiB SRAM4 window at `0x38000000` replaces the
+OpenAMP resource-table window, so RPC/OpenAMP is compile-time incompatible with
+the remote product profiles. The header, M4-to-M7 channel, and M7-to-M4 channel
+start on separate 32-byte cache-line boundaries. Each writer cleans only its own
+channel so stale M7 cache lines cannot overwrite a concurrent M4 sample. M4 owns
+UART/CRSF parsing and normalization only;
+M7 owns authority, safety, limiting, vehicle mapping, CAN write, and matching
+`CAN_TX_RAW` evidence. For the current RC bench contract, CH4 is steering and
+CH5 is the auxiliary three-position switch. CH4 `-1000/0/+1000` maps to standard
+CAN ID `0x007`, DLC 8, byte 0 decimal `10/130/250`; bytes 1..6 are zero. CH5 is
+quantized to `-1000/0/+1000`: negative writes byte 7 `0x01`, positive writes
+byte 7 `0x80`, and neutral writes `0x00`. A non-neutral CH5 overrides other RC
+motion targets to neutral. Steering has a small center deadband and is slew
+limited; the single frame remains periodic at 20 ms. A repeated or frozen
+mailbox sequence cannot refresh source freshness.
+
+Remote authority order is `hard safety > RC remote > upstream autonomy >
+service host > monitoring`. RC presence reserves the authority boundary before
+neutral qualification. Loss immediately produces the periodic neutral command;
+only a stable non-malformed release interval may expose a lower-priority source.
+Malformed CRSF or IPC evidence fails closed and does not release authority.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
 - `0..7 mono_us u64`
@@ -718,6 +824,75 @@ Extended 408-byte `BOARD_HEALTH v11` payload:
 - `404..407 previous_runtime_breadcrumb_write_sequence u32`
 - These fields remain stable for the full new boot so sinks that connect after
   the one-shot event still receive the same reset-boundary evidence.
+
+Extended 472-byte `BOARD_HEALTH v12` payload:
+- `0..407`: byte-for-byte the same as the complete 408-byte v11 payload. A v11
+  producer remains valid, and a host that only understands v11 must ignore the
+  v12 trailing bytes after preserving the original typed payload.
+- The typed-frame header `payload_len=472` is authoritative. Legacy prefix byte
+  `53 health_payload_len u8` contains only the low 8 bits (`216`) and must not be
+  used to truncate an extended payload.
+- `408..411 recovery_flags u32`: bit0 recovery ready, bit1 previous retained
+  boot valid, bit2 previous boot reached stable state, bit3 current boot reached
+  stable state, bit4 Wi-Fi quarantined, bit5 Wi-Fi start allowed, bit6 fallback
+  metadata recovered, bit7 firmware source changed, bit8 firmware build changed,
+  bit9 a bounded retry is active. Remaining bits are reserved and must be zero.
+- `412..415 firmware_source_id32 u32`: deterministic source-tree identity
+  projected by the running firmware; this is separate from a Git commit or
+  human-readable build label.
+- `416..419 boot_sequence u32`
+- `420..423 consecutive_early_resets u32`
+- `424..427 early_reset_total u32`
+- `428..431 wifi_quarantine_total u32`
+- `432..435 previous_boot_sequence u32`
+- `436..439 previous_last_progress_id u32`
+- `440..443 previous_last_progress_detail u32`
+- `444..447 previous_last_progress_uptime_ms u32`
+- `448..451 current_last_progress_id u32`
+- `452..455 current_last_progress_detail u32`
+- `456..459 current_last_progress_uptime_ms u32`
+- `460..463 retained_event_sequence u32`: sequence of the most recently
+  committed retained event visible to this snapshot.
+- `464..467 reset_experiment_profile_word u32`: byte0 experiment selector;
+  byte1 requested Wi-Fi mode (`0 disabled`, `1 AP-only`, `2 full TCP`); byte2
+  effective Wi-Fi mode with the same values; byte3 flags (`bit0 watchdog
+  effective`, `bit1 runtime diagnostics enabled`, `bit2 application-data CAN TX
+  suppressed`). Bit2 does not imply that the CAN controller cannot emit ACK or
+  error signaling. Other byte3 bits are reserved and must be zero in v12.
+- `468..471 retained_integrity_word u32`: bits 0..15 valid retained-event count,
+  bits 16..23 corrupt metadata count, and bits 24..31 corrupt retained-event
+  count. These integrity counters are evidence about retained storage parsing;
+  they are not reset-cause classification.
+
+The v12 recovery fields are scalar projections of the retained black box, not a
+replacement for its event sequence. A changed `boot_sequence` or
+`boot_session_id` proves a reboot boundary; watchdog, brownout, software, and
+external-reset causes remain unknown unless separately supported by reset-cause
+or retained-progress evidence.
+
+Extended 508-byte `BOARD_HEALTH v13` payload:
+- `0..471`: byte-for-byte the same as the complete 472-byte v12 payload.
+- v13 extends byte3 of `reset_experiment_profile_word`: bit3 watchdog requested,
+  bit4 watchdog start called, bit5 watchdog start returned successfully, and
+  bit6 observed timeout matches the requested timeout. Bit7 is reserved.
+- `472..475 runtime_contract_id32 u32`: deterministic identity of the selected
+  PlatformIO environment and material runtime flags. It distinguishes artifacts
+  whose source tree is identical but whose effective runtime contract differs.
+- `476..479 recovery_identity_id32 u32`: recovery identity composed from source
+  identity, runtime contract identity, and experiment selector.
+- `480..483 watchdog_observed_timeout_ms u32`: timeout reported by the live
+  watchdog instance; zero when the watchdog is not running.
+- `484..487 previous_wifi_call_flags u32`: bit0 valid, bit1 was in progress at
+  reset, bit2 completed, bit3 contract changed; byte1 owner and byte2 operation.
+- `488..491 previous_wifi_call_boot_sequence u32`
+- `492..495 previous_wifi_call_sequence u32`
+- `496..499 previous_wifi_call_started_ms u32`
+- `500..503 previous_wifi_call_duration_us u32`
+- `504..507 previous_wifi_call_result i32`
+
+The Wi-Fi call fields are recovered from a checksum-last dual-slot latch written
+immediately before and after vendor calls. An in-progress value localizes the
+last entered call boundary; it does not by itself prove the reset cause.
 
 Mid Carrier MCP2515 profile major `3` descriptor default:
 - Passive Product and Full Instrumented both expose `bus_count=2` for the

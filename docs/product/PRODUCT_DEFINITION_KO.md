@@ -27,7 +27,11 @@ hard safety > upstream autonomy > RC remote > service host > monitoring
 
 ### Production Remote Observer
 
-최종 양산 목표다. RC는 M7 authority를 통해 제한적으로 차량 제어할 수 있고, Windows USB와 Android Wi-Fi는 observer-only다. 이 profile은 아직 구현·HIL 완료 상태가 아니다.
+최종 양산 목표다. RC는 M7 authority를 통해 제한적으로 차량 제어할 수 있고,
+Windows USB와 Android Wi-Fi는 observer-only다. 현재 M4-M7 IPC와 RC 관측 경계는
+구현됐지만 mapper 기본값은 `None`, local CAN TX capability는 Off이며 autonomy
+입력도 제품 runtime에 아직 연결되지 않았다. 따라서 현재 artifact는 차량 제어
+release가 아니다.
 
 ### Full Instrumented Service/HIL
 
@@ -35,11 +39,19 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 
 ## 제어 안전 계약
 
-- upstream autonomy release가 명확하지 않으면 local motion CAN TX는 0이다.
-- unknown, active, recently active, ambiguous, protocol fault는 모두 unsafe다.
+- upstream autonomy가 `InactiveConfirmed`로 명시적으로 release하지 않으면 local
+  motion CAN TX는 0이다. unknown, active, recently active, ambiguous, protocol
+  fault는 모두 fail-closed다.
+- autonomy release 뒤 RC가 유효하면 service host보다 먼저 제어 경계를 예약한다.
+- RC가 검출됐으나 중립 확인 전이면 local motion source를 차단한다.
+- RC stale/failsafe는 즉시 중립으로 전환하고 안정된 release qualification 뒤에만 하위 source를 허가한다.
+- malformed CRSF, IPC integrity failure, M4 heartbeat loss는 authority를 해제하지 않는 fail-closed 상태다.
 - M4, VSM, parser, UI는 최종 CAN TX 권한을 가질 수 없다.
 - 모든 local motion TX는 M7 `CanTxGateway`와 hardware gate를 통과해야 한다.
-- `CONTROL_ACK`는 요청 수락/거부 증거이며 실제 송신 성공은 matching `CAN_TX_RAW`로만 증명한다.
+- `CONTROL_ACK`는 요청 수락/거부 증거다. `CAN_TX_RAW`는 별도 TX evidence지만
+  현재 built-in CAN의 driver FIFO enqueue 수락 직후 발행되는 경로는 물리 송신
+  완료 증거가 아니다. release에서는 FDCAN TX completion/TXBTO와 상관된 record와
+  외부 analyzer가 모두 일치해야 실제 송신 성공으로 판정한다.
 
 ## 관측 데이터 계약
 
@@ -55,3 +67,14 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 - USB 장애를 Wi-Fi가 기다리거나 Wi-Fi 장애를 USB가 기다리지 않는다.
 - production VSM에 raw vehicle control affordance를 제공하지 않는다.
 - 검증되지 않은 tablet USB/CAN 또는 특정 양산 tablet port를 제품 전제로 고정하지 않는다.
+
+## 제어 release gate
+
+- upstream autonomy monitor의 실제 CAN profile과 runtime wiring
+- 실제 차량 vehicle mapping 승인; `0x007` MDPS mapping은 bench 전용이며 기본 Off
+- D1 hardware gate의 회로 극성, fail-safe 의미, readback 검증
+- completion-correlated `CAN_TX_RAW`와 Kvaser 등 외부 analyzer 대조
+- RC loss/reacquire, USB+Wi-Fi+CAN 동시 부하, reset/fault injection, 장시간 soak
+
+CSM의 상시 self-debug와 reset recovery 경계는 제품 기능으로 유지하며 상세 정책은
+`docs/architecture/DEBUG_AND_RECOVERY_ARCHITECTURE_KO.md`를 따른다.

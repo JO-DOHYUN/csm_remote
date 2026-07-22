@@ -32,6 +32,8 @@ enum class RecordType : uint8_t {
   HostClearFaultLockout = 15,
   CanRxSegment = 16,
   StreamSession = 17,
+  RemoteControlState = 18,
+  RuntimeDiagnostic = 19,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

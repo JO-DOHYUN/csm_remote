@@ -5,9 +5,8 @@ namespace csm::board::uplink {
 bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   config_ = config;
   counters_ = {};
-  blocked_since_ms_ = 0;
   enabled_ = false;
-  client_active_ = false;
+  connected_ = false;
   return false;
 }
 
@@ -21,10 +20,16 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView&) {
 
 SinkServiceResult WifiTcpSink::service(uint32_t, uint32_t, uint32_t) { return {}; }
 
-void WifiTcpSink::abortQueuedFrames() { queue_.clear(); }
+void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
 Stream* WifiTcpSink::downlinkStream() { return nullptr; }
 
-void WifiTcpSink::noteBackpressure(uint32_t, SinkServiceResult&) {}
+int WifiTcpSink::available() { return 0; }
+
+int WifiTcpSink::read() { return -1; }
+
+int WifiTcpSink::peek() { return -1; }
+
+uint32_t WifiTcpSink::workerHeartbeatAgeMs(uint32_t) const { return 0; }
 
 }  // namespace csm::board::uplink

@@ -16,6 +16,7 @@ struct M4RemoteMailboxSnapshot {
   bool integrity_ok = false;
   uint32_t received_m7_ms = 0;
   uint32_t age_ms = 0;
+  uint32_t published_sequence = 0;
   uint16_t reject_detail = 0;
 };
 
@@ -37,6 +38,7 @@ class M4RemoteMailboxReader {
   void reject(RemoteLinkState state, uint16_t detail);
 
   M4RemoteMailboxSnapshot snapshot_ = {};
+  uint32_t last_published_sequence_ = 0;
 };
 
 }  // namespace csm::board::remote

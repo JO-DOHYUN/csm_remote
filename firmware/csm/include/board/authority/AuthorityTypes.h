@@ -35,6 +35,7 @@ enum class ControlSourceId : uint8_t {
   Remote = 1,
   HostService = 2,
   TestOnly = 3,
+  SafetyNeutral = 4,
 };
 
 enum class ControlDecisionCode : uint8_t {
@@ -91,4 +92,3 @@ constexpr bool mayConsiderLocalControl(AutonomyAuthorityState state) {
 }
 
 }  // namespace csm::board::authority
-

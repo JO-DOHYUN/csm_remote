@@ -9,6 +9,7 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
       return UplinkPriority::CanTruth;
     case csm::RecordType::CanTxRaw:
     case csm::RecordType::ControlAck:
+    case csm::RecordType::RemoteControlState:
       return UplinkPriority::Critical;
     case csm::RecordType::Capability:
     case csm::RecordType::StreamSession:
@@ -16,6 +17,8 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
       return UplinkPriority::Critical;
     case csm::RecordType::BoardEvent:
       return UplinkPriority::Normal;
+    case csm::RecordType::RuntimeDiagnostic:
+      return UplinkPriority::Diagnostic;
     default:
       return UplinkPriority::Normal;
   }

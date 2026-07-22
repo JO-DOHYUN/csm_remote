@@ -20,6 +20,7 @@ struct OperatorCommand {
   bool enable_request = false;
   int16_t throttle_permille = 0;
   int16_t steer_permille = 0;
+  int16_t auxiliary_permille = 0;
   int16_t brake_permille = 0;
   uint8_t drive_mode = 0;
   uint16_t validity_flags = 0;
@@ -30,6 +31,8 @@ constexpr bool isWithinOperatorCommandRange(const OperatorCommand& command) {
          command.throttle_permille <= kControlPermilleMax &&
          command.steer_permille >= kControlPermilleMin &&
          command.steer_permille <= kControlPermilleMax &&
+         command.auxiliary_permille >= kControlPermilleMin &&
+         command.auxiliary_permille <= kControlPermilleMax &&
          command.brake_permille >= kBrakePermilleMin &&
          command.brake_permille <= kBrakePermilleMax;
 }
@@ -39,4 +42,3 @@ constexpr bool hasLocalControlSource(const OperatorCommand& command) {
 }
 
 }  // namespace csm::board::control
-

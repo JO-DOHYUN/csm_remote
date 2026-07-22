@@ -1,6 +1,49 @@
 # BRIEF
 
-Updated: 2026-07-20
+Updated: 2026-07-22
+
+## 2026-07-22 crash-first self-debug 현재 상태
+
+- `RuntimeSupervisor`와 `BootRecovery`가 risky driver보다 먼저 시작한다. backup
+  SRAM `512..2815`에 교대 metadata 2슬롯과 compact event 64개 ring을
+  checksum-last로 commit하고, boot sequence/last progress/30초 stable/early-reset/
+  Wi-Fi quarantine을 `BOARD_HEALTH v13`에 투영한다. `3072..3199`의
+  `RetainedCallLatch`는 Wi-Fi vendor call 진입 전과 반환 직후를 별도 보존한다.
+- 같은 source/experiment selector에서 30초 이전 종료가 연속 2회 복구되면 다음 boot의 Wi-Fi를
+  Off로 낮춘다. build timestamp만 바뀌어도 이력을 지우지 않으며 REF/A/B/C
+  selector 변경은 새 구성에 한 번의 clean trial을 준다.
+- reset matrix는 REF=`watchdog On+Full`, A=`watchdog On+Wi-Fi Off`,
+  B=`watchdog Off+Full`, C=`watchdog On+AP-only`다. 네 artifact 모두 source hash
+  `77bf1341a672984d8eb3d770234e3d2f7acf0957036a8eb705deadd997517856`로
+  build됐고 application-data CAN TX는 compile-time 차단됐다.
+- 2026-07-22 실제 Portenta COM7에서 REF/A/B/C를 각각 180초 관측했고 모두
+  단일 boot session, 30초 stable, CRC 0, sequence gap 0, application CAN TX 0으로
+  통과했다. REF/A/C는 실제 watchdog 3000 ms, B는 실제 watchdog 비동작을
+  `BOARD_HEALTH v13`으로 확인했다. 이 결과는 리팩터링 후 단기 창에서 reset이
+  재현되지 않았다는 근거이며 과거 reset 원인을 Wi-Fi로 확정하지 않는다.
+- reset raw는 여전히 0/unknown이었다. Arduino bootloader가 application보다 먼저
+  RCC latch를 지울 수 있으므로 bootloader early capture 또는 외부 power/reset
+  evidence 전에는 watchdog/power/hard fault를 확정하지 않는다.
+- 선택된 PlatformIO env와 material flag는 deterministic runtime contract ID로
+  source ID/selector와 합성되어 recovery identity를 이룬다.
+
+## 2026-07-21 Wi-Fi 실행 경계 리팩터링
+
+- `WifiTcpSink`에서 모든 AP/socket 호출과 socket lifetime을 제거하고,
+  단일 `WifiSocketWorker`가 configure/AP/server/accept/send/recv/close/delete를
+  소유하도록 분리했다.
+- main/publisher 경계는 bounded TX/RX mailbox의 try-offer와 cached snapshot만
+  사용한다. 250 ms 이상 진행 중인 호출은 phase/sequence/heartbeat로 관측한다.
+  같은 M7/kernel/WHD/radio/전원을 공유하므로 vendor stall과 power fault까지
+  물리 격리됐다고 주장하지 않는다.
+- Wi-Fi runtime은 Disabled/AP-only/Full TCP로 분리하고 startup attempt를 기본
+  1회로 제한했다. 이 제한은 한 번의 `beginAP()` 반환 시간을 보장하지 않는다.
+- runtime diagnostic schema 2는 Wi-Fi call phase/sequence/start/duration/result,
+  worker heartbeat, stall count, epoch를 포함한다. retained evidence는 Portenta
+  bootloader heap과 겹치던 일반 RAM 대신 STM32H747 backup SRAM을 사용한다.
+- boot recovery/runtime supervisor/Wi-Fi isolation/remote control/BOARD_HEALTH v13/
+  canonical fanout host contract와 architecture/source/profile guard가 통과했다.
+  blocked-client/RC/USB 동시 HIL은 다음 gate다.
 
 ## 2026-07-20 실장비 결과
 
@@ -12,18 +55,21 @@ Updated: 2026-07-20
 ## 저장소 기준선
 
 - 원격 저장소: `https://github.com/JO-DOHYUN/csm_remote.git`
-- 분기 기준 commit: `51b411191aa7410df9b2bfecbddd040451287db0`
+- 분기 기준 commit: `d2a1f87fae3e44ba978f9f483dd4b8799cee32ad`
 - 작업 branch: `codex/vsm-wifi-fanout`
 - 정식 PlatformIO project: `firmware/csm`
 
 ## 확인된 현재 사실
 
 - passive M7 env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`가 clean clone에서 build된다.
-- M4 frontend proof와 M4 Serial3 capture probe env가 build된다.
-- Phase 1, 2A, 2B guard가 통과한다.
-- remote/authority/control 코드는 deny-first skeleton이며 production runtime에 연결되지 않았다.
+- 제품 M4 env `portenta_h7_m4_remote_frontend`는 Serial3 CRSF 416666 8N1, 16채널/링크 통계, 정규화, 양방향 telemetry와 SRAM4 IPC를 포함해 build된다.
+- 제품 M7 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi`는 RC authority/limiter 관측 경계, built-in CAN bus 1 RX, canonical USB/Wi-Fi evidence를 포함한다. mapper는 `None`, local CAN TX capability는 Off다.
+- remote product architecture, Phase 2A, Phase 2B guard와 전체 runtime 계약시험이 통과한다.
+- hard safety 뒤 upstream autonomy가 `InactiveConfirmed`로 release해야 RC reservation을 평가한다. 그 뒤 500 ms 중립 qualification, 정상 stale/failsafe의 즉시 중립과 1초 release를 적용하며 malformed/protocol/IPC/M4 failure는 release하지 않는다. autonomy runtime wiring은 아직 없다.
+- SRAM4 schema 2 IPC는 header, M4→M7, M7→M4를 32-byte cache-line 단독 소유 영역으로 분리한다. M4/M7 artifact는 항상 한 쌍으로 배포한다.
 - typed v1 frame은 유지하면서 `CanonicalPublisher`가 fanout 전에 `publish_seq64`를 배정하고 `seq u16`에 하위 16비트를 기록한다. `STREAM_SESSION`이 full identity를 고정한다.
-- Android generated binding이 handwritten offset을 만들지 않도록 `TypedRecords.h`가 CAN raw/segment와 BOARD_HEALTH v8 field offset constants를 제공한다. wire byte layout은 변경되지 않았다.
+- `TypedRecords.h`가 CAN raw/segment와 `BOARD_HEALTH v13` field offset constants를
+  제공하며 v13은 v12의 472-byte prefix를 그대로 보존한다.
 - `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 48-record queue, 4-record critical reserve, 2-record/75 ms bounded batching을 사용한다.
 - Wi-Fi observer env는 Arduino Mbed Wi-Fi AP direct와 TCP server `192.168.4.1:3333`, client 1개를 사용한다.
 - host fanout contract test, passive M7 build, Wi-Fi observer M7 build, M4 frontend proof/probe와 passive symbol guard가 통과했다.
@@ -35,7 +81,8 @@ Updated: 2026-07-20
 - 2026-07-16 Service/HIL 실측에서 비활성 encoder가 0값 `ENC_DERIVED`를 계속 발행하고 disabled timer를 fault로 광고하던 계약을 제거했다. 해당 profile은 encoder capability도 0으로 광고한다.
 - Kvaser CAN1 `0x50` 20 Hz와 CSM Wi-Fi를 같은 30 s 창에서 계측한 최종 artifact는 `C:\WORKS\VS\vsm_android_app\build\hil\20260716-114703-kvaser-can1-wifi-observer`다. CSM health-window source/bus0는 `580/580`, CAN/FIFO/Wi-Fi drop과 typed/segment/capture gap은 모두 0이었다.
 - 동일 bench에서 Android와 같은 canonical heartbeat/ARM/neutral/disarm을 PC HIL client로 실행했다. artifact `C:\WORKS\VS\vsm_android_app\build\hil\20260716-115511-service-neutral-control`에서 모든 ACK accepted, matching `CAN_TX_RAW`, Kvaser `0x100=0x32`와 `0x200=0x32`를 확인했다.
-- 실제 R16SM, M4-M7 IPC, production Wi-Fi module, dual-CAN 고부하, blocked client, 동시 USB/Wi-Fi, RC timing/차량 HIL은 이 branch에서 검증되지 않았다.
+- 2026-07-20 당시 dirty build 사용량은 M4 RAM 14.7%/Flash 7.0%, M7 RAM 74.7%/Flash 44.0%였다. 현재 reset REF build는 RAM 79.5%/Flash 45.5%다.
+- 실제 R16SM CRSF/telemetry, M4-M7 IPC, autonomy wiring, 실제 vehicle mapping, D1 hardware gate, completion-correlated CAN TX, production Wi-Fi 동시 운용, dual-CAN 고부하와 장시간 reset gate는 아직 검증되지 않았다.
 
 ## 확정된 목표
 
@@ -47,9 +94,13 @@ Updated: 2026-07-20
 
 ## 다음 구현 gate
 
-1. Android Service/HIL ARM, neutral request, ACK와 matching `CAN_TX_RAW`를 Kvaser로 대조한다.
-2. 제어된 dual-CAN 고부하 source로 CAN evidence와 source count를 대조한다.
-3. reconnect와 blocked-client fault injection을 수행한다.
-4. 기존 USB Windows VSM, RC, dual CAN, Wi-Fi 동시 HIL과 장시간 soak를 수행한다.
+1. REF/A/B/C 180초 1차 통과를 반복·장시간 soak와 fault injection으로 확장한다.
+2. bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
+3. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
+4. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
+5. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`를 구현하고 Kvaser에서
+   ID/payload/주기/ACK를 대조한다. `0x007` mapper는 bench 전용이다.
+6. Windows USB + Android Wi-Fi + RC + dual CAN 동시 HIL, fault injection,
+   blocked-client/reconnect와 장시간 soak를 수행한다.
 
 Android 전용 wire 형식이나 sink별 별도 encode 경로는 만들지 않는다.

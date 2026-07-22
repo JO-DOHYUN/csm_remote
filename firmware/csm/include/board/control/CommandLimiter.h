@@ -16,6 +16,10 @@ struct CommandLimiterConfig {
   int16_t brake_min_permille = 0;
   int16_t brake_max_permille = 0;
   uint16_t min_command_interval_ms = 0;
+  uint16_t throttle_rise_step_permille = 0;
+  uint16_t throttle_fall_step_permille = 0;
+  uint16_t steer_step_permille = 0;
+  uint16_t steer_return_step_permille = 0;
 };
 
 struct CommandLimitResult {

@@ -4,12 +4,6 @@
 
 #include <Arduino.h>
 
-#include "board/uplink/FixedFrameQueue.h"
-
-#if BOARD_ENABLE_WIFI_UPLINK
-#include <TCPSocket.h>
-#endif
-
 #ifndef BOARD_ENABLE_WIFI_UPLINK
 #define BOARD_ENABLE_WIFI_UPLINK 0
 #endif
@@ -22,46 +16,29 @@
 #define BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS 4
 #endif
 
-#ifndef BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS
-#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 75
-#endif
-
-#ifndef BOARD_WIFI_TX_BATCH_MIN_RECORDS
-#define BOARD_WIFI_TX_BATCH_MIN_RECORDS 2
-#endif
-
-#ifndef BOARD_WIFI_STALL_TIMEOUT_MS
-#define BOARD_WIFI_STALL_TIMEOUT_MS 5000
-#endif
-
-#ifndef BOARD_WIFI_TX_CHUNK_BYTES
-#define BOARD_WIFI_TX_CHUNK_BYTES 512
-#endif
+#include "board/uplink/WifiWorkerContract.h"
+#include "board/uplink/WifiWorkerMailbox.h"
 
 static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS < BOARD_WIFI_SINK_QUEUE_RECORDS,
               "Wi-Fi critical reserve must leave normal queue capacity");
 static_assert(BOARD_WIFI_STALL_TIMEOUT_MS > 0,
-              "Wi-Fi stalled-client timeout must be non-zero");
+              "Wi-Fi backpressure timeout must be non-zero");
+static_assert(BOARD_WIFI_CALL_STALL_TIMEOUT_MS > 0,
+              "Wi-Fi socket call isolation timeout must be non-zero");
 
 namespace csm::board::uplink {
 
-struct WifiTcpSinkConfig {
-  const char* ap_ssid = nullptr;
-  const char* ap_passphrase = nullptr;
-  uint16_t port = 3333;
-  uint8_t channel = 6;
-  uint8_t ip[4] = {192, 168, 4, 1};
-  uint32_t drain_time_budget_us = 0;
-  uint32_t max_writes_per_pump = 0;
-  uint32_t max_bytes_per_pump = 0;
-  uint32_t stall_timeout_ms = BOARD_WIFI_STALL_TIMEOUT_MS;
-  uint32_t batch_max_latency_ms = BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS;
-  uint8_t batch_min_records = BOARD_WIFI_TX_BATCH_MIN_RECORDS;
-};
+class WifiSocketWorker;
 
 struct WifiTcpSinkCounters {
+  uint32_t worker_start_total = 0;
+  uint32_t worker_start_fail_total = 0;
+  uint32_t startup_attempt_total = 0;
+  uint32_t startup_exhausted_total = 0;
   uint32_t ap_start_total = 0;
   uint32_t ap_start_fail_total = 0;
+  uint32_t server_start_total = 0;
+  uint32_t server_start_fail_total = 0;
   uint32_t offer_accept_total = 0;
   uint32_t offer_disconnected_total = 0;
   uint32_t offer_overflow_total = 0;
@@ -86,6 +63,11 @@ struct WifiTcpSinkCounters {
   uint32_t close_call_max_us = 0;
   uint32_t queue_high_water_bytes = 0;
   uint32_t queue_high_water_records = 0;
+  uint32_t tx_worker_start_fail_total = 0;
+  uint32_t tx_worker_stall_total = 0;
+  uint32_t tx_late_result_total = 0;
+  uint32_t rx_overflow_total = 0;
+  uint32_t worker_returned_slow_call_total = 0;
   uint64_t first_accepted_publish_seq = 0;
   uint64_t last_accepted_publish_seq = 0;
   uint64_t last_sent_publish_seq = 0;
@@ -98,7 +80,8 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   bool enabled() const override;
   bool connected() const override;
   SinkOfferResult offer(const PublishedFrameView& frame) override;
-  SinkServiceResult service(uint32_t byte_budget, uint32_t now_ms, uint32_t now_us);
+  SinkServiceResult service(uint32_t byte_budget, uint32_t now_ms,
+                            uint32_t now_us);
   void abortQueuedFrames();
   Stream* downlinkStream();
 
@@ -109,35 +92,41 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   size_t write(uint8_t) override { return 0; }
   size_t write(const uint8_t*, size_t) override { return 0; }
 
-  bool hasPendingFrames() const { return !queue_.empty(); }
-  bool backpressureActive() const { return blocked_since_ms_ != 0; }
-  uint32_t queuedBytes() const { return queue_.queuedBytes(); }
+  bool hasPendingFrames() const {
+    return mailbox_.queueSnapshot().queued_records != 0;
+  }
+  bool backpressureActive() const { return backpressure_active_; }
+  uint32_t queuedBytes() const { return mailbox_.queueSnapshot().queued_bytes; }
   const WifiTcpSinkCounters& counters() const { return counters_; }
+  WifiWorkerCallSnapshot workerCallSnapshot() const {
+    return mailbox_.callSnapshot();
+  }
+  WifiWorkerStateSnapshot workerStateSnapshot() const { return worker_state_; }
+  uint32_t workerHeartbeatAgeMs(uint32_t now_ms) const;
 
  private:
-  FixedFrameQueue<BOARD_WIFI_SINK_QUEUE_RECORDS> queue_;
+  WifiWorkerMailbox mailbox_;
+  WifiSocketWorker* worker_ = nullptr;
   WifiTcpSinkConfig config_;
   WifiTcpSinkCounters counters_;
-  uint32_t blocked_since_ms_ = 0;
-  uint32_t batch_started_ms_ = 0;
-  bool urgent_flush_ = false;
+  WifiWorkerStateSnapshot worker_state_;
   bool enabled_ = false;
+  bool connected_ = false;
+  bool backpressure_active_ = false;
+  bool isolation_latched_ = false;
+  bool isolation_pending_worker_epoch_ = false;
+  uint32_t isolated_call_sequence_ = 0;
+  uint32_t observed_worker_epoch_ = 0;
+  uint32_t effective_connection_epoch_ = 0;
+  uint32_t logical_call_stall_total_ = 0;
+  uint32_t service_reported_bytes_sent_total_ = 0;
+  uint32_t service_reported_frames_sent_total_ = 0;
+  uint32_t service_reported_stall_event_sequence_ = 0;
 
-  bool client_active_ = false;
-
-#if BOARD_ENABLE_WIFI_UPLINK
-  TCPSocket* client_socket_ = nullptr;
-  uint8_t rx_buffer_[256] = {};
-  uint16_t rx_offset_ = 0;
-  uint16_t rx_length_ = 0;
-  bool socket_closed_ = false;
-
-  bool acceptClient();
-  void disconnectClient(bool stalled);
-  void rejectExtraClient();
-  void noteSocketError(nsapi_error_t error);
-#endif
-  void noteBackpressure(uint32_t now_ms, SinkServiceResult& result);
+  void syncWorkerState(const WifiWorkerStateSnapshot& state,
+                       SinkServiceResult& result);
+  void isolateStalledCall(const WifiWorkerCallSnapshot& call,
+                          uint32_t now_ms, SinkServiceResult& result);
 };
 
 }  // namespace csm::board::uplink

@@ -18,6 +18,7 @@ constexpr uint16_t kDetailStale =
 
 void M4RemoteMailboxReader::begin(uint32_t now_ms) {
   snapshot_ = {};
+  last_published_sequence_ = 0;
   snapshot_.received_m7_ms = now_ms;
   snapshot_.link_state = RemoteLinkState::NoFrame;
 }
@@ -77,11 +78,19 @@ bool M4RemoteMailboxReader::updateFromMailboxFrame(uint32_t now_ms,
     return false;
   }
 
+  if (decoded.published_sequence == last_published_sequence_) {
+    update(now_ms, kDefaultRcSampleStaleMs);
+    return hasFreshUsableSample();
+  }
+
+  last_published_sequence_ = decoded.published_sequence;
+  snapshot_.published_sequence = decoded.published_sequence;
   return updateFromSample(now_ms, decoded.sample, true);
 }
 
 void M4RemoteMailboxReader::clear() {
   snapshot_ = {};
+  last_published_sequence_ = 0;
   snapshot_.link_state = RemoteLinkState::NoFrame;
 }
 

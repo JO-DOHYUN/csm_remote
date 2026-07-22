@@ -30,6 +30,13 @@ AuthorityDecision AuthorityManager::update(uint32_t, const AuthorityInputs& inpu
                   ControlSourceId::None,
                   inputs.autonomy_state);
   }
+  if (!inputs.safety_supervisor_allows) {
+    active_source_ = ControlSourceId::None;
+    setState(AuthorityState::BootInhibit);
+    return reject(ControlDecisionCode::RejectedSafetySupervisor,
+                  ControlSourceId::None,
+                  inputs.autonomy_state);
+  }
 
   switch (inputs.autonomy_state) {
     case AutonomyAuthorityState::InactiveConfirmed:
@@ -67,41 +74,39 @@ AuthorityDecision AuthorityManager::update(uint32_t, const AuthorityInputs& inpu
                     inputs.autonomy_state);
   }
 
-  if (inputs.remote_release_request) {
-    active_source_ = ControlSourceId::None;
-    setState(AuthorityState::LocalReady);
-    return reject(ControlDecisionCode::RejectedNoTakeover,
-                  ControlSourceId::Remote,
-                  inputs.autonomy_state);
-  }
-
-  if (inputs.remote_takeover_request) {
-    if (!inputs.safety_supervisor_allows) {
-      active_source_ = ControlSourceId::None;
-      setState(AuthorityState::LocalHandoffPending);
-      return reject(ControlDecisionCode::RejectedSafetySupervisor,
-                    ControlSourceId::Remote,
-                    inputs.autonomy_state);
-    }
+  // RC may reserve the local boundary ahead of a service host only after the
+  // upstream-autonomy monitor has positively released it. Unknown or active
+  // autonomy always fails closed before this branch.
+  if (inputs.remote_source_present || inputs.remote_takeover_request) {
     if (!inputs.remote_source_valid) {
       active_source_ = ControlSourceId::None;
       setState(AuthorityState::LocalHandoffPending);
       return reject(ControlDecisionCode::RejectedSourceStale,
-                    ControlSourceId::Remote,
-                    inputs.autonomy_state);
+                    ControlSourceId::Remote, inputs.autonomy_state);
     }
-    if (!inputs.remote_source_neutral) {
+    if (!inputs.remote_handoff_qualified) {
       active_source_ = ControlSourceId::None;
       setState(AuthorityState::LocalHandoffPending);
       return reject(ControlDecisionCode::RejectedNotNeutral,
-                    ControlSourceId::Remote,
-                    inputs.autonomy_state);
+                    ControlSourceId::Remote, inputs.autonomy_state);
     }
     active_source_ = ControlSourceId::Remote;
     setState(AuthorityState::RemoteActive);
     AuthorityDecision decision;
     decision.code = ControlDecisionCode::Accepted;
     decision.source = ControlSourceId::Remote;
+    decision.autonomy_state = inputs.autonomy_state;
+    decision.authority_state = state_;
+    return decision;
+  }
+
+  if (inputs.host_service_enabled && inputs.host_service_request &&
+      inputs.safety_supervisor_allows) {
+    active_source_ = ControlSourceId::HostService;
+    setState(AuthorityState::HostServiceActive);
+    AuthorityDecision decision;
+    decision.code = ControlDecisionCode::Accepted;
+    decision.source = ControlSourceId::HostService;
     decision.autonomy_state = inputs.autonomy_state;
     decision.authority_state = state_;
     return decision;
@@ -115,7 +120,28 @@ AuthorityDecision AuthorityManager::update(uint32_t, const AuthorityInputs& inpu
 }
 
 AuthorityDecision AuthorityManager::evaluateCommand(const control::OperatorCommand& command,
-                                                    const AuthorityInputs& inputs) const {
+                                                     const AuthorityInputs& inputs) const {
+  if (inputs.estop_asserted) {
+    return reject(ControlDecisionCode::RejectedSafetySupervisor,
+                  command.source,
+                  inputs.autonomy_state);
+  }
+  if (inputs.fault_lockout) {
+    return reject(ControlDecisionCode::RejectedFaultLockout,
+                  command.source,
+                  inputs.autonomy_state);
+  }
+  if (inputs.local_tx_inhibit_latched) {
+    return reject(ControlDecisionCode::RejectedLocalTxInhibit,
+                  command.source,
+                  inputs.autonomy_state);
+  }
+  if (!inputs.safety_supervisor_allows) {
+    return reject(ControlDecisionCode::RejectedSafetySupervisor,
+                  command.source,
+                  inputs.autonomy_state);
+  }
+
   switch (inputs.autonomy_state) {
     case AutonomyAuthorityState::InactiveConfirmed:
       break;
@@ -141,16 +167,6 @@ AuthorityDecision AuthorityManager::evaluateCommand(const control::OperatorComma
                     command.source,
                     inputs.autonomy_state);
   }
-  if (inputs.local_tx_inhibit_latched) {
-    return reject(ControlDecisionCode::RejectedLocalTxInhibit,
-                  command.source,
-                  inputs.autonomy_state);
-  }
-  if (!inputs.safety_supervisor_allows) {
-    return reject(ControlDecisionCode::RejectedSafetySupervisor,
-                  command.source,
-                  inputs.autonomy_state);
-  }
   if (command.source == ControlSourceId::None) {
     return reject(ControlDecisionCode::RejectedNoTakeover,
                   command.source,
@@ -160,6 +176,16 @@ AuthorityDecision AuthorityManager::evaluateCommand(const control::OperatorComma
     return reject(ControlDecisionCode::RejectedBuildProfile,
                   command.source,
                   inputs.autonomy_state);
+  }
+  if (command.source == ControlSourceId::Remote) {
+    if (!inputs.remote_source_valid) {
+      return reject(ControlDecisionCode::RejectedSourceStale,
+                    command.source, inputs.autonomy_state);
+    }
+    if (!inputs.remote_handoff_qualified) {
+      return reject(ControlDecisionCode::RejectedNotNeutral,
+                    command.source, inputs.autonomy_state);
+    }
   }
 
   AuthorityDecision decision;

@@ -25,13 +25,15 @@ enum class RemoteControlOrchestratorStage : uint8_t {
 
 struct RemoteControlOrchestratorInputs {
   remote::M4RemoteMailboxSnapshot mailbox_snapshot = {};
+  uint32_t output_sequence = 0;
   authority::AutonomyAuthorityState autonomy_state =
       authority::AutonomyAuthorityState::Unknown;
   bool local_tx_inhibit_latched = true;
   bool estop_asserted = false;
   bool fault_lockout = false;
   bool safety_supervisor_allows = false;
-  bool remote_neutral = false;
+  bool remote_source_present = false;
+  bool remote_handoff_qualified = false;
   bool remote_takeover_request = false;
   bool remote_release_request = false;
   bool hardware_gate_allows = false;
@@ -55,11 +57,15 @@ struct RemoteControlOrchestratorResult {
   authority::AuthorityDecision authority_decision = {};
   OperatorCommand command = {};
   remote::RemoteLinkState remote_link_state = remote::RemoteLinkState::NotConfigured;
+  CanFrameRequest frames[kVehicleCommandMapperMaxFrames] = {};
 };
 
 class RemoteControlOrchestrator {
  public:
   void begin(uint32_t now_ms);
+  bool configureRemoteSource(const remote::RemoteControlSourceConfig& config) {
+    return remote_source_.configure(config);
+  }
 
   RemoteControlOrchestratorResult tick(uint32_t now_ms,
                                        const RemoteControlOrchestratorInputs& inputs,

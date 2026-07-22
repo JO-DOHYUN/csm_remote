@@ -25,13 +25,14 @@ RemoteControlOrchestratorResult RemoteControlOrchestrator::tick(
 
   remote_source_.update(now_ms,
                         inputs.mailbox_snapshot,
-                        inputs.remote_neutral,
+                        inputs.remote_handoff_qualified,
                         inputs.remote_takeover_request,
                         inputs.remote_release_request);
 
   authority::AuthorityInputs authority_inputs = buildAuthorityInputs(inputs);
+  authority_inputs.remote_source_present = inputs.remote_source_present;
   authority_inputs.remote_source_valid = isRemoteSnapshotUsable(inputs.mailbox_snapshot);
-  authority_inputs.remote_source_neutral = inputs.remote_neutral;
+  authority_inputs.remote_handoff_qualified = inputs.remote_handoff_qualified;
   authority_inputs.remote_takeover_request = inputs.remote_takeover_request;
   authority_inputs.remote_release_request = inputs.remote_release_request;
 
@@ -47,7 +48,8 @@ RemoteControlOrchestratorResult RemoteControlOrchestrator::tick(
     return result;
   }
 
-  const OperatorCommand& command = remote_source_.command();
+  OperatorCommand command = remote_source_.command();
+  command.command_seq = inputs.output_sequence;
   if (command.source == authority::ControlSourceId::None) {
     RemoteControlOrchestratorResult result =
         reject(RemoteControlOrchestratorStage::RemoteSource,
@@ -132,6 +134,9 @@ RemoteControlOrchestratorResult RemoteControlOrchestrator::tick(
   result.stage = RemoteControlOrchestratorStage::Accepted;
   result.decision = authority::ControlDecisionCode::Accepted;
   result.frame_count = mapped.frame_count;
+  for (uint8_t i = 0; i < mapped.frame_count; ++i) {
+    result.frames[i] = mapped.frames[i];
+  }
   result.authority_decision = command_authority;
   result.command = limited.command;
   result.remote_link_state = remote_source_.linkState();

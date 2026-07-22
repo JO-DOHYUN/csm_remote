@@ -128,6 +128,21 @@ void fixed_queue_batches_without_losing_frame_boundaries() {
   CHECK(queue.empty());
 }
 
+void runtime_diagnostic_layout_is_fixed_and_bounded() {
+  CHECK(static_cast<uint8_t>(RecordType::RuntimeDiagnostic) == 19);
+  CHECK(csm::kRuntimeDiagnosticSchema == 2);
+  CHECK(csm::kRuntimeDiagnosticPayloadLen == 128);
+  CHECK(csm::kRuntimeDiagnosticBeforeRegistersOffset == 40);
+  CHECK(csm::kRuntimeDiagnosticWifiCallPhaseOffset == 72);
+  CHECK(csm::kRuntimeDiagnosticBootSessionOffset == 104);
+  CHECK(csm::kRuntimeDiagnosticWifiConnectionEpochOffset + sizeof(uint32_t) ==
+        csm::kRuntimeDiagnosticBootSessionOffset);
+  CHECK(csm::kRuntimeDiagnosticWifiWorkerStackFreeOffset == 116);
+  CHECK(csm::kRuntimeDiagnosticWifiWorkerStackMaxUsedOffset == 120);
+  CHECK(csm::kRuntimeDiagnosticFirmwareBuildIdOffset + sizeof(uint32_t) ==
+        csm::kRuntimeDiagnosticPayloadLen);
+}
+
 }  // namespace
 
 int main() {
@@ -135,6 +150,7 @@ int main() {
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();
   fixed_queue_batches_without_losing_frame_boundaries();
+  runtime_diagnostic_layout_is_fixed_and_bounded();
   if (failures != 0) return 1;
   std::puts("PASS: canonical publisher fanout contract");
   return 0;

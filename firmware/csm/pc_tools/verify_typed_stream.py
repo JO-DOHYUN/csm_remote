@@ -24,6 +24,9 @@ TYPE_NAMES = {
     14: "HOST_QUERY_CAPABILITY",
     15: "HOST_CLEAR_FAULT_LOCKOUT",
     16: "CAN_RX_SEGMENT",
+    17: "STREAM_SESSION",
+    18: "REMOTE_CONTROL_STATE",
+    19: "RUNTIME_DIAGNOSTIC",
 }
 
 BUS_ROLE_NAMES = {
@@ -89,6 +92,8 @@ EVENT_NAMES = {
     39: "CAN_FRONTEND_FAULT_HOLD",
     40: "WIFI_TX_BACKPRESSURE",
     41: "RUNTIME_BREADCRUMB_RECOVERED",
+    42: "REMOTE_CONTROL_INIT_FAILED",
+    43: "REMOTE_CONTROL_STATE_CHANGED",
 }
 
 
@@ -118,6 +123,10 @@ def u64(payload: bytes, offset: int) -> int:
 
 def i32(payload: bytes, offset: int) -> int:
     return struct.unpack_from("<i", payload, offset)[0]
+
+
+def i16(payload: bytes, offset: int) -> int:
+    return struct.unpack_from("<h", payload, offset)[0]
 
 
 def i64(payload: bytes, offset: int) -> int:
@@ -427,6 +436,87 @@ def describe(frame):
                 f" wifi_stall_close={u32(payload, 352)}"
                 f" no_sink_drop={u32(payload, 356)}"
             )
+        if len(payload) >= 384 and payload[52] >= 9:
+            extra += (
+                f" wifi_socket_error={u32(payload, 360)}"
+                f" wifi_send_budget_overrun={u32(payload, 364)}"
+                f" wifi_send_call_max_us={u32(payload, 368)}"
+                f" wifi_recv_call_max_us={u32(payload, 372)}"
+                f" wifi_close_call_max_us={u32(payload, 376)}"
+                f" main_loop_max_gap_us={u32(payload, 380)}"
+            )
+        if len(payload) >= 392 and payload[52] >= 10:
+            extra += (
+                f" reset_cause=0x{u32(payload, 384):08X}"
+                f" reset_status_raw=0x{u32(payload, 388):08X}"
+            )
+        if len(payload) >= 408 and payload[52] >= 11:
+            breadcrumb = u32(payload, 396)
+            extra += (
+                f" previous_breadcrumb_valid={u32(payload, 392)}"
+                f" previous_breadcrumb_stage={breadcrumb & 0xFF}"
+                f" previous_breadcrumb_detail={(breadcrumb >> 8) & 0xFF}"
+                f" previous_breadcrumb_uptime_ms={u32(payload, 400)}"
+                f" previous_breadcrumb_seq={u32(payload, 404)}"
+            )
+        if len(payload) >= 472 and payload[52] >= 12:
+            recovery_flags = u32(payload, 408)
+            profile_word = u32(payload, 464)
+            integrity_word = u32(payload, 468)
+            experiment_flags = (profile_word >> 24) & 0xFF
+            extra += (
+                f" recovery_flags=0x{recovery_flags:08X}"
+                f" recovery_ready={(recovery_flags >> 0) & 1}"
+                f" previous_valid={(recovery_flags >> 1) & 1}"
+                f" previous_stable={(recovery_flags >> 2) & 1}"
+                f" current_stable={(recovery_flags >> 3) & 1}"
+                f" wifi_quarantined={(recovery_flags >> 4) & 1}"
+                f" wifi_start_allowed={(recovery_flags >> 5) & 1}"
+                f" source_id32=0x{u32(payload, 412):08X}"
+                f" boot_sequence={u32(payload, 416)}"
+                f" consecutive_early_resets={u32(payload, 420)}"
+                f" early_reset_total={u32(payload, 424)}"
+                f" wifi_quarantine_total={u32(payload, 428)}"
+                f" previous_boot_sequence={u32(payload, 432)}"
+                f" previous_progress_id={u32(payload, 436)}"
+                f" previous_progress_detail={u32(payload, 440)}"
+                f" previous_progress_uptime_ms={u32(payload, 444)}"
+                f" current_progress_id={u32(payload, 448)}"
+                f" current_progress_detail={u32(payload, 452)}"
+                f" current_progress_uptime_ms={u32(payload, 456)}"
+                f" retained_event_sequence={u32(payload, 460)}"
+                f" experiment_selector={profile_word & 0xFF}"
+                f" requested_wifi={(profile_word >> 8) & 0xFF}"
+                f" effective_wifi={(profile_word >> 16) & 0xFF}"
+                f" experiment_flags=0x{experiment_flags:02X}"
+                f" watchdog_requested={(experiment_flags >> 3) & 1}"
+                f" watchdog_effective={experiment_flags & 1}"
+                f" watchdog_start_called={(experiment_flags >> 4) & 1}"
+                f" watchdog_start_succeeded={(experiment_flags >> 5) & 1}"
+                f" watchdog_timeout_matches={(experiment_flags >> 6) & 1}"
+                f" retained_valid_events={integrity_word & 0xFFFF}"
+                f" retained_corrupt_metadata={(integrity_word >> 16) & 0xFF}"
+                f" retained_corrupt_events={(integrity_word >> 24) & 0xFF}"
+            )
+        if len(payload) >= 508 and payload[52] >= 13:
+            call_flags = u32(payload, 484)
+            extra += (
+                f" runtime_contract_id32=0x{u32(payload, 472):08X}"
+                f" recovery_identity_id32=0x{u32(payload, 476):08X}"
+                f" watchdog_timeout_ms={u32(payload, 480)}"
+                f" previous_wifi_call_flags=0x{call_flags:08X}"
+                f" previous_wifi_call_valid={call_flags & 1}"
+                f" previous_wifi_call_in_progress={(call_flags >> 1) & 1}"
+                f" previous_wifi_call_completed={(call_flags >> 2) & 1}"
+                f" previous_wifi_call_contract_changed={(call_flags >> 3) & 1}"
+                f" previous_wifi_call_owner={(call_flags >> 8) & 0xFF}"
+                f" previous_wifi_call_operation={(call_flags >> 16) & 0xFF}"
+                f" previous_wifi_call_boot={u32(payload, 488)}"
+                f" previous_wifi_call_seq={u32(payload, 492)}"
+                f" previous_wifi_call_started_ms={u32(payload, 496)}"
+                f" previous_wifi_call_duration_us={u32(payload, 500)}"
+                f" previous_wifi_call_result={i32(payload, 504)}"
+            )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} can_rx={u32(payload, 8)} "
             f"can_drop={u32(payload, 12)} fifo_overflow={u32(payload, 16)} "
@@ -507,6 +597,89 @@ def describe(frame):
                     )
                 return tail
         return base
+
+    if rtype == 18 and len(payload) >= 208:
+        flags = payload[12]
+        channels = [i16(payload, 128 + index * 2) for index in range(16)]
+        raw_channels = [u16(payload, 176 + index * 2) for index in range(16)]
+        frontend_tail = ""
+        if len(payload) >= 228:
+            frontend_tail = (
+                f" accepted_rc={u32(payload, 208)}"
+                f" normalize_reject={u32(payload, 212)}"
+                f" rc_age_ms={u32(payload, 216)}"
+                f" link_age_ms={u32(payload, 220)}"
+                f" normalize_detail={u16(payload, 224)}"
+            )
+        return (
+            f"[{name}] seq={seq} mono_us={u64(payload, 0)} schema={payload[8]} "
+            f"link={payload[9]} authority={payload[10]} source={payload[11]} "
+            f"flags=0x{flags:02X} frontend={(flags >> 1) & 1} reserved={(flags >> 2) & 1} "
+            f"valid={(flags >> 3) & 1} neutral={(flags >> 4) & 1} "
+            f"qualified={(flags >> 5) & 1} released={(flags >> 6) & 1} "
+            f"lq={payload[13]} rssi=-{payload[14]}dBm crsf_type=0x{payload[15]:02X} "
+            f"m4_boot=0x{u32(payload, 16):08X} shared_seq={u32(payload, 20)} "
+            f"age_ms={u32(payload, 24)} drive={i16(payload, 28)} steer={i16(payload, 30)} "
+            f"raw_ch2={u16(payload, 32)} raw_ch4={u16(payload, 34)} baud={u32(payload, 36)} "
+            f"rx_bytes={u32(payload, 40)} valid_frames={u32(payload, 44)} "
+            f"rc_frames={u32(payload, 48)} link_frames={u32(payload, 52)} "
+            f"bad_len={u32(payload, 56)} bad_crc={u32(payload, 60)} "
+            f"gap_reset={u32(payload, 64)} publish={u32(payload, 68)} "
+            f"telem_frames={u32(payload, 72)} telem_bytes={u32(payload, 76)} "
+            f"telem_fail={u32(payload, 80)} control_cycles={u32(payload, 84)} "
+            f"neutral_cycles={u32(payload, 88)} deadline_miss={u32(payload, 92)} "
+            f"can_tx={u32(payload, 96)} can_fail={u32(payload, 100)} "
+            f"ipc_reject={u32(payload, 104)} ipc_detail={payload[111]} "
+            f"decision={payload[108]} "
+            f"sample_state={payload[110]} cycle_ms={u16(payload, 112)} "
+            f"frame_gap_ms={u16(payload, 114)} ch={channels} "
+            f"link_stats_valid={payload[160]} rssi1=-{payload[161]}dBm "
+            f"rssi2=-{payload[162]}dBm snr={struct.unpack_from('<b', payload, 163)[0]}dB "
+            f"antenna={payload[164]} rf_profile={payload[165]} rf_power={payload[166]} "
+            f"down_rssi=-{payload[167]}dBm down_lq={payload[168]} "
+            f"down_snr={struct.unpack_from('<b', payload, 169)[0]}dB "
+            f"shared_publish_fail={u32(payload, 170)} "
+            f"raw_ch={raw_channels}{frontend_tail}"
+        )
+
+    if rtype == 19 and len(payload) >= 128:
+        before = [u32(payload, 40 + index * 4) for index in range(8)]
+        wifi_flags = payload[73]
+        if payload[9] == 7:
+            return (
+                f"[{name}] seq={seq} recovery_event type={payload[10]} "
+                f"event_seq={u32(payload, 12)} boot_seq={u32(payload, 16)} "
+                f"uptime_ms={u32(payload, 20)} value=0x{u32(payload, 24):08X} "
+                f"code={u32(payload, 28)} identity=0x{u32(payload, 32):08X} "
+                f"boot=0x{u64(payload, 104):016X}"
+            )
+        if payload[9] == 8:
+            return (
+                f"[{name}] seq={seq} recovered_wifi_call owner={payload[10]} "
+                f"boot_seq={u32(payload, 16)} completed_ms={u32(payload, 20)} "
+                f"contract=0x{u64(payload, 32):016X} phase={payload[72]} "
+                f"call_flags=0x{wifi_flags:02X} call_seq={u32(payload, 76)} "
+                f"started_ms={u32(payload, 80)} duration_us={u32(payload, 84)} "
+                f"result={i32(payload, 88)} boot=0x{u64(payload, 104):016X}"
+            )
+        return (
+            f"[{name}] seq={seq} mono_us={u64(payload, 0)} schema={payload[8]} "
+            f"phase={payload[9]} boot_phase={payload[10]} flags=0x{payload[11]:02X} "
+            f"attempt={u32(payload, 12)} can=0x{u32(payload, 16):08X} "
+            f"write_us={u32(payload, 20)} rc={i32(payload, 24)} "
+            f"tx_request_mask=0x{u32(payload, 28):08X} "
+            f"hal_state=0x{u32(payload, 32):08X} "
+            f"hal_error=0x{u32(payload, 36):08X} fdcan={before} "
+            f"wifi_phase={payload[72]} wifi_flags=0x{wifi_flags:02X} "
+            f"wifi_call_seq={u32(payload, 76)} wifi_started_ms={u32(payload, 80)} "
+            f"wifi_duration_us={u32(payload, 84)} wifi_result={i32(payload, 88)} "
+            f"wifi_heartbeat_age_ms={u32(payload, 92)} "
+            f"wifi_stall_total={u32(payload, 96)} wifi_epoch={u32(payload, 100)} "
+            f"boot=0x{u64(payload, 104):016X} runtime=0x{u32(payload, 112):08X} "
+            f"wifi_stack_free={u32(payload, 116)} "
+            f"wifi_stack_max_used={u32(payload, 120)} "
+            f"build=0x{u32(payload, 124):08X}"
+        )
 
     return f"[{name}] seq={seq} len={len(payload)} payload={payload.hex(' ')}"
 
@@ -623,6 +796,78 @@ class GapTracker:
                     "wifi_stall_close": u32(payload, 352),
                     "no_sink_drop": u32(payload, 356),
                 })
+            if len(payload) >= 384 and payload[52] >= 9:
+                self.last_health.update({
+                    "wifi_socket_error": u32(payload, 360),
+                    "wifi_send_budget_overrun": u32(payload, 364),
+                    "wifi_send_call_max_us": u32(payload, 368),
+                    "wifi_recv_call_max_us": u32(payload, 372),
+                    "wifi_close_call_max_us": u32(payload, 376),
+                    "main_loop_max_gap_us": u32(payload, 380),
+                })
+            if len(payload) >= 392 and payload[52] >= 10:
+                self.last_health.update({
+                    "reset_cause_bits": u32(payload, 384),
+                    "reset_status_raw": u32(payload, 388),
+                })
+            if len(payload) >= 408 and payload[52] >= 11:
+                self.last_health.update({
+                    "previous_breadcrumb_valid": u32(payload, 392),
+                    "previous_breadcrumb_stage": u32(payload, 396),
+                    "previous_breadcrumb_uptime_ms": u32(payload, 400),
+                    "previous_breadcrumb_sequence": u32(payload, 404),
+                })
+            if len(payload) >= 472 and payload[52] >= 12:
+                profile_word = u32(payload, 464)
+                integrity_word = u32(payload, 468)
+                experiment_flags = (profile_word >> 24) & 0xFF
+                self.last_health.update({
+                    "recovery_flags": u32(payload, 408),
+                    "firmware_source_id32": u32(payload, 412),
+                    "boot_sequence": u32(payload, 416),
+                    "consecutive_early_resets": u32(payload, 420),
+                    "early_reset_total": u32(payload, 424),
+                    "wifi_quarantine_total": u32(payload, 428),
+                    "previous_boot_sequence": u32(payload, 432),
+                    "previous_last_progress_id": u32(payload, 436),
+                    "previous_last_progress_detail": u32(payload, 440),
+                    "previous_last_progress_uptime_ms": u32(payload, 444),
+                    "current_last_progress_id": u32(payload, 448),
+                    "current_last_progress_detail": u32(payload, 452),
+                    "current_last_progress_uptime_ms": u32(payload, 456),
+                    "retained_event_sequence": u32(payload, 460),
+                    "reset_experiment_selector": profile_word & 0xFF,
+                    "requested_wifi_mode": (profile_word >> 8) & 0xFF,
+                    "effective_wifi_mode": (profile_word >> 16) & 0xFF,
+                    "reset_experiment_flags": experiment_flags,
+                    "watchdog_requested": (experiment_flags >> 3) & 1,
+                    "watchdog_effective": experiment_flags & 1,
+                    "watchdog_start_called": (experiment_flags >> 4) & 1,
+                    "watchdog_start_succeeded": (experiment_flags >> 5) & 1,
+                    "watchdog_timeout_matches": (experiment_flags >> 6) & 1,
+                    "retained_valid_events": integrity_word & 0xFFFF,
+                    "retained_corrupt_metadata": (integrity_word >> 16) & 0xFF,
+                    "retained_corrupt_events": (integrity_word >> 24) & 0xFF,
+                })
+            if len(payload) >= 508 and payload[52] >= 13:
+                call_flags = u32(payload, 484)
+                self.last_health.update({
+                    "runtime_contract_id32": u32(payload, 472),
+                    "recovery_identity_id32": u32(payload, 476),
+                    "watchdog_observed_timeout_ms": u32(payload, 480),
+                    "previous_wifi_call_flags": call_flags,
+                    "previous_wifi_call_valid": call_flags & 1,
+                    "previous_wifi_call_in_progress": (call_flags >> 1) & 1,
+                    "previous_wifi_call_completed": (call_flags >> 2) & 1,
+                    "previous_wifi_call_contract_changed": (call_flags >> 3) & 1,
+                    "previous_wifi_call_owner": (call_flags >> 8) & 0xFF,
+                    "previous_wifi_call_operation": (call_flags >> 16) & 0xFF,
+                    "previous_wifi_call_boot_sequence": u32(payload, 488),
+                    "previous_wifi_call_sequence": u32(payload, 492),
+                    "previous_wifi_call_started_ms": u32(payload, 496),
+                    "previous_wifi_call_duration_us": u32(payload, 500),
+                    "previous_wifi_call_result": i32(payload, 504),
+                })
 
     def summary(self) -> str:
         parts = [
@@ -679,6 +924,44 @@ class GapTracker:
             "wifi_disconnect",
             "wifi_stall_close",
             "no_sink_drop",
+            "wifi_socket_error",
+            "wifi_send_budget_overrun",
+            "wifi_send_call_max_us",
+            "wifi_recv_call_max_us",
+            "wifi_close_call_max_us",
+            "main_loop_max_gap_us",
+            "reset_cause_bits",
+            "reset_status_raw",
+            "previous_breadcrumb_valid",
+            "previous_breadcrumb_stage",
+            "previous_breadcrumb_uptime_ms",
+            "previous_breadcrumb_sequence",
+            "recovery_flags",
+            "firmware_source_id32",
+            "boot_sequence",
+            "consecutive_early_resets",
+            "early_reset_total",
+            "wifi_quarantine_total",
+            "previous_boot_sequence",
+            "previous_last_progress_id",
+            "previous_last_progress_detail",
+            "previous_last_progress_uptime_ms",
+            "current_last_progress_id",
+            "current_last_progress_detail",
+            "current_last_progress_uptime_ms",
+            "retained_event_sequence",
+            "reset_experiment_selector",
+            "requested_wifi_mode",
+            "effective_wifi_mode",
+            "reset_experiment_flags",
+            "watchdog_requested",
+            "watchdog_effective",
+            "watchdog_start_called",
+            "watchdog_start_succeeded",
+            "watchdog_timeout_matches",
+            "retained_valid_events",
+            "retained_corrupt_metadata",
+            "retained_corrupt_events",
         ):
             if key in self.last_health:
                 parts.append(f"{key}={self.last_health[key]}")

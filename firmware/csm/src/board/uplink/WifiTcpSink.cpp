@@ -1,58 +1,41 @@
 #include "board/uplink/WifiTcpSink.h"
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WiFiServer.h>
+#if BOARD_ENABLE_WIFI_UPLINK
+#include "board/uplink/WifiSocketWorker.h"
+#endif
 
 namespace csm::board::uplink {
-
-#if BOARD_ENABLE_WIFI_UPLINK
-namespace {
-
-class RawWifiServer final : public arduino::WiFiServer {
- public:
-  TCPSocket* acceptRaw(nsapi_error_t* error) {
-    if (sock == nullptr) {
-      if (error != nullptr) *error = NSAPI_ERROR_NO_SOCKET;
-      return nullptr;
-    }
-    return sock->accept(error);
-  }
-};
-
-RawWifiServer wifi_server;
-
-}  // namespace
-#endif
 
 bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   config_ = config;
   counters_ = {};
-  blocked_since_ms_ = 0;
-  batch_started_ms_ = 0;
-  urgent_flush_ = false;
+  worker_state_ = {};
+  worker_state_.runtime_mode = config_.runtime_mode;
+  worker_state_.tcp_enabled = wifiRuntimeModeEnablesTcp(config_.runtime_mode);
+  worker_ = nullptr;
   enabled_ = false;
+  connected_ = false;
+  backpressure_active_ = false;
+  isolation_latched_ = false;
+  isolation_pending_worker_epoch_ = false;
+  isolated_call_sequence_ = 0;
+  observed_worker_epoch_ = 0;
+  effective_connection_epoch_ = 0;
+  logical_call_stall_total_ = 0;
+  service_reported_bytes_sent_total_ = 0;
+  service_reported_frames_sent_total_ = 0;
+  service_reported_stall_event_sequence_ = 0;
 #if BOARD_ENABLE_WIFI_UPLINK
-  client_socket_ = nullptr;
-  client_active_ = false;
-  socket_closed_ = false;
-  rx_offset_ = 0;
-  rx_length_ = 0;
-  counters_.ap_start_total++;
-  if (config_.ap_ssid == nullptr || config_.ap_passphrase == nullptr ||
-      config_.port == 0) {
-    counters_.ap_start_fail_total++;
-    return false;
+  if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
+  static WifiSocketWorker socket_worker(mailbox_);
+  worker_ = &socket_worker;
+  enabled_ = worker_->start(config_);
+  if (!enabled_) {
+    counters_.worker_start_total = 1;
+    counters_.worker_start_fail_total = 1;
+    counters_.tx_worker_start_fail_total++;
+    mailbox_.tryReadState(worker_state_);
   }
-  WiFi.config(IPAddress(config_.ip[0], config_.ip[1], config_.ip[2], config_.ip[3]));
-  const int status = WiFi.beginAP(config_.ap_ssid, config_.ap_passphrase, config_.channel);
-  if (status != WL_AP_LISTENING && status != WL_AP_CONNECTED) {
-    counters_.ap_start_fail_total++;
-    return false;
-  }
-  wifi_server.begin(config_.port);
-  enabled_ = static_cast<bool>(wifi_server);
-  if (!enabled_) counters_.ap_start_fail_total++;
 #endif
   return enabled_;
 }
@@ -60,292 +43,177 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
 bool WifiTcpSink::enabled() const { return enabled_; }
 
 bool WifiTcpSink::connected() const {
-#if BOARD_ENABLE_WIFI_UPLINK
-  return enabled_ && client_active_ && client_socket_ != nullptr && !socket_closed_;
-#else
-  return false;
-#endif
+  return enabled_ && wifiRuntimeModeEnablesTcp(config_.runtime_mode) &&
+         connected_;
 }
 
 SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
+  if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode)) {
+    return SinkOfferResult::Disabled;
+  }
   if (!enabled()) return SinkOfferResult::Disabled;
   if (!connected()) {
     counters_.offer_disconnected_total++;
     return SinkOfferResult::Disconnected;
   }
-  const uint8_t normal_limit = static_cast<uint8_t>(
-      BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
-  if (frame.priority != UplinkPriority::Critical && queue_.count() >= normal_limit) {
+  const WifiMailboxOfferResult offered = mailbox_.tryOffer(frame, millis());
+  if (offered == WifiMailboxOfferResult::Invalid) return SinkOfferResult::Invalid;
+  if (offered != WifiMailboxOfferResult::Accepted) {
     counters_.offer_overflow_total++;
     return SinkOfferResult::Overflow;
   }
-  if (!queue_.push(frame)) {
-    counters_.offer_overflow_total++;
-    return SinkOfferResult::Overflow;
-  }
-  if (queue_.count() == 1) batch_started_ms_ = millis();
-  if (frame.priority == UplinkPriority::Critical) urgent_flush_ = true;
   counters_.offer_accept_total++;
   if (!counters_.first_accepted_valid) {
     counters_.first_accepted_valid = true;
     counters_.first_accepted_publish_seq = frame.publish_seq;
   }
   counters_.last_accepted_publish_seq = frame.publish_seq;
-  counters_.queue_high_water_bytes = queue_.highWaterBytes();
-  counters_.queue_high_water_records = queue_.highWaterRecords();
+  const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
+  counters_.queue_high_water_bytes = queued.high_water_bytes;
+  counters_.queue_high_water_records = queued.high_water_records;
   return SinkOfferResult::Accepted;
 }
 
 SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
                                        uint32_t now_us) {
+  (void)byte_budget;
+  (void)now_us;
   SinkServiceResult result;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!enabled_) return result;
-  if (client_active_ && socket_closed_) {
-    disconnectClient(false);
-    result.epoch_changed = true;
-  }
-  if (!connected()) {
-    if (client_active_) {
-      disconnectClient(false);
-      result.epoch_changed = true;
-    }
-    if (acceptClient()) result.epoch_changed = true;
-  } else {
-    rejectExtraClient();
-  }
-  if (!connected() || byte_budget == 0) return result;
+  WifiWorkerStateSnapshot state;
+  if (mailbox_.tryReadState(state)) syncWorkerState(state, result);
+  isolateStalledCall(mailbox_.callSnapshot(), now_ms, result);
 
-  if (!queue_.empty() && !urgent_flush_ &&
-      queue_.count() < config_.batch_min_records &&
-      config_.batch_max_latency_ms > 0 &&
-      now_ms - batch_started_ms_ < config_.batch_max_latency_ms) {
-    return result;
-  }
+  result.actual_bytes =
+      counters_.bytes_sent_total - service_reported_bytes_sent_total_;
+  result.frames_completed =
+      counters_.frame_sent_total - service_reported_frames_sent_total_;
+  service_reported_bytes_sent_total_ = counters_.bytes_sent_total;
+  service_reported_frames_sent_total_ = counters_.frame_sent_total;
 
-  const uint32_t configured_bytes =
-      config_.max_bytes_per_pump == 0 ? byte_budget : config_.max_bytes_per_pump;
-  const uint32_t pump_budget = byte_budget < configured_bytes ? byte_budget : configured_bytes;
-  uint8_t tx_chunk[BOARD_WIFI_TX_CHUNK_BYTES];
-  const uint16_t chunk_capacity = static_cast<uint16_t>(
-      pump_budget < BOARD_WIFI_TX_CHUNK_BYTES ? pump_budget : BOARD_WIFI_TX_CHUNK_BYTES);
-  const uint16_t requested = queue_.copyFrontBytes(tx_chunk, chunk_capacity);
-  if (requested == 0) return result;
-
-  counters_.write_attempt_total++;
-  const uint32_t started_us = now_us == 0 ? micros() : now_us;
-  const nsapi_size_or_error_t sent = client_socket_->send(tx_chunk, requested);
-  const uint32_t duration_us = micros() - started_us;
-  if (duration_us > counters_.send_call_max_us) counters_.send_call_max_us = duration_us;
-  if (config_.drain_time_budget_us > 0 && duration_us > config_.drain_time_budget_us) {
-    counters_.send_budget_overrun_total++;
-  }
-
-  if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
-    noteSocketError(static_cast<nsapi_error_t>(sent));
-    disconnectClient(false);
-    result.epoch_changed = true;
-    return result;
-  }
-
-  if (sent <= 0) {
-    counters_.zero_write_total++;
-    noteBackpressure(now_ms, result);
-  } else {
-    const uint16_t actual = sent > requested ? requested : static_cast<uint16_t>(sent);
-    const auto consumed = queue_.consumeMany(actual);
-    result.actual_bytes += actual;
-    counters_.bytes_sent_total += actual;
-    if (actual < requested) {
-      counters_.partial_write_total++;
-      noteBackpressure(now_ms, result);
-    }
-    if (consumed.frames > 0) {
-      counters_.frame_sent_total += consumed.frames;
-      counters_.last_sent_publish_seq = consumed.last_publish_seq;
-      result.frames_completed += consumed.frames;
-    }
-    if (actual == requested && blocked_since_ms_ != 0) {
-      const uint32_t duration = now_ms - blocked_since_ms_;
-      if (duration > counters_.backpressure_max_duration_ms) {
-        counters_.backpressure_max_duration_ms = duration;
-      }
-      blocked_since_ms_ = 0;
-      result.backpressure_event = true;
-      result.backpressure_duration_ms = duration;
-    }
-  }
-
-  if (queue_.empty()) {
-    batch_started_ms_ = 0;
-    urgent_flush_ = false;
-  } else if (batch_started_ms_ == 0) {
-    batch_started_ms_ = now_ms;
-  }
-
-  if (blocked_since_ms_ != 0) {
-    const uint32_t blocked_duration_ms = now_ms - blocked_since_ms_;
-    if (blocked_duration_ms > counters_.backpressure_max_duration_ms) {
-      counters_.backpressure_max_duration_ms = blocked_duration_ms;
-    }
-    result.backpressure_duration_ms = blocked_duration_ms;
-    const uint8_t normal_limit = static_cast<uint8_t>(
-        BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
-    const bool timed_out = config_.stall_timeout_ms > 0 &&
-                           blocked_duration_ms >= config_.stall_timeout_ms;
-    const bool queue_pressure_close = queue_.count() >= normal_limit;
-    if (timed_out || queue_pressure_close) {
-      disconnectClient(true);
-      result.backpressure_event = true;
-      result.epoch_changed = true;
-    }
+  if (worker_state_.stall_event_sequence !=
+      service_reported_stall_event_sequence_) {
+    service_reported_stall_event_sequence_ = worker_state_.stall_event_sequence;
+    result.backpressure_event = true;
+    result.backpressure_duration_ms = worker_state_.stall_event_duration_ms;
   }
 #else
-  (void)byte_budget;
   (void)now_ms;
-  (void)now_us;
 #endif
   return result;
 }
 
-void WifiTcpSink::abortQueuedFrames() {
-  const uint32_t bytes = queue_.clear();
-  batch_started_ms_ = 0;
-  urgent_flush_ = false;
-  if (bytes > 0) {
-    counters_.queue_abort_total++;
-    counters_.queue_aborted_bytes_total += bytes;
-  }
-}
+void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
-Stream* WifiTcpSink::downlinkStream() {
-#if BOARD_ENABLE_WIFI_UPLINK
-  return connected() ? this : nullptr;
-#else
-  return nullptr;
-#endif
-}
+Stream* WifiTcpSink::downlinkStream() { return connected() ? this : nullptr; }
 
 int WifiTcpSink::available() {
-#if BOARD_ENABLE_WIFI_UPLINK
-  if (rx_offset_ < rx_length_) return rx_length_ - rx_offset_;
-  rx_offset_ = 0;
-  rx_length_ = 0;
-  if (!connected()) return 0;
+  const uint32_t available = mailbox_.rxAvailable();
+  return available > static_cast<uint32_t>(INT32_MAX)
+             ? INT32_MAX
+             : static_cast<int>(available);
+}
 
-  const uint32_t started_us = micros();
-  const nsapi_size_or_error_t received = client_socket_->recv(rx_buffer_, sizeof(rx_buffer_));
-  const uint32_t duration_us = micros() - started_us;
-  if (duration_us > counters_.recv_call_max_us) counters_.recv_call_max_us = duration_us;
-  if (received > 0) {
-    rx_length_ = static_cast<uint16_t>(received);
-    return rx_length_;
+int WifiTcpSink::read() { return mailbox_.readRx(); }
+
+int WifiTcpSink::peek() { return mailbox_.peekRx(); }
+
+uint32_t WifiTcpSink::workerHeartbeatAgeMs(uint32_t now_ms) const {
+  if (!worker_state_.worker_started) return 0;
+  const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
+  return now_ms - call.heartbeat_ms;
+}
+
+void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
+                                  SinkServiceResult& result) {
+  const uint32_t worker_epoch_delta =
+      state.counters.connection_epoch - observed_worker_epoch_;
+  observed_worker_epoch_ = state.counters.connection_epoch;
+  uint32_t reportable_epoch_delta = worker_epoch_delta;
+  if (isolation_pending_worker_epoch_ && reportable_epoch_delta > 0) {
+    --reportable_epoch_delta;
+    isolation_pending_worker_epoch_ = false;
+    isolation_latched_ = false;
   }
-  if (received == 0) {
-    socket_closed_ = true;
-  } else if (received != NSAPI_ERROR_WOULD_BLOCK) {
-    noteSocketError(static_cast<nsapi_error_t>(received));
-    socket_closed_ = true;
+  if (reportable_epoch_delta > 0) {
+    effective_connection_epoch_ += reportable_epoch_delta;
+    result.epoch_changed = true;
+    mailbox_.discardRx();
   }
-#endif
-  return 0;
+
+  worker_state_ = state;
+  connected_ = state.tcp_enabled && state.connected && !isolation_latched_;
+  backpressure_active_ = state.tcp_enabled && state.backpressure_active;
+  const WifiWorkerCounters& worker = state.counters;
+  counters_.worker_start_total = worker.worker_start_total;
+  counters_.worker_start_fail_total = worker.worker_start_fail_total;
+  counters_.startup_attempt_total = worker.startup_attempt_total;
+  counters_.startup_exhausted_total = worker.startup_exhausted_total;
+  counters_.ap_start_total = worker.ap_start_total;
+  counters_.ap_start_fail_total = worker.ap_start_fail_total;
+  counters_.server_start_total = worker.server_start_total;
+  counters_.server_start_fail_total = worker.server_start_fail_total;
+  counters_.bytes_sent_total = worker.bytes_sent_total;
+  counters_.frame_sent_total = worker.frame_sent_total;
+  counters_.write_attempt_total = worker.write_attempt_total;
+  counters_.partial_write_total = worker.partial_write_total;
+  counters_.zero_write_total = worker.zero_write_total;
+  counters_.backpressure_total = worker.backpressure_total;
+  counters_.backpressure_max_duration_ms = worker.backpressure_max_duration_ms;
+  counters_.queue_abort_total = worker.queue_abort_total;
+  counters_.queue_aborted_bytes_total = worker.queue_aborted_bytes_total;
+  counters_.connection_epoch = effective_connection_epoch_;
+  counters_.connect_total = worker.connect_total;
+  counters_.disconnect_total = worker.disconnect_total;
+  counters_.extra_client_reject_total = worker.extra_client_reject_total;
+  counters_.stall_close_total = worker.stall_close_total + logical_call_stall_total_;
+  counters_.socket_error_total = worker.socket_error_total;
+  counters_.send_budget_overrun_total = worker.send_budget_overrun_total;
+  counters_.send_call_max_us = worker.send_call_max_us;
+  counters_.recv_call_max_us = worker.recv_call_max_us;
+  counters_.close_call_max_us = worker.close_call_max_us;
+  counters_.tx_worker_stall_total = logical_call_stall_total_;
+  counters_.tx_late_result_total = worker.late_send_result_total;
+  counters_.rx_overflow_total = worker.rx_overflow_total;
+  counters_.worker_returned_slow_call_total =
+      worker.worker_returned_slow_call_total;
+  counters_.last_sent_publish_seq = worker.last_sent_publish_seq;
+  const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
+  counters_.queue_high_water_bytes = queued.high_water_bytes;
+  counters_.queue_high_water_records = queued.high_water_records;
 }
 
-int WifiTcpSink::read() {
-  if (available() <= 0) return -1;
-  return rx_buffer_[rx_offset_++];
-}
-
-int WifiTcpSink::peek() {
-  if (available() <= 0) return -1;
-  return rx_buffer_[rx_offset_];
-}
-
-#if BOARD_ENABLE_WIFI_UPLINK
-bool WifiTcpSink::acceptClient() {
-  nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
-  TCPSocket* candidate = wifi_server.acceptRaw(&error);
-  if (candidate == nullptr) {
-    if (error != NSAPI_ERROR_WOULD_BLOCK) noteSocketError(error);
-    return false;
-  }
-  candidate->set_blocking(false);
-  client_socket_ = candidate;
-  client_active_ = true;
-  socket_closed_ = false;
-  rx_offset_ = 0;
-  rx_length_ = 0;
-  blocked_since_ms_ = 0;
-  batch_started_ms_ = 0;
-  urgent_flush_ = false;
-  abortQueuedFrames();
-  counters_.connection_epoch++;
-  counters_.connect_total++;
-  return true;
-}
-
-void WifiTcpSink::disconnectClient(bool stalled) {
-  const bool was_connected = client_active_;
-  client_active_ = false;
-  socket_closed_ = false;
-  rx_offset_ = 0;
-  rx_length_ = 0;
-  blocked_since_ms_ = 0;
-  batch_started_ms_ = 0;
-  urgent_flush_ = false;
-  abortQueuedFrames();
-
-  TCPSocket* socket = client_socket_;
-  client_socket_ = nullptr;
-  if (socket != nullptr) {
-    const uint32_t started_us = micros();
-    const nsapi_error_t error = socket->close();
-    const uint32_t duration_us = micros() - started_us;
-    if (duration_us > counters_.close_call_max_us) counters_.close_call_max_us = duration_us;
-    if (error != NSAPI_ERROR_OK) noteSocketError(error);
-    delete socket;
-  }
-  if (!was_connected) return;
-  counters_.connection_epoch++;
-  counters_.disconnect_total++;
-  if (stalled) counters_.stall_close_total++;
-}
-
-void WifiTcpSink::rejectExtraClient() {
-  nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
-  TCPSocket* extra = wifi_server.acceptRaw(&error);
-  if (extra == nullptr) {
-    if (error != NSAPI_ERROR_WOULD_BLOCK) noteSocketError(error);
+void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
+                                     uint32_t now_ms,
+                                     SinkServiceResult& result) {
+  // This is only a logical sink quarantine. A worker thread cannot cancel a
+  // vendor call already in progress or contain an MCU reset/power failure.
+  // Startup phases remain visible through workerCallSnapshot(), but there is
+  // no active TCP epoch to close until a client has connected.
+  if (!connected_ || !call.in_progress || config_.call_stall_timeout_ms == 0 ||
+      static_cast<uint32_t>(now_ms - call.started_ms) <
+          config_.call_stall_timeout_ms ||
+      call.sequence == isolated_call_sequence_) {
     return;
   }
-  extra->set_blocking(false);
-  const uint32_t started_us = micros();
-  const nsapi_error_t close_error = extra->close();
-  const uint32_t duration_us = micros() - started_us;
-  if (duration_us > counters_.close_call_max_us) counters_.close_call_max_us = duration_us;
-  if (close_error != NSAPI_ERROR_OK) noteSocketError(close_error);
-  delete extra;
-  counters_.extra_client_reject_total++;
-}
-
-void WifiTcpSink::noteSocketError(nsapi_error_t error) {
-  if (error != NSAPI_ERROR_OK && error != NSAPI_ERROR_WOULD_BLOCK) {
-    counters_.socket_error_total++;
-  }
-}
-#endif
-
-void WifiTcpSink::noteBackpressure(uint32_t now_ms, SinkServiceResult& result) {
-  if (blocked_since_ms_ == 0) {
-    blocked_since_ms_ = now_ms == 0 ? 1 : now_ms;
-    counters_.backpressure_total++;
-    result.backpressure_event = true;
-  } else {
-    const uint32_t duration = now_ms - blocked_since_ms_;
-    if (duration > counters_.backpressure_max_duration_ms) {
-      counters_.backpressure_max_duration_ms = duration;
-    }
-    result.backpressure_duration_ms = duration;
+  isolated_call_sequence_ = call.sequence;
+  const bool was_connected = connected_;
+  connected_ = false;
+  isolation_latched_ = was_connected;
+  isolation_pending_worker_epoch_ = was_connected;
+  logical_call_stall_total_++;
+  counters_.tx_worker_stall_total = logical_call_stall_total_;
+  counters_.stall_close_total =
+      worker_state_.counters.stall_close_total + logical_call_stall_total_;
+  mailbox_.requestDisconnect();
+  mailbox_.discardRx();
+  result.backpressure_event = true;
+  result.backpressure_duration_ms = now_ms - call.started_ms;
+  if (was_connected) {
+    effective_connection_epoch_++;
+    counters_.connection_epoch = effective_connection_epoch_;
+    result.epoch_changed = true;
   }
 }
 

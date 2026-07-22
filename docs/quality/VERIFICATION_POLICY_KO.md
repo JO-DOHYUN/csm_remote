@@ -30,6 +30,14 @@
 - Windows USB VSM + Android Wi-Fi VSM 동시 관측
 - blocked USB와 blocked Wi-Fi 각각의 격리
 - RC latency, stale/failsafe, authority, CAN TX evidence
+- 실제 사용 채널의 raw span, neutral/deadband, 정규화 방향과 CRSF link
+  statistics/RSSI freshness
+- CRSF heartbeat/flight-mode TX counter와 receiver-side telemetry 확인
+- 승인된 실제 vehicle mapping의 각 ID/payload/period, FDCAN TX completion과 상관된
+  `CAN_TX_RAW`, 외부 analyzer 수신·ACK의 일치
+- transmitter off/on에서 즉시 neutral, 1 s release, 재연결 500 ms neutral handoff
+- REF/A/B/C 반복 reset matrix, retained progress/integrity, bootloader 또는 외부
+  reset-source evidence
 
 ### R1 Release
 
