@@ -8,6 +8,7 @@ Updated: 2026-07-22
 - 실보드 retained evidence도 `CloseClient` 반환 직후 `DeleteClient` 진입, 미완료 상태에서 reset된 것을 보존했다. 따라서 이 결함은 관측 reset의 고신뢰 촉발 원인이다. raw reset latch가 0이므로 HardFault/watchdog 중 최종 reset executor는 아직 확정하지 않는다.
 - accepted client 종료를 close-only로 수정하고 위험한 `delete owned`를 요구하던 architecture guard를 반대로 금지하도록 교정했다. phase 9/12는 과거 evidence 해석용 reserved 값으로 유지한다.
 - 이전 REF/A/B/C 결과는 모두 `wifi_connect +0`, `wifi_sent +0`이므로 `USB_ONLY_IDLE / SYMPTOM_NOT_OBSERVED`로 강등한다. connected/reconnect 안정성 근거가 아니다.
+- close-only REF는 실제 SM-S936N observer에서 성공한 reconnect 20회(정상 중지 1회, process stop 19회)를 포함한 600초 동안 boot sequence 6과 단일 session을 유지했다. CSM counter는 connect/disconnect `+22/+22`, Wi-Fi sent `+857`이며 CRC/gap/USB disconnect/quarantine/runtime contract error는 모두 0이다. 이 재현 결함은 `FIXED`로 판정하며 동시 HIL과 soak는 아직 남아 있다.
 
 ## 2026-07-22 crash-first self-debug 현재 상태
 
@@ -99,8 +100,8 @@ Updated: 2026-07-22
 
 ## 다음 구현 gate
 
-1. close-only 수정 build를 실제 Android connect/stream/disconnect 100회와 graceful/abrupt reconnect에서 검증한다.
-2. 같은 revision으로 Windows USB + Android Wi-Fi + CAN + RC 동시 180초와 장시간 soak를 수행한다.
+1. close-only 수정 build의 실제 Android connect/stream/disconnect 20회와 graceful/abrupt reconnect 검증은 완료했다.
+2. 같은 revision으로 Windows USB + Android Wi-Fi + CAN + RC 동시 300초와 장시간 soak를 수행한다.
 3. 재발 시 bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
 4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
 5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.

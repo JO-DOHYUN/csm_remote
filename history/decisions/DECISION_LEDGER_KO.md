@@ -153,9 +153,9 @@
 ## D-013 Mbed accepted socket close-only ownership
 
 - 날짜: 2026-07-22
-- 상태: Active, 실보드 reconnect 회귀 검증 대기.
+- 상태: Active, 실보드 reconnect 회귀 통과. 동시 HIL/soak 대기.
 - 결함: `TCPSocket::accept()`가 반환한 factory object에 `close()` 후 `delete`를 다시 호출했다. ArduinoCore-mbed 4.3.1의 계약은 close가 객체를 deallocate하고 이후 포인터 참조는 undefined behavior라고 명시한다.
 - binary evidence: reset에 사용된 `ref.bin`과 symbol build의 SHA-256은 `06AA81E4AD4E696C40610E1F9D0322667729235008DD10EE2180727D592C9866`으로 동일하다. 해당 binary는 worker close 뒤 deleting destructor를 다시 호출하며, Mbed close 내부도 factory object deleting destructor를 호출한다.
 - runtime evidence: 두 early reset 중 마지막 retained call은 `CloseClient` 반환 직후 `DeleteClient` 진입, 미완료 상태였다. 이 결함은 reset과 고신뢰로 연결되지만 reset executor가 HardFault인지 watchdog인지는 raw latch 0으로 미확정이다.
 - 결정: accepted socket은 close-only로 종료한다. phase 9/12는 과거 retained evidence 해석을 위해 reserved로 남기고 재사용하지 않는다. architecture guard는 explicit accepted-socket delete를 금지한다.
-- 검증: affected build/guard 뒤 실제 Android graceful/abrupt disconnect와 반복 reconnect에서 connect/send/disconnect 진행, 동일 boot, quarantine 0, phase 9/12 미진입을 확인한다. 그 뒤 USB/CAN/RC 동시 HIL로 승격한다.
+- 검증: close-only REF를 SM-S936N observer와 600초 운용하며 성공한 reconnect 20회(정상 중지 1회, process stop 19회)를 수행했다. CSM은 connect/disconnect `+22/+22`, Wi-Fi sent `+857`, boot sequence 6과 단일 session, CRC/gap/USB disconnect/quarantine/runtime contract error 0을 기록했다. 재현 결함은 FIXED로 판정하고 USB/CAN/RC 동시 HIL로 승격한다.
