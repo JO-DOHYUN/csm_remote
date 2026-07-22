@@ -162,6 +162,9 @@
 
 ## D-014 Remote Product MDPS bench artifact
 
+- 2026-07-22 RC 시퀀스 확정: CH5는 독점 시퀀스로 byte0..6을 `0x00`, byte7을 음수 `0x01`/양수 `0x80`으로 송신한다. CH10은 조향을 유지하고 byte7만 음수 `0x01`/양수 `0x80`으로 덮으며, CH11은 평상시 음수 입력을 무시하고 양수일 때만 조향을 유지한 채 byte7 `0x01`을 송신한다. 우선순위는 CH5 > CH11 양수 > CH10이다.
+- PCAN/J4 30초 실측에서 ID `0x007` 1,452개, 주기 중앙값 20.693 ms/최대 21.761 ms였고, CH5 독점 `00 00 00 00 00 00 00 01/80`, 일반 조향, CH10/CH11 `조향 byte0 + byte7 01/80`를 모두 확인했다. 이는 실제 송신 payload/주기 증거이며 별도 송신원 대비 CAN 수신 무손실 증명은 아니다.
+
 - 날짜: 2026-07-22
 - 상태: Active, bench-only. 실제 보드 업로드와 20초 RC/J4 무손실 관찰 완료; MDPS motion과 MCP 물리-bus HIL 대기.
 - 근거: reset REF 15초 실측에서 J4 `+300`, RC valid/accepted `+1487`, boot 변화와 CAN/USB drop은 0이었다. RC 입력은 정상이며 REF가 application CAN TX를 명시적으로 억제하고 기본 제품 profile이 MCP2515를 compile-out한 상태였다.

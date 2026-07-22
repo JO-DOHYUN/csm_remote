@@ -68,6 +68,8 @@ Updated: 2026-07-22
 
 ## 확인된 현재 사실
 
+- 2026-07-22 PCAN/J4에서 RC/MDPS 벤치 매핑을 실측했다. 30초간 ID `0x007` 1,452개, 주기 중앙값 20.693 ms/최대 21.761 ms였고, CH5 독점 byte0..6 `0x00` + byte7 `0x01/0x80`, CH10/CH11 조향 유지 + byte7 오버레이를 모두 확인했다. 이는 실제 송신 payload/주기 증거이며 별도 송신원 대비 CAN 무손실 증명은 아니다.
+
 - passive M7 env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`가 clean clone에서 build된다.
 - 제품 M4 env `portenta_h7_m4_remote_frontend`는 Serial3 CRSF 416666 8N1, 16채널/링크 통계, 정규화, 양방향 telemetry와 SRAM4 IPC를 포함해 build된다.
 - 제품 M7 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi`는 RC authority/limiter 관측 경계, built-in CAN bus 1 RX, canonical USB/Wi-Fi evidence를 포함한다. mapper는 `None`, local CAN TX capability는 Off다.
