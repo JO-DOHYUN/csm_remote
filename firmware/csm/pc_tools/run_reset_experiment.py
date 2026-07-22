@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Run one USB-only CSM reset-isolation experiment and save its evidence.
+"""Run one CSM reset-isolation observation with an explicit workload gate.
 
 This runner is intentionally independent of PlatformIO build state.  It consumes
 the canonical typed stream, reconnects when Windows removes/re-enumerates the
-CDC port, and decides PASS/FAIL only from BOARD_HEALTH v13 evidence collected
-during this invocation.
+CDC port, and rejects connected/reconnect claims unless BOARD_HEALTH v13 proves
+the requested Wi-Fi workload during this invocation.
 """
 
 import argparse
 import datetime
+import hashlib
 import json
 import sys
 import time
@@ -40,6 +41,7 @@ PROFILE_EXPECTATIONS = {
     3: {"name": "C", "requested_wifi_mode": 1, "effective_wifi_mode": 1,
         "watchdog_requested": True, "watchdog_effective": True, "experiment_flags": 0x7F},
 }
+WORKLOAD_GATES = ("IDLE_STABILITY", "CONNECTED_TCP", "RECONNECT_CHURN")
 
 MAX_FIELDS = (
     "builtin_can_tx_success",
@@ -202,6 +204,24 @@ def add_exact_set_failure(failures: list, label: str, observed: set, expected: i
         failures.append(f"{label}: expected {formatter(expected)}, observed {rendered}")
 
 
+def add_workload_failures(gate: str, expectation: dict, health: list,
+                          deltas: dict, failures: list) -> None:
+    if gate == "IDLE_STABILITY" or not health:
+        return
+    if expectation["effective_wifi_mode"] != 2:
+        failures.append(f"{gate} requires a Full TCP experiment profile")
+        return
+    if max(item["wifi_connect"] for item in health) < 1:
+        failures.append(f"{gate} observed no real TCP client connection")
+    if deltas.get("wifi_sent", 0) < 1:
+        failures.append(f"{gate} observed no Wi-Fi transmitted-record progress")
+    if gate == "RECONNECT_CHURN":
+        if deltas.get("wifi_connect", 0) < 1:
+            failures.append("RECONNECT_CHURN observed no new TCP connection")
+        if deltas.get("wifi_disconnect", 0) < 1:
+            failures.append("RECONNECT_CHURN observed no client disconnect")
+
+
 def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
     failures = []
     health = state["health"]
@@ -323,6 +343,9 @@ def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
     last = health[-1] if health else None
     maxima = {field: max(item[field] for item in health) for field in MAX_FIELDS} if health else {}
     deltas = {field: last[field] - first[field] for field in DELTA_FIELDS} if health else {}
+    add_workload_failures(args.gate, expectation, health, deltas, failures)
+    if args.gate != "IDLE_STABILITY" and state["raw_capture_bytes"] == 0:
+        failures.append(f"{args.gate} requires a non-empty raw USB capture")
 
     source_ids = sorted({item["firmware_source_id32"] for item in health})
     boot_sessions = sorted({item["boot_session"] for item in health})
@@ -333,6 +356,7 @@ def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
         "finished_utc": utc_now(),
         "test": {
             "profile": expectation["name"],
+            "gate": args.gate,
             "port": args.port,
             "baud": args.baud,
             "requested_seconds": args.seconds,
@@ -353,6 +377,11 @@ def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
             "open_failures": state["open_failures"],
             "disconnect_events": state["disconnect_events"],
             "silence_reopens": state["silence_reopens"],
+        },
+        "raw_capture": {
+            "path": str(args.raw_output) if args.raw_output else None,
+            "bytes": state["raw_capture_bytes"],
+            "sha256": state["raw_capture_sha256"],
         },
         "typed_stream": {
             "valid_records": state["valid_records"],
@@ -424,6 +453,7 @@ def main() -> int:
     parser.add_argument("--port", required=True, help="USB CDC port, for example COM7")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--seconds", type=float, default=180.0)
+    parser.add_argument("--gate", choices=WORKLOAD_GATES, default="IDLE_STABILITY")
     parser.add_argument("--expect-selector", type=int, choices=sorted(PROFILE_EXPECTATIONS), required=True)
     parser.add_argument(
         "--expect-source-id",
@@ -432,9 +462,22 @@ def main() -> int:
         help="Expected 32-bit source-manifest id in hex, for example F9057D3F",
     )
     parser.add_argument("--output", type=Path, required=True, help="JSON evidence output path")
+    parser.add_argument("--raw-output", type=Path, help="Raw concatenated USB bytes and hash evidence")
     args = parser.parse_args()
     if args.seconds <= 0:
         parser.error("--seconds must be greater than zero")
+    if args.gate != "IDLE_STABILITY" and args.raw_output is None:
+        parser.error("--raw-output is required for connected/reconnect workload gates")
+    raw_stream = None
+    raw_digest = hashlib.sha256()
+    raw_bytes = 0
+    if args.raw_output is not None:
+        try:
+            args.raw_output.parent.mkdir(parents=True, exist_ok=True)
+            raw_stream = args.raw_output.open("wb")
+        except OSError as exc:
+            print(f"[ERROR] could not open raw capture {args.raw_output}: {exc}", file=sys.stderr)
+            return 2
 
     expectation = PROFILE_EXPECTATIONS[args.expect_selector]
     started = time.monotonic()
@@ -459,6 +502,8 @@ def main() -> int:
         "first_health_elapsed_s": None,
         "last_health_elapsed_s": 0.0,
         "max_health_gap_s": 0.0,
+        "raw_capture_bytes": 0,
+        "raw_capture_sha256": None,
     }
     port = None
     buffer = bytearray()
@@ -513,6 +558,10 @@ def main() -> int:
 
             now = time.monotonic()
             if chunk:
+                if raw_stream is not None:
+                    raw_stream.write(chunk)
+                    raw_digest.update(chunk)
+                    raw_bytes += len(chunk)
                 last_byte_at = now
                 buffer.extend(chunk)
                 while True:
@@ -632,6 +681,12 @@ def main() -> int:
                 port.close()
             except (serial.SerialException, OSError):
                 pass
+        if raw_stream is not None:
+            raw_stream.flush()
+            raw_stream.close()
+
+    state["raw_capture_bytes"] = raw_bytes
+    state["raw_capture_sha256"] = raw_digest.hexdigest() if raw_stream is not None else None
 
     elapsed_s = time.monotonic() - started
     result = evaluate(args, expectation, state, elapsed_s, interrupted)

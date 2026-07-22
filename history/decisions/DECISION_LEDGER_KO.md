@@ -80,7 +80,8 @@
 - 상태: Active, D-011의 crash-first recovery 경계로 확장.
 - 결정: `WifiTcpSink`는 publisher-facing nonblocking facade와 cached 상태만
   소유한다. AP 초기화, server accept, socket 설정, send, recv, close,
-  delete와 socket lifetime은 하나의 `WifiSocketWorker`만 소유한다.
+  socket lifetime은 하나의 `WifiSocketWorker`만 소유한다. Mbed `accept()`가 만든
+  factory socket은 `close()` 자체가 해제하므로 별도 delete하지 않는다.
 - 격리: TX/RX bounded mailbox와 generation으로 application lock과 socket
   lifetime을 main/RC/CAN/USB에서 분리한다. 250 ms 이상 진행 중인 호출은
   관측·표시하되 worker thread를 강제 종료하거나 board reset을 요청하지 않는다.
@@ -148,3 +149,13 @@
 - release open gate: bootloader reset latch, autonomy runtime wiring, 실제 vehicle
   mapping, D1 hardware gate 극성·readback, completion-correlated `CAN_TX_RAW`, 외부
   analyzer HIL, RC+CAN+USB+Wi-Fi fault/soak.
+
+## D-013 Mbed accepted socket close-only ownership
+
+- 날짜: 2026-07-22
+- 상태: Active, 실보드 reconnect 회귀 검증 대기.
+- 결함: `TCPSocket::accept()`가 반환한 factory object에 `close()` 후 `delete`를 다시 호출했다. ArduinoCore-mbed 4.3.1의 계약은 close가 객체를 deallocate하고 이후 포인터 참조는 undefined behavior라고 명시한다.
+- binary evidence: reset에 사용된 `ref.bin`과 symbol build의 SHA-256은 `06AA81E4AD4E696C40610E1F9D0322667729235008DD10EE2180727D592C9866`으로 동일하다. 해당 binary는 worker close 뒤 deleting destructor를 다시 호출하며, Mbed close 내부도 factory object deleting destructor를 호출한다.
+- runtime evidence: 두 early reset 중 마지막 retained call은 `CloseClient` 반환 직후 `DeleteClient` 진입, 미완료 상태였다. 이 결함은 reset과 고신뢰로 연결되지만 reset executor가 HardFault인지 watchdog인지는 raw latch 0으로 미확정이다.
+- 결정: accepted socket은 close-only로 종료한다. phase 9/12는 과거 retained evidence 해석을 위해 reserved로 남기고 재사용하지 않는다. architecture guard는 explicit accepted-socket delete를 금지한다.
+- 검증: affected build/guard 뒤 실제 Android graceful/abrupt disconnect와 반복 reconnect에서 connect/send/disconnect 진행, 동일 boot, quarantine 0, phase 9/12 미진입을 확인한다. 그 뒤 USB/CAN/RC 동시 HIL로 승격한다.

@@ -173,7 +173,8 @@ CAN TX 0을 함께 사용한다.
 ## Wi-Fi 격리의 실제 한계
 
 `WifiTcpSink`는 main/publisher용 bounded facade이고, `WifiSocketWorker` 하나가
-configure/AP/server/accept/send/recv/close/delete와 socket lifetime을 소유한다.
+configure/AP/server/accept/send/recv/close와 socket lifetime을 소유한다. Mbed
+`accept()` factory socket은 `close()`가 deallocate하므로 별도 delete하지 않는다.
 `Disabled`, `AccessPointOnly`, `FullTcp` mode가 명시적이며 startup attempt는
 기본 1회로 제한된다. 이 구조는 main이 socket API를 직접 기다리거나 무한 startup
 retry를 반복하는 문제를 제거한다.

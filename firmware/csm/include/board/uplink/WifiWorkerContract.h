@@ -80,9 +80,12 @@ enum class WifiWorkerCallPhase : uint8_t {
   Send = 6,
   Receive = 7,
   CloseClient = 8,
+  // Reserved for retained evidence produced before the accepted-socket
+  // close-only ownership fix. Do not reuse or renumber.
   DeleteClient = 9,
   AcceptExtraClient = 10,
   CloseExtraClient = 11,
+  // Reserved with DeleteClient for historical retained evidence decoding.
   DeleteExtraClient = 12,
 };
 

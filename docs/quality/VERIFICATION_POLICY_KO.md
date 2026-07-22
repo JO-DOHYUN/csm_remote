@@ -51,6 +51,9 @@
 
 - build 성공을 hardware 성공으로 주장하지 않는다.
 - TCP 연결을 end-to-end 무결성으로 주장하지 않는다.
+- 선언 부하는 timed window 전에 counter로 증명한다. Full TCP는 effective Full, quarantine off, 실제 client connect와 Wi-Fi sent 진행이 모두 필요하다.
+- `wifi_connect=0` 또는 `wifi_sent delta=0`인 결과는 USB/idle evidence일 뿐 Wi-Fi·reconnect 합격으로 승격하지 않는다.
+- generic PASS 대신 실행한 gate를 `IDLE_STABILITY`, `CONNECTED_TCP`, `RECONNECT_CHURN`, `I2_SIMULTANEOUS`로 함께 기록한다.
 - total count만 보지 않고 source capture, canonical publish, sink commit, app admission/capture를 대조한다.
 - 무결성 목표 수치는 실제 입력률·기기·지속시간·fault profile과 함께 기록한다.
 - 현재 3400 frame/s 1시간 동시 운용은 목표이며 아직 검증 결과가 아니다.

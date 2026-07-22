@@ -19,6 +19,9 @@ REQUIRED = (
     "history/decisions/DECISION_LEDGER_KO.md",
     "firmware/csm/platformio.ini",
     "firmware/csm/src/main.cpp",
+    "firmware/csm/pc_tools/run_reset_experiment.py",
+    "firmware/csm/pc_tools/tests/test_reset_experiment_workload.py",
+    "firmware/csm/tools/wifi_architecture_guard.py",
     "firmware/csm/shared/docs/TRANSPORT_AND_RECORDS_KO.md",
 )
 
@@ -82,5 +85,19 @@ result = subprocess.run(
 )
 if Path(result.stdout.strip()).resolve() != ROOT:
     fail("workspace root is not the Git repository root")
+
+checks = (
+    ([sys.executable, "tools/wifi_architecture_guard.py"], ROOT / "firmware/csm"),
+    (
+        [sys.executable, "-m", "unittest", "pc_tools.tests.test_reset_experiment_workload"],
+        ROOT / "firmware/csm",
+    ),
+    (["git", "diff", "--check"], ROOT),
+)
+for command, cwd in checks:
+    result = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stdout + result.stderr).strip()
+        fail(f"harness check failed: {' '.join(command)}\n{detail}")
 
 print("PASS: CSM harness routes, authorities, and required build environments")

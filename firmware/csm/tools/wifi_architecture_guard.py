@@ -40,12 +40,18 @@ for token in (
     "client_->send(",
     "client_->recv(",
     "owned->close(",
-    "delete owned",
     "osPriorityBelowNormal",
     "BOARD_WIFI_ACCEPT_POLL_MS",
 ):
     if token not in worker:
         fail(f"socket worker is missing required ownership marker {token!r}")
+
+for token in ("delete owned", "delete client_", "delete candidate"):
+    if token in worker:
+        fail(
+            "accepted TCPSocket lifetime violates Mbed close-only ownership: "
+            f"found {token!r}"
+        )
 
 for token in (
     "enum class WifiRuntimeMode",

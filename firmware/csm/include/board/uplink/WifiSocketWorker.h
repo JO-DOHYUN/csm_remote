@@ -73,8 +73,7 @@ class WifiSocketWorker final {
   void serviceTransmit(uint32_t now_ms);
   bool applyPendingConsume();
   void closeClient(bool stalled);
-  void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase,
-                   WifiWorkerCallPhase delete_phase);
+  void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);
   void applyAbortRequest();
   void noteSocketError(nsapi_error_t error);
   void beginCall(WifiWorkerCallPhase phase);

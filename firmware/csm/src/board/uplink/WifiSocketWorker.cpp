@@ -173,8 +173,7 @@ void WifiSocketWorker::serviceAccept(uint32_t, bool extra) {
   const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
-    closeSocket(candidate, WifiWorkerCallPhase::CloseClient,
-                WifiWorkerCallPhase::DeleteClient);
+    closeSocket(candidate, WifiWorkerCallPhase::CloseClient);
     applyAbortRequest();
     return;
   }
@@ -184,8 +183,7 @@ void WifiSocketWorker::serviceAccept(uint32_t, bool extra) {
   endCall(0);
 
   if (extra) {
-    closeSocket(candidate, WifiWorkerCallPhase::CloseExtraClient,
-                WifiWorkerCallPhase::DeleteExtraClient);
+    closeSocket(candidate, WifiWorkerCallPhase::CloseExtraClient);
     state_.counters.extra_client_reject_total++;
     return;
   }
@@ -340,8 +338,7 @@ bool WifiSocketWorker::applyPendingConsume() {
 
 void WifiSocketWorker::closeClient(bool stalled) {
   const bool was_connected = client_ != nullptr || state_.connected;
-  closeSocket(client_, WifiWorkerCallPhase::CloseClient,
-              WifiWorkerCallPhase::DeleteClient);
+  closeSocket(client_, WifiWorkerCallPhase::CloseClient);
   state_.connected = false;
   blocked_since_ms_ = 0;
   state_.backpressure_active = false;
@@ -365,21 +362,19 @@ void WifiSocketWorker::closeClient(bool stalled) {
 }
 
 void WifiSocketWorker::closeSocket(TCPSocket*& socket,
-                                   WifiWorkerCallPhase close_phase,
-                                   WifiWorkerCallPhase delete_phase) {
+                                   WifiWorkerCallPhase close_phase) {
   TCPSocket* owned = socket;
   socket = nullptr;
   if (owned == nullptr) return;
   beginCall(close_phase);
+  // Mbed TCPSocket::accept() returns a factory-allocated socket. Its close()
+  // deallocates that object; touching or deleting owned afterwards is UB.
   const nsapi_error_t error = owned->close();
   const uint32_t duration_us = endCall(error);
   if (duration_us > state_.counters.close_call_max_us) {
     state_.counters.close_call_max_us = duration_us;
   }
   if (error != NSAPI_ERROR_OK) noteSocketError(error);
-  beginCall(delete_phase);
-  delete owned;
-  endCall(0);
 }
 
 void WifiSocketWorker::applyAbortRequest() {

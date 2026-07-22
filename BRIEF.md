@@ -2,6 +2,13 @@
 
 Updated: 2026-07-22
 
+## 2026-07-22 accepted socket 수명 결함 판정
+
+- 실제 reset `ref.bin`과 현재 symbol build는 SHA-256 `06AA81E4AD4E696C40610E1F9D0322667729235008DD10EE2180727D592C9866`으로 동일하다. 이 binary는 Mbed factory-accepted `TCPSocket`에 `close()`를 호출한 뒤 deleting destructor를 다시 호출한다. Mbed 계약상 `close()`가 이미 객체를 해제하므로 확정적인 double-destruction/undefined behavior 결함이다.
+- 실보드 retained evidence도 `CloseClient` 반환 직후 `DeleteClient` 진입, 미완료 상태에서 reset된 것을 보존했다. 따라서 이 결함은 관측 reset의 고신뢰 촉발 원인이다. raw reset latch가 0이므로 HardFault/watchdog 중 최종 reset executor는 아직 확정하지 않는다.
+- accepted client 종료를 close-only로 수정하고 위험한 `delete owned`를 요구하던 architecture guard를 반대로 금지하도록 교정했다. phase 9/12는 과거 evidence 해석용 reserved 값으로 유지한다.
+- 이전 REF/A/B/C 결과는 모두 `wifi_connect +0`, `wifi_sent +0`이므로 `USB_ONLY_IDLE / SYMPTOM_NOT_OBSERVED`로 강등한다. connected/reconnect 안정성 근거가 아니다.
+
 ## 2026-07-22 crash-first self-debug 현재 상태
 
 - `RuntimeSupervisor`와 `BootRecovery`가 risky driver보다 먼저 시작한다. backup
@@ -16,11 +23,9 @@ Updated: 2026-07-22
   B=`watchdog Off+Full`, C=`watchdog On+AP-only`다. 네 artifact 모두 source hash
   `77bf1341a672984d8eb3d770234e3d2f7acf0957036a8eb705deadd997517856`로
   build됐고 application-data CAN TX는 compile-time 차단됐다.
-- 2026-07-22 실제 Portenta COM7에서 REF/A/B/C를 각각 180초 관측했고 모두
-  단일 boot session, 30초 stable, CRC 0, sequence gap 0, application CAN TX 0으로
-  통과했다. REF/A/C는 실제 watchdog 3000 ms, B는 실제 watchdog 비동작을
-  `BOARD_HEALTH v13`으로 확인했다. 이 결과는 리팩터링 후 단기 창에서 reset이
-  재현되지 않았다는 근거이며 과거 reset 원인을 Wi-Fi로 확정하지 않는다.
+- 2026-07-22 Portenta COM7의 REF/A/B/C 180초 결과는 단일 boot session, CRC 0,
+  sequence gap 0이었지만 네 결과 모두 `wifi_connect +0`, `wifi_sent +0`이었다.
+  따라서 `USB_ONLY_IDLE / SYMPTOM_NOT_OBSERVED`이며 Wi-Fi reset matrix 합격이 아니다.
 - reset raw는 여전히 0/unknown이었다. Arduino bootloader가 application보다 먼저
   RCC latch를 지울 수 있으므로 bootloader early capture 또는 외부 power/reset
   evidence 전에는 watchdog/power/hard fault를 확정하지 않는다.
@@ -30,8 +35,8 @@ Updated: 2026-07-22
 ## 2026-07-21 Wi-Fi 실행 경계 리팩터링
 
 - `WifiTcpSink`에서 모든 AP/socket 호출과 socket lifetime을 제거하고,
-  단일 `WifiSocketWorker`가 configure/AP/server/accept/send/recv/close/delete를
-  소유하도록 분리했다.
+  단일 `WifiSocketWorker`가 configure/AP/server/accept/send/recv/close와 socket
+  lifetime을 소유하도록 분리했다. accepted factory socket은 close-only다.
 - main/publisher 경계는 bounded TX/RX mailbox의 try-offer와 cached snapshot만
   사용한다. 250 ms 이상 진행 중인 호출은 phase/sequence/heartbeat로 관측한다.
   같은 M7/kernel/WHD/radio/전원을 공유하므로 vendor stall과 power fault까지
@@ -94,13 +99,14 @@ Updated: 2026-07-22
 
 ## 다음 구현 gate
 
-1. REF/A/B/C 180초 1차 통과를 반복·장시간 soak와 fault injection으로 확장한다.
-2. bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
-3. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
-4. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
-5. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`를 구현하고 Kvaser에서
+1. close-only 수정 build를 실제 Android connect/stream/disconnect 100회와 graceful/abrupt reconnect에서 검증한다.
+2. 같은 revision으로 Windows USB + Android Wi-Fi + CAN + RC 동시 180초와 장시간 soak를 수행한다.
+3. 재발 시 bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
+4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
+5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
+6. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`를 구현하고 Kvaser에서
    ID/payload/주기/ACK를 대조한다. `0x007` mapper는 bench 전용이다.
-6. Windows USB + Android Wi-Fi + RC + dual CAN 동시 HIL, fault injection,
+7. Windows USB + Android Wi-Fi + RC + dual CAN 동시 HIL, fault injection,
    blocked-client/reconnect와 장시간 soak를 수행한다.
 
 Android 전용 wire 형식이나 sink별 별도 encode 경로는 만들지 않는다.

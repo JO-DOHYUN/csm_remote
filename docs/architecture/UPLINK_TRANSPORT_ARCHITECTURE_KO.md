@@ -78,10 +78,11 @@ v1 header의 `seq u16`은 fanout 전 `CanonicalPublisher`가 배정하는 `publi
 CanonicalPublisher
   -> WifiTcpSink facade (try-offer와 cached 상태만 소유)
   -> bounded TX/RX mailbox (epoch/generation 포함)
-  -> WifiSocketWorker (AP/accept/send/recv/close/delete 단독 소유)
+  -> WifiSocketWorker (AP/accept/send/recv/close와 socket lifetime 단독 소유)
 ```
 
 - 메인 루프와 publisher는 socket API를 호출하거나 기다리지 않는다.
+- Mbed `TCPSocket::accept()`가 반환한 factory socket은 `close()`가 객체까지 해제한다. worker는 close 뒤 포인터를 참조하거나 별도 `delete`하지 않는다.
 - 워커는 static 16 KiB stack의 단일 수명 thread이며 재생성하지 않는다.
   실제 free/max-used stack은 debug record에서 1초 주기로 계측한다.
 - RC/CAN/main은 Wi-Fi worker보다 높은 scheduler priority를 사용하고 메인은
