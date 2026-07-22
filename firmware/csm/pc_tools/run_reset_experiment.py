@@ -18,10 +18,13 @@ from pathlib import Path
 
 import serial
 
-from verify_typed_stream import i32, parse_frame, u32, u64
+from verify_typed_stream import i32, parse_frame, u16, u32, u64
 
 
 BOARD_HEALTH_TYPE = 8
+CAN_RX_RAW_TYPE = 1
+CAN_RX_SEGMENT_TYPE = 16
+REMOTE_CONTROL_STATE_TYPE = 18
 RUNTIME_DIAGNOSTIC_TYPE = 19
 BOARD_HEALTH_V13_SIZE = 508
 RUNTIME_DIAGNOSTIC_SIZE = 128
@@ -41,9 +44,16 @@ PROFILE_EXPECTATIONS = {
     3: {"name": "C", "requested_wifi_mode": 1, "effective_wifi_mode": 1,
         "watchdog_requested": True, "watchdog_effective": True, "experiment_flags": 0x7F},
 }
-WORKLOAD_GATES = ("IDLE_STABILITY", "CONNECTED_TCP", "RECONNECT_CHURN")
+WORKLOAD_GATES = ("IDLE_STABILITY", "CONNECTED_TCP", "RECONNECT_CHURN", "I2_SIMULTANEOUS")
 
 MAX_FIELDS = (
+    "can_rx",
+    "can_drop",
+    "fifo_overflow",
+    "bus0_rx",
+    "bus0_drop",
+    "bus1_rx",
+    "bus1_drop",
     "builtin_can_tx_success",
     "builtin_can_tx_fail",
     "consecutive_early_resets",
@@ -68,6 +78,13 @@ MAX_FIELDS = (
 DELTA_FIELDS = (
     "board_mono_us",
     "current_progress_uptime_ms",
+    "can_rx",
+    "can_drop",
+    "fifo_overflow",
+    "bus0_rx",
+    "bus0_drop",
+    "bus1_rx",
+    "bus1_drop",
     "builtin_can_tx_success",
     "builtin_can_tx_fail",
     "usb_sent",
@@ -113,9 +130,16 @@ def health_snapshot(payload: bytes, host_elapsed_s: float) -> dict:
     return {
         "host_elapsed_s": round(host_elapsed_s, 3),
         "board_mono_us": u64(payload, 0),
+        "can_rx": u32(payload, 8),
+        "can_drop": u32(payload, 12),
+        "fifo_overflow": u32(payload, 16),
         "health_version": payload[52],
         "builtin_can_tx_success": u32(payload, 88),
         "builtin_can_tx_fail": u32(payload, 92),
+        "bus0_rx": u32(payload, 128),
+        "bus0_drop": u32(payload, 132),
+        "bus1_rx": u32(payload, 144),
+        "bus1_drop": u32(payload, 148),
         "boot_session": u64(payload, 304),
         "usb_epoch": u32(payload, 312),
         "usb_overflow": u32(payload, 320),
@@ -220,6 +244,25 @@ def add_workload_failures(gate: str, expectation: dict, health: list,
             failures.append("RECONNECT_CHURN observed no new TCP connection")
         if deltas.get("wifi_disconnect", 0) < 1:
             failures.append("RECONNECT_CHURN observed no client disconnect")
+
+
+def add_i2_load_failures(gate: str, state: dict, min_can_rx_frames: int,
+                         min_rc_valid_frame_delta: int, failures: list) -> None:
+    if gate != "I2_SIMULTANEOUS":
+        return
+    if state["can_rx_frames"] < min_can_rx_frames:
+        failures.append(
+            f"I2_SIMULTANEOUS CAN RX frames {state['can_rx_frames']} below required {min_can_rx_frames}"
+        )
+    rc_states = state["rc_states"]
+    if len(rc_states) < 2:
+        failures.append("I2_SIMULTANEOUS observed fewer than two RC state records")
+        return
+    rc_delta = rc_states[-1]["valid_frames"] - rc_states[0]["valid_frames"]
+    if rc_delta < min_rc_valid_frame_delta:
+        failures.append(
+            f"I2_SIMULTANEOUS RC valid-frame delta {rc_delta} below required {min_rc_valid_frame_delta}"
+        )
 
 
 def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
@@ -344,6 +387,9 @@ def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
     maxima = {field: max(item[field] for item in health) for field in MAX_FIELDS} if health else {}
     deltas = {field: last[field] - first[field] for field in DELTA_FIELDS} if health else {}
     add_workload_failures(args.gate, expectation, health, deltas, failures)
+    add_i2_load_failures(
+        args.gate, state, args.min_can_rx_frames, args.min_rc_valid_frame_delta, failures
+    )
     if args.gate != "IDLE_STABILITY" and state["raw_capture_bytes"] == 0:
         failures.append(f"{args.gate} requires a non-empty raw USB capture")
 
@@ -389,6 +435,24 @@ def evaluate(args, expectation, state, elapsed_s, interrupted) -> dict:
             "crc_errors": state["crc_errors"],
             "sequence_gap_events": state["sequence_gap_events"],
             "sequence_missing_records": state["sequence_missing_records"],
+        },
+        "declared_load": {
+            "can_rx_frames": state["can_rx_frames"],
+            "can_rx_frames_by_bus": {
+                str(key): value for key, value in sorted(state["can_rx_frames_by_bus"].items())
+            },
+            "rc_state_records": len(state["rc_states"]),
+            "rc_valid_frame_delta": (
+                state["rc_states"][-1]["valid_frames"] - state["rc_states"][0]["valid_frames"]
+                if len(state["rc_states"]) >= 2 else None
+            ),
+            "rc_accepted_frame_delta": (
+                state["rc_states"][-1]["accepted_frames"] - state["rc_states"][0]["accepted_frames"]
+                if len(state["rc_states"]) >= 2 else None
+            ),
+            "rc_final_last_frame_age_ms": (
+                state["rc_states"][-1]["last_frame_age_ms"] if state["rc_states"] else None
+            ),
         },
         "runtime_diagnostic": {
             "phase7_recovery_event_count": len(state["recovery_events"]),
@@ -463,11 +527,17 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path, required=True, help="JSON evidence output path")
     parser.add_argument("--raw-output", type=Path, help="Raw concatenated USB bytes and hash evidence")
+    parser.add_argument("--min-can-rx-frames", type=int, default=0)
+    parser.add_argument("--min-rc-valid-frame-delta", type=int, default=0)
     args = parser.parse_args()
     if args.seconds <= 0:
         parser.error("--seconds must be greater than zero")
     if args.gate != "IDLE_STABILITY" and args.raw_output is None:
         parser.error("--raw-output is required for connected/reconnect workload gates")
+    if args.gate == "I2_SIMULTANEOUS" and (
+        args.min_can_rx_frames < 1 or args.min_rc_valid_frame_delta < 1
+    ):
+        parser.error("I2_SIMULTANEOUS requires positive CAN and RC minimums")
     raw_stream = None
     raw_digest = hashlib.sha256()
     raw_bytes = 0
@@ -497,6 +567,9 @@ def main() -> int:
         "recovery_events": [],
         "recovery_event_types": Counter(),
         "recovered_wifi_calls": [],
+        "can_rx_frames": 0,
+        "can_rx_frames_by_bus": Counter(),
+        "rc_states": [],
         "short_health_records": 0,
         "health": [],
         "first_health_elapsed_s": None,
@@ -581,6 +654,35 @@ def main() -> int:
                             state["sequence_gap_events"] += 1
                             state["sequence_missing_records"] += (sequence - expected_sequence) & 0xFFFF
                     last_sequence = sequence
+
+                    if frame["type"] == CAN_RX_RAW_TYPE:
+                        payload = frame["payload"]
+                        if len(payload) >= 30:
+                            bus = payload[13]
+                            state["can_rx_frames"] += 1
+                            state["can_rx_frames_by_bus"][bus] += 1
+                    elif frame["type"] == CAN_RX_SEGMENT_TYPE:
+                        payload = frame["payload"]
+                        if len(payload) >= 32:
+                            count = u16(payload, 16)
+                            for index in range(count):
+                                offset = 32 + index * 30
+                                if offset + 30 > len(payload):
+                                    state["runtime_diagnostic_errors"].append(
+                                        "CAN RX segment length does not contain its declared frames"
+                                    )
+                                    break
+                                bus = payload[offset + 21]
+                                state["can_rx_frames"] += 1
+                                state["can_rx_frames_by_bus"][bus] += 1
+                    elif frame["type"] == REMOTE_CONTROL_STATE_TYPE:
+                        payload = frame["payload"]
+                        if len(payload) >= 228:
+                            state["rc_states"].append({
+                                "valid_frames": u32(payload, 44),
+                                "accepted_frames": u32(payload, 208),
+                                "last_frame_age_ms": u32(payload, 216),
+                            })
 
                     if frame["type"] == RUNTIME_DIAGNOSTIC_TYPE:
                         payload = frame["payload"]

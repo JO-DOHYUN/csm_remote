@@ -9,6 +9,7 @@ Updated: 2026-07-22
 - accepted client 종료를 close-only로 수정하고 위험한 `delete owned`를 요구하던 architecture guard를 반대로 금지하도록 교정했다. phase 9/12는 과거 evidence 해석용 reserved 값으로 유지한다.
 - 이전 REF/A/B/C 결과는 모두 `wifi_connect +0`, `wifi_sent +0`이므로 `USB_ONLY_IDLE / SYMPTOM_NOT_OBSERVED`로 강등한다. connected/reconnect 안정성 근거가 아니다.
 - close-only REF는 실제 SM-S936N observer에서 성공한 reconnect 20회(정상 중지 1회, process stop 19회)를 포함한 600초 동안 boot sequence 6과 단일 session을 유지했다. CSM counter는 connect/disconnect `+22/+22`, Wi-Fi sent `+857`이며 CRC/gap/USB disconnect/quarantine/runtime contract error는 모두 0이다. 이 재현 결함은 `FIXED`로 판정하며 동시 HIL과 soak는 아직 남아 있다.
+- I2 20초 preflight는 RC valid frame `+1987`, Wi-Fi sent `+320`, USB sent `+310`, 동일 boot/session, CRC/gap 0을 증명했지만 Kvaser physical channel 0은 ACK 0이고 CSM bus0/bus1 RX도 0이었다. 따라서 동시부하는 CAN 물리 경계의 `INVALID_LOAD`이며 reset 재발로 판정하지 않는다.
 
 ## 2026-07-22 crash-first self-debug 현재 상태
 
