@@ -71,6 +71,8 @@ Updated: 2026-07-22
 - passive M7 env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`가 clean clone에서 build된다.
 - 제품 M4 env `portenta_h7_m4_remote_frontend`는 Serial3 CRSF 416666 8N1, 16채널/링크 통계, 정규화, 양방향 telemetry와 SRAM4 IPC를 포함해 build된다.
 - 제품 M7 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi`는 RC authority/limiter 관측 경계, built-in CAN bus 1 RX, canonical USB/Wi-Fi evidence를 포함한다. mapper는 `None`, local CAN TX capability는 Off다.
+- MDPS 실차 전 벤치 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi`는 같은 제품 authority/safety/fanout을 유지하고 `MdpsBench0x007`의 J4 송신만 연다. MCP2515는 normal-mode RX/ACK만 허용하며 host/control TX는 계속 금지한다.
+- 2026-07-22 REF 15초 실측에서 J4 `+300`, RC valid/accepted `+1487`, boot session 변화와 CAN/USB drop은 0이었다. 당시 RC 출력 부재는 수신 고장이 아니라 REF의 `BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX=1` 때문이었다.
 - remote product architecture, Phase 2A, Phase 2B guard와 전체 runtime 계약시험이 통과한다.
 - hard safety 뒤 upstream autonomy가 `InactiveConfirmed`로 release해야 RC reservation을 평가한다. 그 뒤 500 ms 중립 qualification, 정상 stale/failsafe의 즉시 중립과 1초 release를 적용하며 malformed/protocol/IPC/M4 failure는 release하지 않는다. autonomy runtime wiring은 아직 없다.
 - SRAM4 schema 2 IPC는 header, M4→M7, M7→M4를 32-byte cache-line 단독 소유 영역으로 분리한다. M4/M7 artifact는 항상 한 쌍으로 배포한다.

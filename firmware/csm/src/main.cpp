@@ -371,6 +371,10 @@
 #define BOARD_ENABLE_MDPS_BENCH_MAPPING 0
 #endif
 
+#ifndef BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH
+#define BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH 0
+#endif
+
 // A remote input pipeline is not, by itself, a vehicle-control capability.
 // Product/local CAN TX is advertised only when an explicit vehicle mapping is
 // selected and the diagnostic safety interlock has not suppressed output.
@@ -456,6 +460,16 @@
 
 #ifndef BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT
 #define BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT 0
+#endif
+
+#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
+    (!BOARD_CSM_PROFILE_REMOTE_PRODUCT || !BOARD_ENABLE_REMOTE_CONTROL || \
+     !BOARD_ENABLE_REMOTE_AUTHORITY || !BOARD_ENABLE_MDPS_BENCH_MAPPING || \
+     !BOARD_ENABLE_MCP2515 || !BOARD_ENABLE_MCP2515_INIT || \
+     BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT || BOARD_ENABLE_HOST_CAN_TX || \
+     BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515 || \
+     BOARD_MCP2515_CONTROL_TX_ALLOWED)
+#error "Remote MDPS bench profile violates its authority/CAN safety contract"
 #endif
 
 #ifndef BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED

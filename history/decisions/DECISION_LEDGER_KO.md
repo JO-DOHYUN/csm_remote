@@ -159,3 +159,11 @@
 - runtime evidence: 두 early reset 중 마지막 retained call은 `CloseClient` 반환 직후 `DeleteClient` 진입, 미완료 상태였다. 이 결함은 reset과 고신뢰로 연결되지만 reset executor가 HardFault인지 watchdog인지는 raw latch 0으로 미확정이다.
 - 결정: accepted socket은 close-only로 종료한다. phase 9/12는 과거 retained evidence 해석을 위해 reserved로 남기고 재사용하지 않는다. architecture guard는 explicit accepted-socket delete를 금지한다.
 - 검증: close-only REF를 SM-S936N observer와 600초 운용하며 성공한 reconnect 20회(정상 중지 1회, process stop 19회)를 수행했다. CSM은 connect/disconnect `+22/+22`, Wi-Fi sent `+857`, boot sequence 6과 단일 session, CRC/gap/USB disconnect/quarantine/runtime contract error 0을 기록했다. 재현 결함은 FIXED로 판정하고 USB/CAN/RC 동시 HIL로 승격한다.
+
+## D-014 Remote Product MDPS bench artifact
+
+- 날짜: 2026-07-22
+- 상태: Active, bench-only. 실제 보드 업로드와 dual-CAN/MDPS HIL 대기.
+- 근거: reset REF 15초 실측에서 J4 `+300`, RC valid/accepted `+1487`, boot 변화와 CAN/USB drop은 0이었다. RC 입력은 정상이며 REF가 application CAN TX를 명시적으로 억제하고 기본 제품 profile이 MCP2515를 compile-out한 상태였다.
+- 결정: 기본 Remote Product의 fail-closed mapper `None`은 유지한다. 별도 `portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi`만 제품 authority/safety/limiter 아래 J4 `MdpsBench0x007` 송신을 연다. MCP2515는 normal-mode RX/ACK만 허용하며 MCP control TX, 모든 host TX/downlink는 금지한다.
+- 판정 경계: 이 artifact는 MDPS 단품/차량 벤치용이며 실제 5-ID vehicle mapping 또는 release artifact가 아니다. J4 `0x007` ID/payload/20 ms와 외부 analyzer 관측, MCP error-free ACK, RC/USB/Wi-Fi 동시 부하를 별도로 통과해야 한다.

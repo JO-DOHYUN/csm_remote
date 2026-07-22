@@ -55,7 +55,7 @@ v1 header의 `seq u16`은 fanout 전 `CanonicalPublisher`가 배정하는 `publi
 - Wi-Fi write가 일시적으로 0을 반환해도 즉시 장애로 단정하지 않는다. 현재 stalled-client close 기준은 5 s이며 queue와 write는 계속 bounded/nonblocking이다.
 - Wi-Fi observer와 Service/HIL profile은 48-record fixed sink queue를 사용하고 그중 4개를 critical health/control evidence에 예약한다. CAN truth는 레코드 2개 또는 최대 75 ms까지 모아 한 socket write로 전송하며, critical health/control evidence는 즉시 flush한다.
 - 48-record 수치는 20 Hz CAN1 bench에서 약 1 s Wi-Fi write 정지와 32-record queue overflow 4건이 실측되어 transient를 흡수하도록 정한 현재 기준이다. Remote Product의 정적 `CAPABILITY`는 session 시작·재연결 시 광고한다. periodic 광고는 reset 실험의 변수를 줄이기 위해 현재 Off지만, 과거 reset을 해당 광고나 정확히 3초 watchdog으로 확정하지 않는다.
-- Remote Product와 reset experiment는 외부 MCP2515를 compile-out하고 J4 built-in CAN을 관측한다. MCP2515를 RP2040 feeder로 교체할지는 별도 hardware/product gate이며 아직 확정하지 않는다. 외부 frontend를 바꾸더라도 authority와 canonical publish identity는 M7이 소유한다.
+- 기본 Remote Product와 reset experiment는 외부 MCP2515를 compile-out하고 J4 built-in CAN을 관측한다. 명시적 MDPS bench profile만 MCP2515를 normal-mode RX/ACK로 열며 MCP/host control TX는 계속 금지한다. MCP2515를 RP2040 feeder로 교체할지는 별도 hardware/product gate이며 아직 확정하지 않는다. 외부 frontend를 바꾸더라도 authority와 canonical publish identity는 M7이 소유한다.
 - Wi-Fi backpressure 전환마다 같은 혼잡 sink에 `BOARD_EVENT`를 재주입하지 않는다. queue high-water, overflow, stall/epoch counter를 `BOARD_HEALTH`에서 집계해 피드백 데이터 스톰을 방지한다.
 
 ## 실패 격리
