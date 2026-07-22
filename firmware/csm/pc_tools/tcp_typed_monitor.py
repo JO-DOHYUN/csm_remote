@@ -78,6 +78,10 @@ def parse_args() -> argparse.Namespace:
         help="Send one complete pre-encoded typed frame as hexadecimal after connect.",
     )
     parser.add_argument("--output-dir", default="")
+    parser.add_argument(
+        "--raw-max-mib", type=float, default=256.0,
+        help="Maximum raw capture size; 0 disables the cap.",
+    )
     return parser.parse_args()
 
 
@@ -114,6 +118,9 @@ def main() -> int:
     frames = 0
     bad_crc = 0
     received_bytes = 0
+    raw_written = raw_path.stat().st_size if raw_path.exists() else 0
+    raw_limit = int(args.raw_max_mib * 1024 * 1024) if args.raw_max_mib > 0 else 0
+    raw_capped = raw_limit > 0 and raw_written >= raw_limit
     last_debug_print: dict[int, float] = {}
 
     print(f"[START] endpoint={args.host}:{args.port} raw={raw_path}", flush=True)
@@ -134,8 +141,17 @@ def main() -> int:
                                 continue
                             if not chunk:
                                 raise ConnectionError("CSM closed TCP connection")
-                            raw_file.write(chunk)
-                            raw_file.flush()
+                            if not raw_capped:
+                                writable = len(chunk)
+                                if raw_limit > 0:
+                                    writable = min(writable, raw_limit - raw_written)
+                                if writable > 0:
+                                    raw_file.write(chunk[:writable])
+                                    raw_file.flush()
+                                    raw_written += writable
+                                if raw_limit > 0 and raw_written >= raw_limit:
+                                    raw_capped = True
+                                    print(f"[RAW_CAP] bytes={raw_written}", flush=True)
                             received_bytes += len(chunk)
                             buffer.extend(chunk)
                             while True:
@@ -169,7 +185,8 @@ def main() -> int:
         print("[STOP] Ctrl+C", flush=True)
 
     print(
-        f"[DONE] epochs={epoch} bytes={received_bytes} frames={frames} bad_crc={bad_crc}",
+        f"[DONE] epochs={epoch} bytes={received_bytes} raw_bytes={raw_written} "
+        f"frames={frames} bad_crc={bad_crc}",
         flush=True,
     )
     print(tracker.summary(), flush=True)
