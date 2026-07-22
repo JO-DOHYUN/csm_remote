@@ -3764,7 +3764,16 @@ static void service_remote_control() {
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
       (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
   inputs.host_service_active = false;
+#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH
+  // This isolated bench has no upstream autonomy runtime. Only its explicit
+  // build profile may positively release the otherwise fail-closed boundary.
+  inputs.local_tx_inhibit_latched = false;
+  inputs.autonomy_state =
+      csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
+#else
+  inputs.local_tx_inhibit_latched = true;
   inputs.autonomy_state = csm::board::authority::AutonomyAuthorityState::Unknown;
+#endif
   inputs.backend_state.ready =
       builtin_can_tx_ok && (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
   if (builtin_can_tx_ok) {

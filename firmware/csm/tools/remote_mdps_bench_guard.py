@@ -50,4 +50,15 @@ for item in (
     if item not in base_flags:
         fail(f"base product contract missing {item}")
 
+main_source = (root / "src" / "main.cpp").read_text(encoding="utf-8")
+for item in (
+    "#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH",
+    "inputs.local_tx_inhibit_latched = false;",
+    "AutonomyAuthorityState::InactiveConfirmed;",
+    "inputs.local_tx_inhibit_latched = true;",
+    "AutonomyAuthorityState::Unknown;",
+):
+    if item not in main_source:
+        fail(f"main wiring missing {item}")
+
 print("Remote MDPS bench profile guard passed.")
