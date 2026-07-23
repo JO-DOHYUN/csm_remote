@@ -567,6 +567,12 @@
 #if BOARD_USB_CDC_RECONNECT_RESET_MS != 0
 #error "Service/HIL Wi-Fi must not reset the board on transient USB CDC disconnects"
 #endif
+#if !BOARD_ENABLE_REMOTE_CONTROL || !BOARD_ENABLE_REMOTE_AUTHORITY
+#error "Service/HIL Wi-Fi requires the RC authority boundary"
+#endif
+#if !BOARD_ENABLE_HOST_CAN_TX_BUILTIN || !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#error "Service/HIL Wi-Fi requires the J4 built-in CAN control lane"
+#endif
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
@@ -699,6 +705,9 @@ enum BoardEventCode : uint16_t {
   EventCanFrontendSessionInitFailed = csm::kBoardEventCanFrontendSessionInitFailedCode,
   EventCanFrontendFaultHold = csm::kBoardEventCanFrontendFaultHoldCode,
   EventWifiTxBackpressure = csm::kBoardEventWifiTxBackpressureCode,
+  EventWifiQueuePressureIsolated =
+      csm::kBoardEventWifiQueuePressureIsolatedCode,
+  EventWifiClientClosed = csm::kBoardEventWifiClientClosedCode,
   EventRuntimeBreadcrumbRecovered = csm::kBoardEventRuntimeBreadcrumbRecoveredCode,
   EventRemoteControlInitFailed = csm::kBoardEventRemoteControlInitFailedCode,
   EventRemoteControlStateChanged = csm::kBoardEventRemoteControlStateChangedCode,
@@ -1633,47 +1642,94 @@ static bool usb_cdc_dtr_asserted() {
 #endif
 }
 
-static void poll_uplink_connections(uint32_t now_ms) {
+static constexpr uint8_t kUsbSessionSinkMask = (1u << 0);
+static constexpr uint8_t kWifiSessionSinkMask = (1u << 1);
+static uint32_t last_wifi_capability_epoch = 0;
+static bool pending_wifi_close_event = false;
+static uint8_t pending_wifi_close_reason = 0;
+static uint32_t pending_wifi_disconnect_total = 0;
+static uint32_t observed_wifi_disconnect_total = 0;
+static void emit_capability();
+
+static void request_connection_session(bool usb_epoch_changed) {
+  uint8_t session_targets = 0;
+  if (usb_epoch_changed && usb_cdc_sink.connected()) {
+    session_targets |= kUsbSessionSinkMask;
+  }
+#if BOARD_ENABLE_WIFI_UPLINK
+  bool refresh_wifi_capability = false;
+  if (wifi_tcp_sink.connected() && !wifi_tcp_sink.sessionAnchorQueued()) {
+    session_targets |= kWifiSessionSinkMask;
+    const uint32_t epoch = wifi_tcp_sink.counters().connection_epoch;
+    if (epoch != last_wifi_capability_epoch) {
+      last_wifi_capability_epoch = epoch;
+      refresh_wifi_capability = true;
+    }
+  }
+#endif
+  if (session_targets != 0) {
+    canonical_publisher.requestSessionAnnouncement(
+        SessionAnnouncementReason::SinkEpochChanged, session_targets);
+  }
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (refresh_wifi_capability) emit_capability();
+#endif
+}
+
+static void poll_uplink_connections(
+    uint32_t now_ms,
+    csm::board::uplink::SinkServiceResult* usb_poll_result = nullptr,
+    csm::board::uplink::SinkServiceResult* wifi_poll_result = nullptr) {
   record_runtime_breadcrumb(RuntimeStageUsbConnectionPoll);
   const csm::board::uplink::SinkServiceResult usb_poll =
       usb_cdc_sink.service(0, now_ms, micros());
+  if (usb_poll_result != nullptr) *usb_poll_result = usb_poll;
   record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_WIFI_UPLINK
   record_runtime_breadcrumb(RuntimeStageWifiConnectionPoll);
   const csm::board::uplink::SinkServiceResult wifi_poll =
       wifi_tcp_sink.service(0, now_ms, micros());
+  if (wifi_poll_result != nullptr) *wifi_poll_result = wifi_poll;
   record_runtime_breadcrumb(RuntimeStageIdle);
-  if (usb_poll.epoch_changed || wifi_poll.epoch_changed) {
-#else
-  if (usb_poll.epoch_changed) {
 #endif
-    canonical_publisher.requestSessionAnnouncement(
-        SessionAnnouncementReason::SinkEpochChanged);
+  request_connection_session(usb_poll.epoch_changed);
+}
+
+static void merge_sink_service_result(
+    csm::board::uplink::SinkServiceResult& target,
+    const csm::board::uplink::SinkServiceResult& source) {
+  target.actual_bytes += source.actual_bytes;
+  target.frames_completed += source.frames_completed;
+  target.epoch_changed = target.epoch_changed || source.epoch_changed;
+  if (source.backpressure_event) {
+    target.backpressure_event = true;
+    target.backpressure_duration_ms = source.backpressure_duration_ms;
   }
+  target.queue_pressure_event =
+      target.queue_pressure_event || source.queue_pressure_event;
 }
 
 static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP) {
   const uint32_t now_ms = millis();
-  poll_uplink_connections(now_ms);
+  csm::board::uplink::SinkServiceResult usb_poll_result;
+  csm::board::uplink::SinkServiceResult wifi_poll_result;
+  poll_uplink_connections(now_ms, &usb_poll_result, &wifi_poll_result);
   record_runtime_breadcrumb(RuntimeStageCanonicalPublish);
   canonical_publisher.service(mono64_us());
   record_runtime_breadcrumb(RuntimeStageIdle);
   record_runtime_breadcrumb(RuntimeStageUsbTransmit);
-  const csm::board::uplink::SinkServiceResult usb_result =
+  csm::board::uplink::SinkServiceResult usb_result =
       usb_cdc_sink.service(byte_budget, now_ms, micros());
+  merge_sink_service_result(usb_result, usb_poll_result);
   record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_WIFI_UPLINK
   record_runtime_breadcrumb(RuntimeStageWifiTransmit);
-  const csm::board::uplink::SinkServiceResult wifi_result =
+  csm::board::uplink::SinkServiceResult wifi_result =
       wifi_tcp_sink.service(byte_budget, now_ms, micros());
+  merge_sink_service_result(wifi_result, wifi_poll_result);
   record_runtime_breadcrumb(RuntimeStageIdle);
-  if (usb_result.epoch_changed || wifi_result.epoch_changed) {
-#else
-  if (usb_result.epoch_changed) {
 #endif
-    canonical_publisher.requestSessionAnnouncement(
-        SessionAnnouncementReason::SinkEpochChanged);
-  }
+  request_connection_session(usb_result.epoch_changed);
   if (usb_result.backpressure_event) {
     emit_board_event(EventSerialTxBackpressure,
                      static_cast<uint16_t>(usb_result.backpressure_duration_ms & 0xFFFF),
@@ -1686,6 +1742,24 @@ static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_
         EventWifiTxBackpressure,
         static_cast<uint16_t>(duration_ms > 0xFFFFu ? 0xFFFFu : duration_ms),
         wifi_tcp_sink.counters().stall_close_total);
+  }
+  if (wifi_result.queue_pressure_event) {
+    emit_board_event(EventWifiQueuePressureIsolated, 0,
+                     wifi_tcp_sink.counters().queue_pressure_close_total);
+  }
+  const uint32_t wifi_disconnect_total =
+      wifi_tcp_sink.counters().disconnect_total;
+  if (wifi_disconnect_total != observed_wifi_disconnect_total) {
+    observed_wifi_disconnect_total = wifi_disconnect_total;
+    pending_wifi_close_event = true;
+    pending_wifi_close_reason =
+        static_cast<uint8_t>(wifi_tcp_sink.lastCloseReason());
+    pending_wifi_disconnect_total = wifi_disconnect_total;
+  }
+  if (pending_wifi_close_event && uplink_host_session_open() &&
+      emit_board_event(EventWifiClientClosed, pending_wifi_close_reason,
+                       pending_wifi_disconnect_total)) {
+    pending_wifi_close_event = false;
   }
   uplink_tx_bytes_since_can_service +=
       usb_result.actual_bytes + wifi_result.actual_bytes;
@@ -2284,6 +2358,7 @@ using csm::ControlReasonNotArmed;
 using csm::ControlReasonOk;
 using csm::ControlReasonQueueFull;
 using csm::ControlReasonSafetyLockout;
+using csm::ControlReasonAuthorityDenied;
 using csm::ControlReasonUnsupportedFrame;
 using csm::ControlReasonUnsupportedCommand;
 
@@ -3688,6 +3763,15 @@ static bool any_control_backend_ready() {
   return ready;
 }
 
+static bool host_control_authority_allowed() {
+#if BOARD_ENABLE_REMOTE_AUTHORITY
+  return remote_control_runtime_ok &&
+      remote_control_runtime.status().host_control_allowed;
+#else
+  return true;
+#endif
+}
+
 static csm::board::SafetyInputs read_safety_inputs() {
   csm::board::SafetyInputs inputs;
 #if BOARD_ENABLE_SAFETY_IO
@@ -3763,8 +3847,8 @@ static void service_remote_control() {
   inputs.hardware_gate_allows =
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
       (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
-  inputs.host_service_active = false;
-#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH
+  inputs.host_service_active = safety_supervisor.leaseAlive(now_ms);
+#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
   // This isolated bench has no upstream autonomy runtime. Only its explicit
   // build profile may positively release the otherwise fail-closed boundary.
   inputs.local_tx_inhibit_latched = false;
@@ -3793,6 +3877,13 @@ static void service_remote_control() {
 
   const csm::board::control::RemoteControlRuntimeOutput output =
       remote_control_runtime.service(now_ms, inputs);
+#if BOARD_ENABLE_REMOTE_AUTHORITY
+  if (safety_supervisor.leaseAlive(now_ms) &&
+      !remote_control_runtime.status().host_control_allowed) {
+    safety_supervisor.disarm(now_ms);
+    safety_state = safety_supervisor.state();
+  }
+#endif
   if (output.frame_ready) {
     const auto& frame = output.frame;
     const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
@@ -4396,13 +4487,52 @@ static void __attribute__((unused)) service_builtin_can_rx_host_absent_drain(int
 #endif
 }
 
-static bool __attribute__((unused)) is_allowed_host_can_id(uint32_t can_id, bool extended) {
+static bool __attribute__((unused)) is_allowed_host_can_frame(
+    uint32_t can_id, bool extended, uint8_t dlc) {
   if (extended) {
     return false;
   }
-  return (BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && (can_id == 0x100 || can_id == 0x200)) ||
-         can_id == kHostCanTxAllowedPrimaryId ||
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+  return (can_id == csm::board::control::kRemoteDriveCanId && dlc == 8) ||
+         (can_id == csm::board::control::kRemoteSteeringCanId && dlc == 8);
+#else
+  return can_id == kHostCanTxAllowedPrimaryId ||
          (can_id >= kHostCanTxAllowedRangeStart && can_id <= kHostCanTxAllowedRangeEnd);
+#endif
+}
+
+static bool __attribute__((unused)) is_valid_service_hil_payload(
+    uint32_t can_id, uint8_t dlc, const uint8_t* data) {
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+  if (dlc != 8 || data == nullptr) return false;
+  if (can_id == csm::board::control::kRemoteDriveCanId) {
+    if (data[0] != csm::board::control::kRemoteDriveHeader ||
+        data[5] != 0 || data[6] != 0 || data[7] != 0) return false;
+    const uint16_t speed = static_cast<uint16_t>(data[2]) |
+        (static_cast<uint16_t>(data[3]) << 8u);
+    if (data[1] == csm::board::control::kRemoteDriveStopMode) {
+      return speed == 0 && data[4] == 0;
+    }
+    return data[1] == csm::board::control::kRemoteDriveMode &&
+        speed > 0 && speed <= 1000 &&
+        (data[4] == csm::board::control::kRemoteDriveForward ||
+         data[4] == csm::board::control::kRemoteDriveReverse);
+  }
+  if (can_id == csm::board::control::kRemoteSteeringCanId) {
+    if (data[0] < csm::board::control::kRemoteSteeringMinimum ||
+        data[0] > csm::board::control::kRemoteSteeringMaximum) return false;
+    for (uint8_t i = 1; i < 8; ++i) {
+      if (data[i] != 0) return false;
+    }
+    return true;
+  }
+  return false;
+#else
+  (void)can_id;
+  (void)dlc;
+  (void)data;
+  return true;
+#endif
 }
 
 #if BOARD_ENABLE_MCP2515
@@ -4668,7 +4798,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   }
 
   const uint32_t can_id = extended ? (raw_can_id & 0x1FFFFFFF) : (raw_can_id & 0x7FF);
-  if (!is_allowed_host_can_id(can_id, extended)) {
+  if (!is_allowed_host_can_frame(can_id, extended, dlc)) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonIdNotAllowed, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
@@ -4676,8 +4806,26 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
+  if (!host_control_authority_allowed()) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonAuthorityDenied,
+                     bus, can_id_flags, dlc, host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, ControlReasonAuthorityDenied,
+                     host_can_tx_rejected_total);
+    return;
+  }
+
   uint8_t data[8] = {0};
   memcpy(data, &payload[11], dlc);
+  if (!is_valid_service_hil_payload(can_id, dlc, data)) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected,
+                     ControlReasonUnsupportedFrame, bus, can_id_flags, dlc,
+                     host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, ControlReasonUnsupportedFrame,
+                     host_can_tx_rejected_total);
+    return;
+  }
 
   uint8_t safety_reason = ControlReasonOk;
   if (!safety_supervisor.canAcceptTx(millis(), control_backend_ready_for_bus(bus), &safety_reason)) {
@@ -4817,10 +4965,18 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
       safety_supervisor.disarm(millis());
       break;
     case csm::HostControlArm:
-      reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
+      if (!host_control_authority_allowed()) {
+        reason = ControlReasonAuthorityDenied;
+      } else {
+        reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
+      }
       break;
     case csm::HostControlRenewLease:
-      reason = safety_supervisor.renewLease(millis(), lease_ms);
+      if (!host_control_authority_allowed()) {
+        reason = ControlReasonAuthorityDenied;
+      } else {
+        reason = safety_supervisor.renewLease(millis(), lease_ms);
+      }
       break;
     case csm::HostControlInstallNeutralProfile:
       reason = ControlReasonUnsupportedCommand;
@@ -5321,11 +5477,11 @@ void setup() {
       (BOARD_ENABLE_MDPS_BENCH_MAPPING != 0) &&
       (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
   remote_config.mapping = BOARD_ENABLE_MDPS_BENCH_MAPPING
-      ? csm::board::control::VehicleCommandMapping::MdpsBench0x007
+      ? csm::board::control::VehicleCommandMapping::VehicleBench0x005And0x007
       : csm::board::control::VehicleCommandMapping::None;
   remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
   remote_config.policy_id = 0x5243u;
-  remote_config.cycle_period_ms = 20;
+  remote_config.cycle_period_ms = 10;
   remote_config.frame_gap_ms = 2;
   remote_config.m4_heartbeat_timeout_ms = 100;
   remote_config.neutral_qualification_ms = 500;
@@ -5434,6 +5590,9 @@ void loop() {
   }
   service_uplink(1024);
   service_deferred_loss_events();
+#if BOARD_ENABLE_REMOTE_CONTROL
+  service_remote_control();
+#endif
   record_runtime_breadcrumb(RuntimeStageHostDownlink);
   service_host_downlink(256);
   record_runtime_breadcrumb(RuntimeStageIdle);

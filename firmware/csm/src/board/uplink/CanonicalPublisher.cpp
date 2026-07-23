@@ -15,6 +15,7 @@ void CanonicalPublisher::begin(uint64_t boot_session_id, IFrameSink* sink0,
   publish_seq_next_ = 0;
   counters_ = {};
   session_pending_ = true;
+  session_target_sink_mask_ = 0;
   session_reason_ = SessionAnnouncementReason::Boot;
 }
 
@@ -51,8 +52,11 @@ PublishServiceResult CanonicalPublisher::service(uint64_t now_us) {
   return result;
 }
 
-void CanonicalPublisher::requestSessionAnnouncement(SessionAnnouncementReason reason) {
+void CanonicalPublisher::requestSessionAnnouncement(SessionAnnouncementReason reason,
+                                                     uint8_t target_sink_mask) {
   session_pending_ = true;
+  session_target_sink_mask_ |=
+      target_sink_mask == 0 ? connectedSinkMask() : target_sink_mask;
   if (reason == SessionAnnouncementReason::SequenceWrap ||
       session_reason_ != SessionAnnouncementReason::SequenceWrap) {
     session_reason_ = reason;
@@ -96,9 +100,13 @@ PublishServiceResult CanonicalPublisher::publish(csm::RecordType type,
   frame.priority = priority;
   for (uint8_t i = 0; i < kMaxSinks; ++i) {
     if (sinks_[i] == nullptr || !sinks_[i]->enabled()) continue;
+    if (sinks_[i]->connected()) {
+      result.connected_sink_mask |= static_cast<uint8_t>(1u << i);
+    }
     const SinkOfferResult offered = sinks_[i]->offer(frame);
     if (offered == SinkOfferResult::Accepted) {
       result.sink_accept_count++;
+      result.sink_accept_mask |= static_cast<uint8_t>(1u << i);
       counters_.sink_accept_total[i]++;
     } else if (offered == SinkOfferResult::Overflow ||
                offered == SinkOfferResult::Invalid) {
@@ -116,6 +124,9 @@ PublishServiceResult CanonicalPublisher::publish(csm::RecordType type,
 }
 
 PublishServiceResult CanonicalPublisher::publishSession(uint64_t now_us) {
+  if (session_target_sink_mask_ == 0) {
+    session_target_sink_mask_ = connectedSinkMask();
+  }
   uint8_t payload[kStreamSessionPayloadLen] = {};
   payload[0] = csm::kStreamSessionSchema;
   payload[csm::kStreamSessionReasonOffset] = static_cast<uint8_t>(session_reason_);
@@ -128,10 +139,24 @@ PublishServiceResult CanonicalPublisher::publishSession(uint64_t now_us) {
   PublishServiceResult result =
       publish(csm::RecordType::StreamSession, payload, sizeof(payload),
               UplinkPriority::Critical, 0, true);
-  if (result.record_published) {
+  const uint8_t active_targets = static_cast<uint8_t>(
+      session_target_sink_mask_ & result.connected_sink_mask);
+  if (active_targets == 0 ||
+      (result.sink_accept_mask & active_targets) == active_targets) {
     session_pending_ = false;
+    session_target_sink_mask_ = 0;
   }
   return result;
+}
+
+uint8_t CanonicalPublisher::connectedSinkMask() const {
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < kMaxSinks; ++i) {
+    if (sinks_[i] != nullptr && sinks_[i]->enabled() && sinks_[i]->connected()) {
+      mask |= static_cast<uint8_t>(1u << i);
+    }
+  }
+  return mask;
 }
 
 }  // namespace csm::board::uplink

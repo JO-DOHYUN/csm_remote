@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -21,92 +22,116 @@ class FixedFrameByteQueue {
   struct ConsumeResult {
     uint32_t bytes = 0;
     uint32_t frames = 0;
+    uint32_t critical_frames = 0;
     uint64_t last_publish_seq = 0;
   };
 
   bool push(const PublishedFrameView& frame) {
+    const uint32_t tail = descriptor_tail_.load(std::memory_order_relaxed);
+    const uint32_t head = descriptor_head_.load(std::memory_order_acquire);
+    const uint32_t byte_tail = producer_byte_tail_;
+    const uint32_t byte_head = byte_head_.load(std::memory_order_acquire);
     if (frame.bytes == nullptr || frame.length == 0 ||
-        frame.length > ByteCapacity || count_ >= RecordCapacity ||
-        frame.length > availableBytes()) {
+        frame.length > ByteCapacity || tail - head >= RecordCapacity ||
+        frame.length > ByteCapacity - (byte_tail - byte_head)) {
       return false;
     }
-    Descriptor& descriptor = descriptors_[tail_];
+    Descriptor& descriptor = descriptors_[tail % RecordCapacity];
     descriptor.length = frame.length;
     descriptor.offset = 0;
     descriptor.publish_seq = frame.publish_seq;
     descriptor.type = frame.type;
     descriptor.priority = frame.priority;
-    copyIntoRing(frame.bytes, frame.length);
-    tail_ = static_cast<uint16_t>((tail_ + 1u) % RecordCapacity);
-    count_++;
-    queued_bytes_ += frame.length;
-    if (count_ > high_water_records_) high_water_records_ = count_;
-    if (queued_bytes_ > high_water_bytes_) high_water_bytes_ = queued_bytes_;
+    descriptor.byte_end = byte_tail + frame.length;
+    copyIntoRing(frame.bytes, frame.length, byte_tail);
+    producer_byte_tail_ = byte_tail + frame.length;
+    descriptor_tail_.store(tail + 1u, std::memory_order_release);
+    byte_tail_.store(producer_byte_tail_, std::memory_order_release);
+    const uint32_t count = tail + 1u - head;
+    const uint32_t queued_bytes = byte_tail + frame.length - byte_head;
+    if (count > high_water_records_) {
+      high_water_records_ = static_cast<uint16_t>(count);
+    }
+    if (queued_bytes > high_water_bytes_) high_water_bytes_ = queued_bytes;
     return true;
   }
 
   uint16_t copyFrontBytes(uint8_t* destination, uint16_t capacity) const {
-    if (destination == nullptr || capacity == 0 || queued_bytes_ == 0) return 0;
+    const uint32_t descriptor_head = descriptor_head_.load(std::memory_order_relaxed);
+    const uint32_t descriptor_tail = descriptor_tail_.load(std::memory_order_acquire);
+    if (destination == nullptr || capacity == 0 ||
+        descriptor_head == descriptor_tail) return 0;
+    const uint32_t byte_head = byte_head_.load(std::memory_order_relaxed);
+    const uint32_t committed_byte_tail =
+        descriptors_[(descriptor_tail - 1u) % RecordCapacity].byte_end;
+    const uint32_t queued_bytes = committed_byte_tail - byte_head;
     const uint32_t requested =
-        queued_bytes_ < capacity ? queued_bytes_ : static_cast<uint32_t>(capacity);
+        queued_bytes < capacity ? queued_bytes : static_cast<uint32_t>(capacity);
+    const uint32_t ring_head = byte_head % ByteCapacity;
     const uint32_t first =
-        requested < ByteCapacity - byte_head_ ? requested : ByteCapacity - byte_head_;
-    memcpy(destination, &bytes_[byte_head_], first);
+        requested < ByteCapacity - ring_head ? requested : ByteCapacity - ring_head;
+    memcpy(destination, &bytes_[ring_head], first);
     if (requested > first) memcpy(&destination[first], bytes_, requested - first);
     return static_cast<uint16_t>(requested);
   }
 
   ConsumeResult consumeMany(uint32_t bytes) {
     ConsumeResult result;
-    while (bytes > 0 && count_ > 0) {
-      Descriptor& descriptor = descriptors_[head_];
+    uint32_t head = descriptor_head_.load(std::memory_order_relaxed);
+    uint32_t byte_head = byte_head_.load(std::memory_order_relaxed);
+    const uint32_t tail = descriptor_tail_.load(std::memory_order_acquire);
+    while (bytes > 0 && head != tail) {
+      Descriptor& descriptor = descriptors_[head % RecordCapacity];
       const uint16_t remaining =
           static_cast<uint16_t>(descriptor.length - descriptor.offset);
       const uint16_t amount =
           bytes < remaining ? static_cast<uint16_t>(bytes) : remaining;
       descriptor.offset = static_cast<uint16_t>(descriptor.offset + amount);
-      byte_head_ = (byte_head_ + amount) % ByteCapacity;
-      queued_bytes_ -= amount;
+      byte_head += amount;
       result.bytes += amount;
       bytes -= amount;
       if (descriptor.offset == descriptor.length) {
         result.frames++;
+        if (descriptor.priority == UplinkPriority::Critical) {
+          result.critical_frames++;
+        }
         result.last_publish_seq = descriptor.publish_seq;
         descriptor = {};
-        head_ = static_cast<uint16_t>((head_ + 1u) % RecordCapacity);
-        count_--;
+        head++;
+        descriptor_head_.store(head, std::memory_order_release);
       }
     }
-    if (count_ == 0) {
-      head_ = 0;
-      tail_ = 0;
-      byte_head_ = 0;
-      byte_tail_ = 0;
-      queued_bytes_ = 0;
-    }
+    byte_head_.store(byte_head, std::memory_order_release);
     return result;
   }
 
   uint32_t clear() {
-    const uint32_t cleared = queued_bytes_;
-    while (count_ > 0) {
-      descriptors_[head_] = {};
-      head_ = static_cast<uint16_t>((head_ + 1u) % RecordCapacity);
-      count_--;
+    uint32_t head = descriptor_head_.load(std::memory_order_relaxed);
+    const uint32_t tail = descriptor_tail_.load(std::memory_order_acquire);
+    const uint32_t byte_head = byte_head_.load(std::memory_order_relaxed);
+    const uint32_t byte_tail = byte_tail_.load(std::memory_order_relaxed);
+    while (head != tail) {
+      descriptors_[head % RecordCapacity] = {};
+      head++;
     }
-    head_ = 0;
-    tail_ = 0;
-    byte_head_ = 0;
-    byte_tail_ = 0;
-    queued_bytes_ = 0;
-    return cleared;
+    descriptor_head_.store(tail, std::memory_order_release);
+    byte_head_.store(byte_tail, std::memory_order_release);
+    return byte_tail - byte_head;
   }
 
-  bool empty() const { return count_ == 0; }
-  bool full() const { return count_ >= RecordCapacity || queued_bytes_ >= ByteCapacity; }
-  uint16_t count() const { return count_; }
-  uint32_t queuedBytes() const { return queued_bytes_; }
-  uint32_t availableBytes() const { return ByteCapacity - queued_bytes_; }
+  bool empty() const { return count() == 0; }
+  bool full() const {
+    return count() >= RecordCapacity || queuedBytes() >= ByteCapacity;
+  }
+  uint16_t count() const {
+    return static_cast<uint16_t>(descriptor_tail_.load(std::memory_order_acquire) -
+                                 descriptor_head_.load(std::memory_order_acquire));
+  }
+  uint32_t queuedBytes() const {
+    return byte_tail_.load(std::memory_order_acquire) -
+           byte_head_.load(std::memory_order_acquire);
+  }
+  uint32_t availableBytes() const { return ByteCapacity - queuedBytes(); }
   uint16_t highWaterRecords() const { return high_water_records_; }
   uint32_t highWaterBytes() const { return high_water_bytes_; }
 
@@ -117,25 +142,26 @@ class FixedFrameByteQueue {
     uint64_t publish_seq = 0;
     csm::RecordType type = static_cast<csm::RecordType>(0);
     UplinkPriority priority = UplinkPriority::Normal;
+    uint32_t byte_end = 0;
   };
 
   Descriptor descriptors_[RecordCapacity] = {};
   uint8_t bytes_[ByteCapacity] = {};
-  uint16_t head_ = 0;
-  uint16_t tail_ = 0;
-  uint16_t count_ = 0;
+  std::atomic<uint32_t> descriptor_head_{0};
+  std::atomic<uint32_t> descriptor_tail_{0};
   uint16_t high_water_records_ = 0;
-  uint32_t byte_head_ = 0;
-  uint32_t byte_tail_ = 0;
-  uint32_t queued_bytes_ = 0;
+  std::atomic<uint32_t> byte_head_{0};
+  std::atomic<uint32_t> byte_tail_{0};
+  uint32_t producer_byte_tail_ = 0;
   uint32_t high_water_bytes_ = 0;
 
-  void copyIntoRing(const uint8_t* source, uint16_t length) {
+  void copyIntoRing(const uint8_t* source, uint16_t length,
+                    uint32_t monotonic_tail) {
+    const uint32_t ring_tail = monotonic_tail % ByteCapacity;
     const uint32_t first =
-        length < ByteCapacity - byte_tail_ ? length : ByteCapacity - byte_tail_;
-    memcpy(&bytes_[byte_tail_], source, first);
+        length < ByteCapacity - ring_tail ? length : ByteCapacity - ring_tail;
+    memcpy(&bytes_[ring_tail], source, first);
     if (length > first) memcpy(bytes_, &source[first], length - first);
-    byte_tail_ = (byte_tail_ + length) % ByteCapacity;
   }
 };
 

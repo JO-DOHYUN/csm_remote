@@ -41,8 +41,8 @@ struct WifiMailboxQueueSnapshot {
   uint32_t queued_bytes = 0;
   uint32_t high_water_bytes = 0;
   uint32_t first_queued_ms = 0;
-  uint8_t queued_records = 0;
-  uint8_t high_water_records = 0;
+  uint16_t queued_records = 0;
+  uint16_t high_water_records = 0;
   bool urgent = false;
 };
 
@@ -92,14 +92,15 @@ class WifiWorkerMailbox {
   using Queue = TxQueue;
 
   Queue queue_;
-  mutable std::atomic_flag queue_lock_ = ATOMIC_FLAG_INIT;
+  std::atomic<bool> producer_active_{false};
+  std::atomic<bool> abort_in_progress_{false};
   std::atomic<uint32_t> queue_generation_{0};
   std::atomic<uint32_t> queued_bytes_{0};
   std::atomic<uint32_t> queue_high_water_bytes_{0};
   std::atomic<uint32_t> first_queued_ms_{0};
   std::atomic<uint32_t> queued_records_{0};
   std::atomic<uint32_t> queue_high_water_records_{0};
-  std::atomic<bool> urgent_{false};
+  std::atomic<uint32_t> urgent_records_{0};
   std::atomic<uint32_t> abort_request_sequence_{0};
   std::atomic<uint32_t> disconnect_request_sequence_{0};
 
@@ -121,7 +122,7 @@ class WifiWorkerMailbox {
   mutable std::atomic_flag state_lock_ = ATOMIC_FLAG_INIT;
   WifiWorkerStateSnapshot state_;
 
-  void updateQueueSnapshotLocked();
+  void updateQueueSnapshot();
 };
 
 }  // namespace csm::board::uplink

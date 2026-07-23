@@ -21,6 +21,7 @@ $sources = @(
   (Join-Path $project "src\board\uplink\CanonicalPublisher.cpp"),
   (Join-Path $project "src\board\uplink\CanRxSegmentBuilder.cpp"),
   (Join-Path $project "src\board\uplink\RecordAdmission.cpp")
+  (Join-Path $project "src\board\uplink\WifiWorkerMailbox.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /I`"$include`" $quotedSources /Fe:`"$output`""

@@ -35,6 +35,7 @@ enum ControlAckReason : uint8_t {
   ControlReasonNeutralProfileMissing = 22,
   ControlReasonRateLimited = 23,
   ControlReasonUnsupportedCommand = 24,
+  ControlReasonAuthorityDenied = 25,
 };
 
 static constexpr uint8_t kNoFixedControlBus = 0xFF;
@@ -278,6 +279,8 @@ static constexpr uint16_t kBoardEventWifiTxBackpressureCode = 40;
 static constexpr uint16_t kBoardEventRuntimeBreadcrumbRecoveredCode = 41;
 static constexpr uint16_t kBoardEventRemoteControlInitFailedCode = 42;
 static constexpr uint16_t kBoardEventRemoteControlStateChangedCode = 43;
+static constexpr uint16_t kBoardEventWifiQueuePressureIsolatedCode = 44;
+static constexpr uint16_t kBoardEventWifiClientClosedCode = 45;
 static constexpr uint16_t kBoardHealthPayloadLen = 52;
 static constexpr uint16_t kBoardHealthV1PayloadLen = 52;
 static constexpr uint16_t kBoardHealthV2PayloadLen = 128;

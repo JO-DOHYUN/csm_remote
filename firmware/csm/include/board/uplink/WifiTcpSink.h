@@ -63,6 +63,7 @@ struct WifiTcpSinkCounters {
   uint32_t disconnect_total = 0;
   uint32_t extra_client_reject_total = 0;
   uint32_t stall_close_total = 0;
+  uint32_t queue_pressure_close_total = 0;
   uint32_t socket_error_total = 0;
   uint32_t send_budget_overrun_total = 0;
   uint32_t send_call_max_us = 0;
@@ -102,6 +103,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   bool hasPendingFrames() const {
     return mailbox_.queueSnapshot().queued_records != 0;
   }
+  bool sessionAnchorQueued() const { return session_anchor_queued_; }
   bool backpressureActive() const { return backpressure_active_; }
   uint32_t queuedBytes() const { return mailbox_.queueSnapshot().queued_bytes; }
   const WifiTcpSinkCounters& counters() const { return counters_; }
@@ -109,6 +111,9 @@ class WifiTcpSink final : public IFrameSink, public Stream {
     return mailbox_.callSnapshot();
   }
   WifiWorkerStateSnapshot workerStateSnapshot() const { return worker_state_; }
+  WifiCloseReason lastCloseReason() const {
+    return worker_state_.last_close_reason;
+  }
   uint32_t workerHeartbeatAgeMs(uint32_t now_ms) const;
 
  private:
@@ -129,6 +134,8 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t service_reported_bytes_sent_total_ = 0;
   uint32_t service_reported_frames_sent_total_ = 0;
   uint32_t service_reported_stall_event_sequence_ = 0;
+  uint32_t service_reported_queue_pressure_close_total_ = 0;
+  bool session_anchor_queued_ = false;
 
   void syncWorkerState(const WifiWorkerStateSnapshot& state,
                        SinkServiceResult& result);

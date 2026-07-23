@@ -62,10 +62,14 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   limiter.steer_max_permille = 1000;
   limiter.brake_min_permille = 0;
   limiter.brake_max_permille = 1000;
-  limiter.throttle_rise_step_permille = 50;
-  limiter.throttle_fall_step_permille = 200;
-  limiter.steer_step_permille = config.steering_step_permille;
-  limiter.steer_return_step_permille = config.steering_return_step_permille;
+  limiter.throttle_rise_step_permille = static_cast<uint16_t>(
+      50u * config.cycle_period_ms / 20u);
+  limiter.throttle_fall_step_permille = static_cast<uint16_t>(
+      200u * config.cycle_period_ms / 20u);
+  limiter.steer_step_permille = static_cast<uint16_t>(
+      config.steering_step_permille * config.cycle_period_ms / 20u);
+  limiter.steer_return_step_permille = static_cast<uint16_t>(
+      config.steering_return_step_permille * config.cycle_period_ms / 20u);
   if (!command_limiter_.configure(limiter)) return false;
 
   VehicleCommandProfile mapper;
@@ -84,9 +88,10 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   gateway.build_profile_allows_local_tx = config.local_can_tx_enabled;
   gateway.bus = config.bus;
   gateway.policy_id = config.policy_id;
-  if (config.mapping == VehicleCommandMapping::MdpsBench0x007) {
-    gateway.allowlist_count = 1;
-    gateway.allowlist_ids[0] = kRemoteSteeringCanId;
+  if (config.mapping == VehicleCommandMapping::VehicleBench0x005And0x007) {
+    gateway.allowlist_count = 2;
+    gateway.allowlist_ids[0] = kRemoteDriveCanId;
+    gateway.allowlist_ids[1] = kRemoteSteeringCanId;
   }
   if (!can_tx_gateway_.configure(gateway)) return false;
 
@@ -279,10 +284,8 @@ void RemoteControlRuntime::beginCycle(
 
   ++cycle_sequence_;
   if (require_silent_cycle_) {
-    // Startup, link loss, deadline loss, and any gate transition default to one
-    // complete silent cycle. No synthetic "accepted" neutral frame exists;
-    // every transmitted frame must originate from an authorized source below.
     require_silent_cycle_ = false;
+    scheduleSafetyStop(inputs);
     return;
   }
   if (status_.remote_valid && status_.handoff_qualified) {
@@ -311,19 +314,21 @@ void RemoteControlRuntime::beginCycle(
     status_.authority_state = authority_manager_.state();
     status_.active_source = authority_manager_.activeSource();
     if (result.accepted) {
-      pending_frame_count_ = result.frame_count;
+      pending_frame_count_ = 0;
       pending_frame_index_ = 0;
       for (uint8_t i = 0; i < result.frame_count; ++i) {
-        pending_frames_[i] = result.frames[i];
+        const uint32_t can_id = result.frames[i].can_id_flags & 0x7FFu;
+        if (can_id == kRemoteSteeringCanId && (cycle_sequence_ & 1u) != 0u) {
+          continue;
+        }
+        pending_frames_[pending_frame_count_++] = result.frames[i];
       }
       next_frame_ms_ = now_ms;
       ++status_.control_cycles;
       return;
     }
   }
-  // Authority rejection or an unusable source is silence. A neutral-valued
-  // frame may still be sent when it is a real remote command accepted through
-  // AuthorityManager, the limiter, mapper, and CanTxGateway above.
+  scheduleSafetyStop(inputs);
 }
 
 bool RemoteControlRuntime::scheduleMappedFrames(
@@ -345,6 +350,27 @@ bool RemoteControlRuntime::scheduleMappedFrames(
     pending_frames_[i] = mapped.frames[i];
   }
   next_frame_ms_ = 0;
+  return true;
+}
+
+bool RemoteControlRuntime::scheduleSafetyStop(
+    const RemoteControlRuntimeInputs& inputs) {
+  if (inputs.local_tx_inhibit_latched ||
+      inputs.autonomy_state != authority::AutonomyAuthorityState::InactiveConfirmed) {
+    return false;
+  }
+  const VehicleCommandMapResult mapped =
+      vehicle_mapper_.mapSafetyStop(cycle_sequence_);
+  CanTxGatewayInputs gateway_inputs;
+  gateway_inputs.authority_decision.code = authority::ControlDecisionCode::Accepted;
+  gateway_inputs.authority_decision.source = authority::ControlSourceId::SafetyNeutral;
+  gateway_inputs.authority_decision.autonomy_state = inputs.autonomy_state;
+  gateway_inputs.local_tx_inhibit_latched = false;
+  gateway_inputs.safety_supervisor_allows = inputs.hard_safety_allows;
+  gateway_inputs.hardware_gate_allows = inputs.hardware_gate_allows;
+  gateway_inputs.backend_state = inputs.backend_state;
+  if (!scheduleMappedFrames(mapped, gateway_inputs)) return false;
+  ++status_.neutral_cycles;
   return true;
 }
 

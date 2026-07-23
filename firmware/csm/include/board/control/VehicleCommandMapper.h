@@ -8,8 +8,14 @@
 
 namespace csm::board::control {
 
-static constexpr uint8_t kVehicleCommandMapperMaxFrames = 1;
+static constexpr uint8_t kVehicleCommandMapperMaxFrames = 2;
+static constexpr uint32_t kRemoteDriveCanId = 0x005;
 static constexpr uint32_t kRemoteSteeringCanId = 0x007;
+static constexpr uint8_t kRemoteDriveHeader = 0xAA;
+static constexpr uint8_t kRemoteDriveMode = 0x52;
+static constexpr uint8_t kRemoteDriveStopMode = 0x02;
+static constexpr uint8_t kRemoteDriveForward = 0x50;
+static constexpr uint8_t kRemoteDriveReverse = 0x60;
 static constexpr uint8_t kRemoteSteeringMinimum = 10;
 static constexpr uint8_t kRemoteSteeringCenter = 130;
 static constexpr uint8_t kRemoteSteeringMaximum = 250;
@@ -18,7 +24,7 @@ static constexpr uint8_t kRemoteAuxiliaryPositive = 0x80;
 
 enum class VehicleCommandMapping : uint8_t {
   None = 0,
-  MdpsBench0x007 = 1,
+  VehicleBench0x005And0x007 = 1,
 };
 
 struct VehicleCommandProfile {
@@ -48,6 +54,7 @@ class VehicleCommandMapper {
   void clearProfile();
 
   VehicleCommandMapResult map(const OperatorCommand& command) const;
+  VehicleCommandMapResult mapSafetyStop(uint32_t command_seq) const;
 
   bool configured() const { return profile_.configured; }
 

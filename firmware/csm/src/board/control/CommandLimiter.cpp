@@ -83,11 +83,18 @@ CommandLimitResult CommandLimiter::evaluate(uint32_t now_ms,
   }
 
   if (has_last_accepted_command_) {
+    const bool throttle_reversing =
+        last_accepted_command_.throttle_permille != 0 &&
+        command.throttle_permille != 0 &&
+        ((last_accepted_command_.throttle_permille < 0) !=
+         (command.throttle_permille < 0));
+    const int16_t throttle_target =
+        throttle_reversing ? 0 : command.throttle_permille;
     result.command.throttle_permille = stepToward(
         last_accepted_command_.throttle_permille,
-        command.throttle_permille,
+        throttle_target,
         throttleStep(last_accepted_command_.throttle_permille,
-                     command.throttle_permille, config_));
+                     throttle_target, config_));
     result.command.steer_permille = stepToward(
         last_accepted_command_.steer_permille,
         command.steer_permille,

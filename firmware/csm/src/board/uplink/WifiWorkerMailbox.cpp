@@ -5,7 +5,6 @@
 namespace csm::board::uplink {
 
 WifiWorkerMailbox::WifiWorkerMailbox() {
-  queue_lock_.clear(std::memory_order_release);
   state_lock_.clear(std::memory_order_release);
 }
 
@@ -15,11 +14,13 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
       frame.length > csm::encoded_typed_frame_len(csm::kMaxPayloadLen)) {
     return WifiMailboxOfferResult::Invalid;
   }
-  if (queue_lock_.test_and_set(std::memory_order_acquire)) {
+  producer_active_.store(true, std::memory_order_release);
+  if (abort_in_progress_.load(std::memory_order_acquire)) {
+    producer_active_.store(false, std::memory_order_release);
     return WifiMailboxOfferResult::Busy;
   }
   WifiMailboxOfferResult result = WifiMailboxOfferResult::Accepted;
-  const uint8_t normal_limit = static_cast<uint8_t>(
+  const uint16_t normal_limit = static_cast<uint16_t>(
       BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
   const uint32_t normal_byte_limit =
       BOARD_WIFI_SINK_QUEUE_BYTES - BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES;
@@ -27,57 +28,61 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
       (queue_.count() >= normal_limit ||
        queue_.queuedBytes() + frame.length > normal_byte_limit)) {
     result = WifiMailboxOfferResult::Reserved;
-  } else if (!queue_.push(frame)) {
-    result = WifiMailboxOfferResult::Full;
   } else {
-    if (queue_.count() == 1) first_queued_ms_.store(now_ms, std::memory_order_relaxed);
-    if (frame.priority == UplinkPriority::Critical) {
-      urgent_.store(true, std::memory_order_relaxed);
+    const bool critical = frame.priority == UplinkPriority::Critical;
+    if (critical) {
+      urgent_records_.fetch_add(1, std::memory_order_release);
     }
-    updateQueueSnapshotLocked();
+    if (!queue_.push(frame)) {
+      if (critical) urgent_records_.fetch_sub(1, std::memory_order_acq_rel);
+      result = WifiMailboxOfferResult::Full;
+    } else {
+      if (queue_.count() == 1) {
+        first_queued_ms_.store(now_ms, std::memory_order_relaxed);
+      }
+      updateQueueSnapshot();
+    }
   }
-  queue_lock_.clear(std::memory_order_release);
+  producer_active_.store(false, std::memory_order_release);
   return result;
 }
 
 bool WifiWorkerMailbox::tryStageTx(uint8_t* destination, uint16_t capacity,
                                    WifiMailboxTxLease& lease) {
   if (destination == nullptr || capacity == 0 ||
-      queue_lock_.test_and_set(std::memory_order_acquire)) {
-    return false;
-  }
+      abort_in_progress_.load(std::memory_order_acquire)) return false;
   lease.generation = queue_generation_.load(std::memory_order_relaxed);
   lease.length = queue_.copyFrontBytes(destination, capacity);
-  queue_lock_.clear(std::memory_order_release);
   return lease.length > 0;
 }
 
 bool WifiWorkerMailbox::tryConsumeTx(
     const WifiMailboxTxLease& lease, uint16_t bytes,
     TxConsumeResult& result, bool& stale_generation) {
-  if (queue_lock_.test_and_set(std::memory_order_acquire)) return false;
   stale_generation = lease.generation != queue_generation_.load(std::memory_order_relaxed);
   if (!stale_generation) {
     const uint16_t applied = bytes > lease.length ? lease.length : bytes;
     result = queue_.consumeMany(applied);
+    if (result.critical_frames > 0) {
+      urgent_records_.fetch_sub(result.critical_frames, std::memory_order_acq_rel);
+    }
     if (queue_.empty()) {
       first_queued_ms_.store(0, std::memory_order_relaxed);
-      urgent_.store(false, std::memory_order_relaxed);
     }
-    updateQueueSnapshotLocked();
+    updateQueueSnapshot();
   }
-  queue_lock_.clear(std::memory_order_release);
   return true;
 }
 
 bool WifiWorkerMailbox::tryApplyAbort(uint32_t& aborted_bytes) {
-  if (queue_lock_.test_and_set(std::memory_order_acquire)) return false;
+  abort_in_progress_.store(true, std::memory_order_release);
+  if (producer_active_.load(std::memory_order_acquire)) return false;
   aborted_bytes = queue_.clear();
   queue_generation_.fetch_add(1, std::memory_order_relaxed);
   first_queued_ms_.store(0, std::memory_order_relaxed);
-  urgent_.store(false, std::memory_order_relaxed);
-  updateQueueSnapshotLocked();
-  queue_lock_.clear(std::memory_order_release);
+  urgent_records_.store(0, std::memory_order_release);
+  updateQueueSnapshot();
+  abort_in_progress_.store(false, std::memory_order_release);
   return true;
 }
 
@@ -103,11 +108,11 @@ WifiMailboxQueueSnapshot WifiWorkerMailbox::queueSnapshot() const {
   snapshot.queued_bytes = queued_bytes_.load(std::memory_order_acquire);
   snapshot.high_water_bytes = queue_high_water_bytes_.load(std::memory_order_acquire);
   snapshot.first_queued_ms = first_queued_ms_.load(std::memory_order_acquire);
-  snapshot.queued_records = static_cast<uint8_t>(
+  snapshot.queued_records = static_cast<uint16_t>(
       queued_records_.load(std::memory_order_acquire));
-  snapshot.high_water_records = static_cast<uint8_t>(
+  snapshot.high_water_records = static_cast<uint16_t>(
       queue_high_water_records_.load(std::memory_order_acquire));
-  snapshot.urgent = urgent_.load(std::memory_order_acquire);
+  snapshot.urgent = urgent_records_.load(std::memory_order_acquire) != 0;
   return snapshot;
 }
 
@@ -207,7 +212,7 @@ bool WifiWorkerMailbox::tryReadState(WifiWorkerStateSnapshot& state) const {
   return true;
 }
 
-void WifiWorkerMailbox::updateQueueSnapshotLocked() {
+void WifiWorkerMailbox::updateQueueSnapshot() {
   queued_bytes_.store(queue_.queuedBytes(), std::memory_order_release);
   queued_records_.store(queue_.count(), std::memory_order_release);
   queue_high_water_bytes_.store(queue_.highWaterBytes(), std::memory_order_release);

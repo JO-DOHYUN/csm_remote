@@ -22,6 +22,14 @@
 #define BOARD_WIFI_ACCEPT_POLL_MS 25
 #endif
 
+#ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
+#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 75
+#endif
+
+static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
+                  BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT < 100,
+              "Wi-Fi isolation high-water percent must be in (0, 100)");
+
 namespace csm::board::uplink {
 
 enum class WifiRuntimeMode : uint8_t {
@@ -64,6 +72,7 @@ struct WifiTcpSinkConfig {
   uint32_t call_stall_timeout_ms = BOARD_WIFI_CALL_STALL_TIMEOUT_MS;
   uint32_t batch_max_latency_ms = BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS;
   uint8_t batch_min_records = BOARD_WIFI_TX_BATCH_MIN_RECORDS;
+  uint8_t isolate_high_water_percent = BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT;
   // Diagnostic profiles make one observable startup attempt by default. A
   // larger value permits only that many bounded retries; zero is invalid.
   uint8_t startup_attempt_limit = 1;
@@ -96,6 +105,7 @@ enum class WifiCloseReason : uint8_t {
   ReceiveOverflow = 3,
   TransmitNoProgress = 4,
   IsolationRequest = 5,
+  QueuePressure = 6,
 };
 
 struct WifiTxProgressObservation {
@@ -105,9 +115,9 @@ struct WifiTxProgressObservation {
   uint32_t duration_ms = 0;
 };
 
-// Queue occupancy is deliberately absent from this contract. Queue pressure is
-// sink-local loss evidence; only continuous socket no-progress may close an
-// otherwise valid client.
+// Socket no-progress is tracked independently from queue pressure. The worker
+// may isolate a client before the bounded SPSC queue reaches Full; neither
+// condition is allowed to block the main/RC/CAN producer.
 class WifiTxProgressTracker {
  public:
   WifiTxProgressObservation observe(uint32_t now_ms, bool progressed,
@@ -178,6 +188,7 @@ struct WifiWorkerCounters {
   uint32_t disconnect_total = 0;
   uint32_t extra_client_reject_total = 0;
   uint32_t stall_close_total = 0;
+  uint32_t queue_pressure_close_total = 0;
   uint32_t socket_error_total = 0;
   uint32_t send_budget_overrun_total = 0;
   uint32_t send_call_max_us = 0;

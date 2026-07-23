@@ -153,16 +153,21 @@ start on separate 32-byte cache-line boundaries. Each writer cleans only its own
 channel so stale M7 cache lines cannot overwrite a concurrent M4 sample. M4 owns
 UART/CRSF parsing and normalization only;
 M7 owns authority, safety, limiting, vehicle mapping, CAN write, and matching
-`CAN_TX_RAW` evidence. For the current RC bench contract, CH4 is steering and
+`CAN_TX_RAW` evidence. For the current RC bench contract, CH2 is drive, CH4 is steering and
 CH5 is the auxiliary three-position switch. CH4 `-1000/0/+1000` maps to standard
 CAN ID `0x007`, DLC 8, byte 0 decimal `10/130/250`; bytes 1..6 are zero. CH5 is
 quantized to `-1000/0/+1000`: negative writes byte 7 `0x01`, positive writes
 byte 7 `0x80`, and neutral writes `0x00`. A non-neutral CH5 overrides other RC
-motion targets to neutral. Steering has a small center deadband and is slew
-limited; the single frame remains periodic at 20 ms. A repeated or frozen
+motion targets to neutral. CH2 positive is forward and negative is reverse. After a 2% deadband,
+its absolute magnitude maps linearly to speed `0..1000` in standard ID `0x005`, DLC8:
+`AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
+Neutral, unqualified RC, and RC failsafe use only `AA 02 00 00 00 00 00 00` when
+upstream autonomy is explicitly released and the hardware/safety gate allows TX.
+Drive is periodic at 10 ms; steering is periodic at 20 ms. Both pass the limiter,
+and a direction reversal reaches zero before applying the opposite direction. A repeated or frozen
 mailbox sequence cannot refresh source freshness.
 
-Remote authority order is `hard safety > RC remote > upstream autonomy >
+Remote authority order is `hard safety > upstream autonomy > RC remote >
 service host > monitoring`. RC presence reserves the authority boundary before
 neutral qualification. Loss immediately produces the periodic neutral command;
 only a stable non-malformed release interval may expose a lower-priority source.
@@ -307,9 +312,11 @@ Current board host TX policy:
   MCP2515/TJA1050 and `bus=1` Mid Carrier J4/U2.
 - Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
 - Extended and RTR frames are rejected in this baseline.
-- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` additionally allows
-  standard IDs `0x100` and `0x200`, DLC 1, for the temporary Android joystick
-  bench only. This exception is not part of the observer or production allowlist.
+- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses an exact
+  bench allowlist: standard `0x005` DLC8 drive payload and standard `0x007` DLC8
+  steering payload described above. ID, DLC, fixed bytes, speed range, direction,
+  and zero tail are all validated before authority/safety admission. The removed
+  `0x100/0x200` adapter is not accepted.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
@@ -323,10 +330,31 @@ Current board host TX policy:
   stall handling clears only
   that sink's queued copies and advances its connection epoch; it never clears
   source truth or another sink.
-- Queue occupancy is not a disconnect reason. Remote Product uses a 48 KiB byte
-  pool plus 252 frame descriptors, with 2 KiB plus four descriptors reserved for
-  critical evidence. A client closes only after 5 s continuous TX no-progress,
-  peer close, a non-`WOULD_BLOCK` socket error, RX overflow, or explicit isolation.
+- A Service/HIL Wi-Fi sink receives `STREAM_SESSION` at its connection epoch.
+  The announcement remains pending for that sink until its queue accepts it; it
+  is not periodically inserted ahead of already queued canonical records. CAN RX
+  uses the existing bounded 20 ms/15-frame segment builder. These are
+  identity/throughput controls; Android health/remote freshness thresholds are
+  not relaxed.
+- Remote Product uses a 48 KiB byte pool plus 512 frame descriptors, with 2 KiB
+  plus four descriptors reserved for critical evidence. The worker isolates a
+  client at 75% byte or descriptor occupancy before Full, or after 2.5 s continuous
+  TX no-progress. Peer close, non-`WOULD_BLOCK` socket error, RX overflow, and
+  explicit isolation also close only that sink. Reconnect starts a new epoch and
+  reports the loss boundary; source truth and RC/CAN execution are unaffected.
+- Every Wi-Fi client close is retained until an uplink sink accepts
+  `BOARD_EVENT` code `45`. `detail` is `WifiCloseReason` (`1 peer`, `2 socket`,
+  `3 RX overflow`, `4 TX no-progress`, `5 isolation`, `6 queue pressure`) and
+  `counter` is the cumulative disconnect count. This event, not a host EOF
+  message, is the authoritative close boundary.
+- The TX mailbox is single-producer/single-consumer. The main publisher owns
+  producer indices and the socket worker owns consumer indices; neither normal
+  enqueue nor drain takes a shared queue lock. Abort ownership remains with the
+  worker and uses a nonblocking producer gate. Reserved-capacity rejection or an
+  actual full queue remains explicit sink-miss evidence; main/RC/CAN never waits.
+  The 512-descriptor count is aligned to the measured ~95 B/record mix, so the
+  descriptor and byte thresholds both represent about 2.5 s of stalled drain;
+  neither dimension is allowed to become an accidental earlier timeout.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 

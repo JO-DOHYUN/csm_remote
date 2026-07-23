@@ -213,7 +213,7 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   control::VehicleCommandProfile vehicle_profile;
   vehicle_profile.configured = true;
   vehicle_profile.output_enabled = true;
-  vehicle_profile.mapping = control::VehicleCommandMapping::MdpsBench0x007;
+  vehicle_profile.mapping = control::VehicleCommandMapping::VehicleBench0x005And0x007;
   vehicle_profile.bus = 1;
   vehicle_profile.policy_id = 0x5243;
   vehicle_profile.throttle_limit_permille = 1000;
@@ -226,8 +226,9 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   gateway_policy.build_profile_allows_local_tx = true;
   gateway_policy.bus = 1;
   gateway_policy.policy_id = 0x5243;
-  gateway_policy.allowlist_count = 1;
-  gateway_policy.allowlist_ids[0] = control::kRemoteSteeringCanId;
+  gateway_policy.allowlist_count = 2;
+  gateway_policy.allowlist_ids[0] = control::kRemoteDriveCanId;
+  gateway_policy.allowlist_ids[1] = control::kRemoteSteeringCanId;
   CHECK(gateway.configure(gateway_policy));
 
   remote::RemoteControlSourceConfig source_config;
@@ -273,11 +274,17 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   CHECK(result.command.steer_permille == -1000);
   CHECK(result.authority_decision.source == authority::ControlSourceId::Remote);
   CHECK(result.command.auxiliary_permille == 0);
-  CHECK(result.frame_count == 1);
-  CHECK(result.frames[0].can_id_flags == control::kRemoteSteeringCanId);
-  CHECK(result.frames[0].data[0] == control::kRemoteSteeringMinimum);
+  CHECK(result.frame_count == 2);
+  CHECK(result.frames[0].can_id_flags == control::kRemoteDriveCanId);
+  CHECK(result.frames[0].data[0] == control::kRemoteDriveHeader);
+  CHECK(result.frames[0].data[1] == control::kRemoteDriveMode);
+  CHECK(result.frames[0].data[2] == 0xE8);
+  CHECK(result.frames[0].data[3] == 0x03);
+  CHECK(result.frames[0].data[4] == control::kRemoteDriveForward);
+  CHECK(result.frames[1].can_id_flags == control::kRemoteSteeringCanId);
+  CHECK(result.frames[1].data[0] == control::kRemoteSteeringMinimum);
   for (uint8_t index = 1; index < 8; ++index) {
-    CHECK(result.frames[0].data[index] == 0);
+    CHECK(result.frames[1].data[index] == 0);
   }
 
   inputs.output_sequence = 8;
@@ -285,7 +292,7 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   auto deadband = orchestrator.tick(40, inputs, deps);
   CHECK(deadband.accepted);
   CHECK(deadband.command.steer_permille == 0);
-  CHECK(deadband.frames[0].data[0] == control::kRemoteSteeringCenter);
+  CHECK(deadband.frames[1].data[0] == control::kRemoteSteeringCenter);
 
   inputs.output_sequence = 9;
   inputs.mailbox_snapshot.sample.ch[3] = 1000;
@@ -295,10 +302,11 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   CHECK(auxiliary_negative.command.throttle_permille == 0);
   CHECK(auxiliary_negative.command.steer_permille == 0);
   CHECK(auxiliary_negative.command.auxiliary_permille == -1000);
+  CHECK(auxiliary_negative.frames[0].data[1] == control::kRemoteDriveStopMode);
   for (uint8_t index = 0; index < 7; ++index) {
-    CHECK(auxiliary_negative.frames[0].data[index] == 0);
+    CHECK(auxiliary_negative.frames[1].data[index] == 0);
   }
-  CHECK(auxiliary_negative.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
+  CHECK(auxiliary_negative.frames[1].data[7] == control::kRemoteAuxiliaryNegative);
 
   inputs.output_sequence = 10;
   inputs.mailbox_snapshot.sample.ch[4] = 1000;
@@ -306,47 +314,47 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   CHECK(auxiliary_positive.accepted);
   CHECK(auxiliary_positive.command.auxiliary_permille == 1000);
   for (uint8_t index = 0; index < 7; ++index) {
-    CHECK(auxiliary_positive.frames[0].data[index] == 0);
+    CHECK(auxiliary_positive.frames[1].data[index] == 0);
   }
-  CHECK(auxiliary_positive.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
+  CHECK(auxiliary_positive.frames[1].data[7] == control::kRemoteAuxiliaryPositive);
 
   inputs.output_sequence = 11;
   inputs.mailbox_snapshot.sample.ch[4] = 0;
   auto steering_positive = orchestrator.tick(100, inputs, deps);
   CHECK(steering_positive.accepted);
-  CHECK(steering_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
-  CHECK(steering_positive.frames[0].data[7] == 0);
+  CHECK(steering_positive.frames[1].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(steering_positive.frames[1].data[7] == 0);
 
   inputs.output_sequence = 12;
   inputs.mailbox_snapshot.sample.ch[9] = 1000;
   auto steering_overlay_positive = orchestrator.tick(120, inputs, deps);
   CHECK(steering_overlay_positive.accepted);
-  CHECK(steering_overlay_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
-  CHECK(steering_overlay_positive.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
+  CHECK(steering_overlay_positive.frames[1].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(steering_overlay_positive.frames[1].data[7] == control::kRemoteAuxiliaryPositive);
 
   inputs.output_sequence = 13;
   inputs.mailbox_snapshot.sample.ch[9] = -1000;
   auto steering_overlay_negative = orchestrator.tick(140, inputs, deps);
   CHECK(steering_overlay_negative.accepted);
-  CHECK(steering_overlay_negative.frames[0].data[0] == control::kRemoteSteeringMaximum);
-  CHECK(steering_overlay_negative.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
+  CHECK(steering_overlay_negative.frames[1].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(steering_overlay_negative.frames[1].data[7] == control::kRemoteAuxiliaryNegative);
 
   inputs.output_sequence = 14;
   inputs.mailbox_snapshot.sample.ch[9] = 1000;
   inputs.mailbox_snapshot.sample.ch[10] = 1000;
   auto momentary_overlay_positive = orchestrator.tick(160, inputs, deps);
   CHECK(momentary_overlay_positive.accepted);
-  CHECK(momentary_overlay_positive.frames[0].data[0] == control::kRemoteSteeringMaximum);
-  CHECK(momentary_overlay_positive.frames[0].data[7] == control::kRemoteAuxiliaryNegative);
+  CHECK(momentary_overlay_positive.frames[1].data[0] == control::kRemoteSteeringMaximum);
+  CHECK(momentary_overlay_positive.frames[1].data[7] == control::kRemoteAuxiliaryNegative);
 
   inputs.output_sequence = 15;
   inputs.mailbox_snapshot.sample.ch[4] = 1000;
   auto auxiliary_precedence = orchestrator.tick(180, inputs, deps);
   CHECK(auxiliary_precedence.accepted);
   for (uint8_t index = 0; index < 7; ++index) {
-    CHECK(auxiliary_precedence.frames[0].data[index] == 0);
+    CHECK(auxiliary_precedence.frames[1].data[index] == 0);
   }
-  CHECK(auxiliary_precedence.frames[0].data[7] == control::kRemoteAuxiliaryPositive);
+  CHECK(auxiliary_precedence.frames[1].data[7] == control::kRemoteAuxiliaryPositive);
 }
 
 void runtimeHandoffLossAndFaultPolicy() {
@@ -355,10 +363,10 @@ void runtimeHandoffLossAndFaultPolicy() {
   control::RemoteControlRuntimeConfig config;
   config.configured = true;
   config.local_can_tx_enabled = true;
-  config.mapping = control::VehicleCommandMapping::MdpsBench0x007;
+  config.mapping = control::VehicleCommandMapping::VehicleBench0x005And0x007;
   config.bus = 1;
   config.policy_id = 0x5243;
-  config.cycle_period_ms = 20;
+  config.cycle_period_ms = 10;
   config.frame_gap_ms = 2;
   config.m4_heartbeat_timeout_ms = 100;
   config.neutral_qualification_ms = 500;
@@ -400,9 +408,12 @@ void runtimeHandoffLossAndFaultPolicy() {
 
   control::CanFrameRequest first_motion_frame;
   bool saw_first_motion_frame = false;
-  bool frame_period_ok = true;
-  bool has_previous_frame = false;
-  uint32_t previous_frame_ms = 0;
+  bool drive_period_ok = true;
+  bool steering_period_ok = true;
+  bool has_previous_drive = false;
+  bool has_previous_steering = false;
+  uint32_t previous_drive_ms = 0;
+  uint32_t previous_steering_ms = 0;
   auto serviceRange = [&](uint32_t begin_ms, uint32_t end_ms,
                           bool refresh_frontend) {
     uint32_t emitted_frames = 0;
@@ -411,11 +422,20 @@ void runtimeHandoffLossAndFaultPolicy() {
       const auto output = runtime.service(now_ms, inputs);
       if (output.frame_ready) {
         ++emitted_frames;
-        if (has_previous_frame && now_ms - previous_frame_ms != 20u) {
-          frame_period_ok = false;
+        const uint32_t can_id = output.frame.can_id_flags & 0x7FFu;
+        if (can_id == control::kRemoteDriveCanId) {
+          if (has_previous_drive && now_ms - previous_drive_ms != 10u) {
+            drive_period_ok = false;
+          }
+          previous_drive_ms = now_ms;
+          has_previous_drive = true;
+        } else if (can_id == control::kRemoteSteeringCanId) {
+          if (has_previous_steering && now_ms - previous_steering_ms != 20u) {
+            steering_period_ok = false;
+          }
+          previous_steering_ms = now_ms;
+          has_previous_steering = true;
         }
-        previous_frame_ms = now_ms;
-        has_previous_frame = true;
         if (!saw_first_motion_frame &&
             output.frame.can_id_flags == control::kRemoteSteeringCanId &&
             output.frame.data[0] != control::kRemoteSteeringCenter) {
@@ -428,16 +448,16 @@ void runtimeHandoffLossAndFaultPolicy() {
     return emitted_frames;
   };
 
-  // A valid but not-yet-qualified RC source must not trigger a synthesized
-  // neutral frame during startup.
-  CHECK(serviceRange(0, 499, true) == 0);
+  // Until RC is qualified, the released bench emits only the explicit 0x005
+  // stop contract at 100 Hz.
+  CHECK(serviceRange(0, 499, true) == 50);
   CHECK(serviceRange(500, 500, true) == 1);
   CHECK(runtime.status().frontend_alive);
   CHECK(runtime.status().remote_reserved);
   CHECK(runtime.status().remote_valid);
   CHECK(runtime.status().handoff_qualified);
   CHECK(runtime.status().active_source == authority::ControlSourceId::Remote);
-  CHECK(runtime.status().neutral_cycles == 0);
+  CHECK(runtime.status().neutral_cycles >= 50);
 
   sample.ch[1] = 1000;
   sample.ch[3] = -1000;
@@ -448,7 +468,8 @@ void runtimeHandoffLossAndFaultPolicy() {
   CHECK(first_motion_frame.data[0] < control::kRemoteSteeringCenter);
   CHECK(first_motion_frame.data[0] > control::kRemoteSteeringMinimum);
   CHECK(first_motion_frame.data[7] == 0);
-  CHECK(frame_period_ok);
+  CHECK(drive_period_ok);
+  CHECK(steering_period_ok);
   CHECK(runtime.status().control_cycles > 0);
 
   // Upstream autonomy states fail closed even with a fresh, qualified RC
@@ -461,6 +482,8 @@ void runtimeHandoffLossAndFaultPolicy() {
   };
   uint32_t blocked_begin_ms = 541;
   for (const auto state : blocked_states) {
+    has_previous_drive = false;
+    has_previous_steering = false;
     inputs.autonomy_state = state;
     CHECK(serviceRange(blocked_begin_ms, blocked_begin_ms + 39u, true) == 0);
     blocked_begin_ms += 40u;
@@ -470,7 +493,8 @@ void runtimeHandoffLossAndFaultPolicy() {
   inputs.local_tx_inhibit_latched = true;
   CHECK(serviceRange(701, 740, true) == 0);
   inputs.local_tx_inhibit_latched = false;
-  has_previous_frame = false;
+  has_previous_drive = false;
+  has_previous_steering = false;
   CHECK(serviceRange(741, 780, true) > 0);
 
   sample.sample_state = remote::RcSampleState::Stale;
@@ -478,26 +502,26 @@ void runtimeHandoffLossAndFaultPolicy() {
   sample.ch[3] = 0;
   ++sample.seq;
   const uint32_t tx_before_link_loss = runtime.status().can_tx_success;
-  CHECK(serviceRange(781, 800, true) == 0);
+  CHECK(serviceRange(781, 800, true) >= 2);
   CHECK(!runtime.status().remote_valid);
   CHECK(runtime.status().remote_reserved);
   CHECK(!runtime.status().release_qualified);
-  CHECK(runtime.status().neutral_cycles == 0);
-  CHECK(runtime.status().can_tx_success == tx_before_link_loss);
+  CHECK(runtime.status().neutral_cycles > 50);
+  CHECK(runtime.status().can_tx_success > tx_before_link_loss);
 
-  CHECK(serviceRange(801, 1800, true) == 0);
+  CHECK(serviceRange(801, 1800, true) >= 99);
   CHECK(runtime.status().release_qualified);
   CHECK(!runtime.status().remote_reserved);
   CHECK(runtime.status().host_control_allowed);
 
   sample.sample_state = remote::RcSampleState::ProtocolFault;
   ++sample.seq;
-  CHECK(serviceRange(1801, 2940, true) == 0);
+  CHECK(serviceRange(1801, 2940, true) >= 113);
   CHECK(!runtime.status().release_qualified);
   CHECK(runtime.status().remote_reserved);
   CHECK(!runtime.status().host_control_allowed);
 
-  CHECK(serviceRange(2941, 3060, false) == 0);
+  CHECK(serviceRange(2941, 3060, false) >= 11);
   CHECK(!runtime.status().frontend_alive);
   CHECK(runtime.status().remote_reserved);
   CHECK(runtime.status().ipc_rejects == 0);

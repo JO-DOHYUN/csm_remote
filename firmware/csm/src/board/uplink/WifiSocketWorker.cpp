@@ -149,6 +149,15 @@ void WifiSocketWorker::serviceRequests() {
 
 void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   if (pending_consume_ && !applyPendingConsume()) return;
+  const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
+  const uint32_t pressure = config_.isolate_high_water_percent;
+  if (pressure > 0 &&
+      (queued.queued_bytes * 100u >= BOARD_WIFI_SINK_QUEUE_BYTES * pressure ||
+       static_cast<uint32_t>(queued.queued_records) * 100u >=
+           BOARD_WIFI_SINK_QUEUE_RECORDS * pressure)) {
+    closeClient(WifiCloseReason::QueuePressure);
+    return;
+  }
   serviceReceive(now_ms);
   if (client_ == nullptr) return;
   serviceTransmit(now_ms);
@@ -349,6 +358,9 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
     state_.counters.stall_close_total++;
     state_.stall_event_duration_ms = no_progress_duration_ms;
     state_.stall_event_sequence++;
+  }
+  if (was_connected && reason == WifiCloseReason::QueuePressure) {
+    state_.counters.queue_pressure_close_total++;
   }
   // Publish disconnected state before entering a potentially slow vendor
   // close. The facade must not misclassify the close itself as a new stall.

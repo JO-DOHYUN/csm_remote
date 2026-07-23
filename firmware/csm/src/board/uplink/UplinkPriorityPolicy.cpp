@@ -38,6 +38,9 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
     case 18:  // SAFETY_STATE_CHANGED
     case 22:  // FAULT_LOCKOUT_CLEARED
     case 25:  // UPLINK_STAGING_CLEAR
+    case 40:  // WIFI_TX_BACKPRESSURE
+    case 44:  // WIFI_QUEUE_PRESSURE_ISOLATED
+    case 45:  // WIFI_CLIENT_CLOSED
       return UplinkPriority::Critical;
     case 24:  // SERIAL_TX_BACKPRESSURE
     case 9:   // MCP2515_ERROR

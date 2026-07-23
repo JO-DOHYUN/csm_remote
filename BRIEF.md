@@ -1,6 +1,30 @@
 # BRIEF
 
-Updated: 2026-07-22
+Updated: 2026-07-23
+
+## 2026-07-23 nonblocking Wi-Fi fanout closure
+
+- The producer-side yield retry was discarded. Canonical main/RC/CAN enqueue is
+  a nonblocking SPSC path; only the socket worker owns send/receive/close/abort.
+- Bench evidence isolated the reconnect cause as `WifiCloseReason=6`: the old
+  252-descriptor queue reached its 75% descriptor threshold while the 48 KiB
+  byte pool was only about 36% occupied. It was not a board reset, watchdog,
+  socket error, Android ingress overflow, or CAN/RC stall.
+- Product Wi-Fi profiles now use 512 descriptors and a 48 KiB byte pool. Both
+  high-water dimensions represent about 2.5 s for the measured ~95 B/record
+  mix; descriptor counters are `uint16_t` and have a >255 contract test.
+- `BOARD_EVENT 45` retains the authoritative close reason and disconnect count.
+  The main loop merges both sink-service polls so event pulses are not lost.
+- Final physical H7 + `SM-S936N` + USB observation held one TCP connection for
+  95 s: disconnect/stall/socket/overflow/pressure-close all zero, queue byte
+  high-water 22,759/49,152, and main-loop max gap 5,069 us.
+
+## 2026-07-23 RC/Service shared vehicle bench contract
+
+- RC source is CRSF CH2(index 1), positive forward. RC and Android Service/HIL now share standard `0x005` DLC8 drive (`AA 52 speedLE direction 00 00 00`, stop `AA 02 00 00 00 00 00 00`) and standard `0x007` DLC8 steering byte0 `10..130..250`/zero tail.
+- Drive maps the post-deadband joystick linearly to `0..1000`, applies the existing time-equivalent slew and zero-before-reverse rule, and transmits at 100 Hz. Steering remains 50 Hz. Unqualified/lost/failsafe RC emits only the drive stop frame when autonomy is explicitly released and hard/hardware gates are healthy.
+- Service/HIL permits RC or host through the same authority boundary, never both as motion owners. Host allowlist validates exact ID/DLC/payload. Normal app joystick release keeps ARM while sending neutral; lifecycle/session/authority failures still disarm.
+- Wi-Fi identity recovery now adds a 1 s periodic `STREAM_SESSION` anchor and Service/HIL CAN RX segmentation is 20 ms instead of 1 ms. Remote-control and uplink host contracts plus the Service/HIL PlatformIO build pass; live upload/3-minute soak/external CAN cadence remain open.
 
 ## 2026-07-22 accepted socket 수명 결함 판정
 
@@ -73,7 +97,7 @@ Updated: 2026-07-22
 - passive M7 env `portenta_h7_m7_mid_mcp2515_j4_dual_csm_passive`가 clean clone에서 build된다.
 - 제품 M4 env `portenta_h7_m4_remote_frontend`는 Serial3 CRSF 416666 8N1, 16채널/링크 통계, 정규화, 양방향 telemetry와 SRAM4 IPC를 포함해 build된다.
 - 제품 M7 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi`는 RC authority/limiter 관측 경계, built-in CAN bus 1 RX, canonical USB/Wi-Fi evidence를 포함한다. mapper는 `None`, local CAN TX capability는 Off다.
-- MDPS 실차 전 벤치 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi`는 같은 제품 authority/safety/fanout을 유지하고 `MdpsBench0x007`의 J4 송신만 연다. MCP2515는 normal-mode RX/ACK만 허용하며 host/control TX는 계속 금지한다.
+- vehicle 실차 전 벤치 env `portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi`는 같은 제품 authority/safety/fanout을 유지하고 `VehicleBench0x005And0x007`의 J4 송신만 연다. MCP2515는 normal-mode RX/ACK만 허용하며 host/control TX는 계속 금지한다.
 - 2026-07-22 REF 15초 실측에서 J4 `+300`, RC valid/accepted `+1487`, boot session 변화와 CAN/USB drop은 0이었다. 당시 RC 출력 부재는 수신 고장이 아니라 REF의 `BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX=1` 때문이었다.
 - remote product architecture, Phase 2A, Phase 2B guard와 전체 runtime 계약시험이 통과한다.
 - hard safety 뒤 upstream autonomy가 `InactiveConfirmed`로 release해야 RC reservation을 평가한다. 그 뒤 500 ms 중립 qualification, 정상 stale/failsafe의 즉시 중립과 1초 release를 적용하며 malformed/protocol/IPC/M4 failure는 release하지 않는다. autonomy runtime wiring은 아직 없다.
@@ -91,7 +115,7 @@ Updated: 2026-07-22
 - connection poll을 session gate보다 먼저 수행하도록 수정했고 Wi-Fi stalled-client close 기준을 5 s로 조정했다. 최종 60 s status-stream에서 epoch 1, connect 1, disconnect/stall/overflow 0이었다.
 - 2026-07-16 Service/HIL 실측에서 비활성 encoder가 0값 `ENC_DERIVED`를 계속 발행하고 disabled timer를 fault로 광고하던 계약을 제거했다. 해당 profile은 encoder capability도 0으로 광고한다.
 - Kvaser CAN1 `0x50` 20 Hz와 CSM Wi-Fi를 같은 30 s 창에서 계측한 최종 artifact는 `C:\WORKS\VS\vsm_android_app\build\hil\20260716-114703-kvaser-can1-wifi-observer`다. CSM health-window source/bus0는 `580/580`, CAN/FIFO/Wi-Fi drop과 typed/segment/capture gap은 모두 0이었다.
-- 동일 bench에서 Android와 같은 canonical heartbeat/ARM/neutral/disarm을 PC HIL client로 실행했다. artifact `C:\WORKS\VS\vsm_android_app\build\hil\20260716-115511-service-neutral-control`에서 모든 ACK accepted, matching `CAN_TX_RAW`, Kvaser `0x100=0x32`와 `0x200=0x32`를 확인했다.
+- 2026-07-16의 폐기 전 `0x100/0x200` 계약에서는 PC HIL client로 canonical heartbeat/ARM/neutral/disarm과 matching `CAN_TX_RAW`를 확인했다. 이 기록은 D-016의 현행 `0x005/0x007` 검증으로 승계되지 않는다.
 - 2026-07-20 당시 dirty build 사용량은 M4 RAM 14.7%/Flash 7.0%, M7 RAM 74.7%/Flash 44.0%였다. 현재 reset REF build는 RAM 79.5%/Flash 45.5%다.
 - 실제 R16SM CRSF/telemetry, M4-M7 IPC, autonomy wiring, 실제 vehicle mapping, D1 hardware gate, completion-correlated CAN TX, production Wi-Fi 동시 운용, dual-CAN 고부하와 장시간 reset gate는 아직 검증되지 않았다.
 

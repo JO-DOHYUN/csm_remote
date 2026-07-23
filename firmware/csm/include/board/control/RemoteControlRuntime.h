@@ -105,6 +105,7 @@ class RemoteControlRuntime {
   void beginCycle(uint32_t now_ms, const RemoteControlRuntimeInputs& inputs);
   bool scheduleMappedFrames(const VehicleCommandMapResult& mapped,
                             const CanTxGatewayInputs& gateway_inputs);
+  bool scheduleSafetyStop(const RemoteControlRuntimeInputs& inputs);
   void publishTelemetry(uint32_t now_ms);
   bool isNeutralSample(const remote::M4RemoteMailboxSnapshot& snapshot) const;
 

@@ -25,6 +25,8 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   service_reported_bytes_sent_total_ = 0;
   service_reported_frames_sent_total_ = 0;
   service_reported_stall_event_sequence_ = 0;
+  service_reported_queue_pressure_close_total_ = 0;
+  session_anchor_queued_ = false;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
   static WifiSocketWorker socket_worker(mailbox_);
@@ -77,6 +79,9 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
       return SinkOfferResult::Invalid;
   }
   counters_.offer_accept_total++;
+  if (frame.type == csm::RecordType::StreamSession) {
+    session_anchor_queued_ = true;
+  }
   if (!counters_.first_accepted_valid) {
     counters_.first_accepted_valid = true;
     counters_.first_accepted_publish_seq = frame.publish_seq;
@@ -111,6 +116,12 @@ SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
     service_reported_stall_event_sequence_ = worker_state_.stall_event_sequence;
     result.backpressure_event = true;
     result.backpressure_duration_ms = worker_state_.stall_event_duration_ms;
+  }
+  if (counters_.queue_pressure_close_total !=
+      service_reported_queue_pressure_close_total_) {
+    service_reported_queue_pressure_close_total_ =
+        counters_.queue_pressure_close_total;
+    result.queue_pressure_event = true;
   }
 #else
   (void)now_ms;
@@ -154,6 +165,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
     effective_connection_epoch_ += reportable_epoch_delta;
     result.epoch_changed = true;
     mailbox_.discardRx();
+    session_anchor_queued_ = false;
   }
 
   worker_state_ = state;
@@ -183,6 +195,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.disconnect_total = worker.disconnect_total;
   counters_.extra_client_reject_total = worker.extra_client_reject_total;
   counters_.stall_close_total = worker.stall_close_total + logical_call_stall_total_;
+  counters_.queue_pressure_close_total = worker.queue_pressure_close_total;
   counters_.socket_error_total = worker.socket_error_total;
   counters_.send_budget_overrun_total = worker.send_budget_overrun_total;
   counters_.send_call_max_us = worker.send_call_max_us;
@@ -229,6 +242,7 @@ void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
     effective_connection_epoch_++;
     counters_.connection_epoch = effective_connection_epoch_;
     result.epoch_changed = true;
+    session_anchor_queued_ = false;
   }
 }
 

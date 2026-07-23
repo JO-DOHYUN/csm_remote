@@ -182,3 +182,14 @@
 - 진단: mailbox admission의 Busy/Reserved/Full/Invalid와 socket WouldBlock/zero write, close reason을 내부에서 분리한다. 기존 aggregate health counter와 epoch/identity는 wire 호환을 유지한다.
 - 실측: MDPS bench firmware source `0x27056BF3`, PCAN/J4 약 130 frame/s, PC TCP client 60 s에서 단일 boot sequence 7/session/epoch, 482,493 B/2,847 record를 수신했다. Wi-Fi disconnect/stall/socket error/overflow/no-sink drop, CAN source drop/FIFO, CRC, typed/segment/capture gap이 모두 0이었다. queue high-water는 24,831 B, main-loop max gap은 4,025 us, CAN RX task max는 555 us였다.
 - 자원: 제품 build RAM 440,360/523,624 B(84.1%), Flash 357,936/786,432 B(45.5%). 48 KiB를 초과하는 queue 확대는 새 부하 실측과 memory gate 없이는 금지한다.
+
+## D-016 RC/Service 공용 vehicle bench mapping
+
+- 날짜: 2026-07-23
+- 상태: 코드/host contract/Service-HIL build 통과, 실보드 HIL 대기.
+- 결정: `MdpsBench0x007` 단일 mapper와 Android `0x100/0x200` 임시 adapter를 `VehicleBench0x005And0x007`로 대체한다. RC CH2 positive는 forward이며 drive는 `0x005` DLC8 100 Hz, steering은 `0x007` DLC8 50 Hz다.
+- drive 계약: active `AA 52 speed_lo speed_hi direction 00 00 00`, speed `0..1000` little-endian, forward `0x50`, reverse `0x60`; stop `AA 02 00 00 00 00 00 00`. 2% deadband, time-equivalent 50/200 permille limiter와 zero-before-reverse를 RC/host가 공유한다.
+- safety neutral: upstream autonomy가 `InactiveConfirmed`이고 hardware/hard-safety gate가 healthy인 명시적 bench에서만 RC invalid/unqualified/failsafe가 0x005 stop을 생성한다. 다른 autonomy state나 local inhibit에서는 silence를 유지한다.
+- Service/HIL transport: sink epoch announcement는 해당 sink queue가 수락할 때까지 재시도하며, canonical record 순서를 흔드는 periodic anchor는 사용하지 않는다. CAN_RX_SEGMENT flush는 20 ms로 고정하고 freshness timeout 증가는 금지한다.
+- 실측상 Wi-Fi high-water 24,248/49,152 B에서 overflow가 증가해 용량 부족이 아니라 mailbox lock `Busy` 즉시-drop임을 확인했다. producer yield 재시도안은 main/RC/CAN 비대기 원칙 위반으로 폐기하고, TX mailbox를 main-producer/socket-worker-consumer SPSC ownership으로 변경한다. abort만 worker 소유의 nonblocking producer gate를 사용하며 Reserved/Full은 sink miss로 남긴다.
+- worker는 byte 또는 descriptor queue 75%에서 해당 Wi-Fi client만 Full 전에 선제 격리한다. 5 s 무진행, socket/RX 오류 정책은 독립 유지하며 재연결은 새 sink epoch와 명시적 loss boundary를 생성한다.

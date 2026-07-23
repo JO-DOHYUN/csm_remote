@@ -1,10 +1,15 @@
 #include <cstdio>
 #include <cstring>
+#include <atomic>
+#include <array>
+#include <thread>
+#include <vector>
 
 #include "board/uplink/CanonicalPublisher.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/FixedFrameQueue.h"
 #include "board/uplink/FixedFrameByteQueue.h"
+#include "board/uplink/WifiWorkerMailbox.h"
 #include "protocol/TypedRecords.h"
 
 using csm::RecordType;
@@ -39,6 +44,7 @@ class FakeSink final : public IFrameSink {
   bool enabled() const override { return true; }
   bool connected() const override { return connected_value; }
   SinkOfferResult offer(const PublishedFrameView& frame) override {
+    if (!connected_value) return SinkOfferResult::Disconnected;
     if (overflow) return SinkOfferResult::Overflow;
     std::memcpy(bytes, frame.bytes, frame.length);
     length = frame.length;
@@ -65,6 +71,37 @@ void session_is_identical_before_fanout() {
   CHECK(csm::rd_u16_le(&usb.bytes[5]) == 0);
   CHECK(csm::rd_u16_le(&usb.bytes[7]) == csm::kStreamSessionPayloadLen);
   CHECK(publisher.nextPublishSeq() == 1);
+}
+
+void late_joining_sink_must_receive_its_own_session_anchor() {
+  FakeSink usb;
+  FakeSink wifi;
+  wifi.connected_value = false;
+  CanonicalPublisher publisher;
+  publisher.begin(0xAABBCCDDEEFF0011ULL, &usb, &wifi);
+
+  CHECK(publisher.service(1).session_record);
+  CHECK(usb.accept_total == 1);
+  CHECK(wifi.accept_total == 0);
+
+  wifi.connected_value = true;
+  wifi.overflow = true;
+  publisher.requestSessionAnnouncement(
+      csm::board::uplink::SessionAnnouncementReason::SinkEpochChanged,
+      1u << 1);
+  const auto missed = publisher.service(2);
+  CHECK(missed.session_record);
+  CHECK(missed.sink_accept_mask == (1u << 0));
+
+  wifi.overflow = false;
+  const auto retried = publisher.service(3);
+  CHECK(retried.session_record);
+  CHECK((retried.sink_accept_mask & (1u << 1)) != 0);
+
+  const uint8_t payload[] = {0x55};
+  CHECK(publisher.enqueueRecord(RecordType::BoardEvent, payload, sizeof(payload),
+                                UplinkPriority::Normal));
+  CHECK(!publisher.service(4).session_record);
 }
 
 void one_sink_overflow_does_not_block_other_sink() {
@@ -162,6 +199,81 @@ void byte_queue_wraps_without_losing_frame_boundaries() {
   CHECK(queue.highWaterBytes() == 500);
 }
 
+void byte_queue_spsc_preserves_order_without_shared_lock() {
+  using namespace csm::board::uplink;
+  constexpr uint32_t kFrames = 10000;
+  constexpr uint16_t kFrameBytes = 16;
+  FixedFrameByteQueue<32, 2048> queue;
+  std::atomic<bool> producer_done{false};
+  std::atomic<bool> consumer_error{false};
+  std::vector<uint8_t> received;
+  received.reserve(kFrames * kFrameBytes);
+
+  std::thread producer([&] {
+    for (uint32_t sequence = 0; sequence < kFrames; ++sequence) {
+      std::array<uint8_t, 16> bytes{};
+      for (uint16_t index = 0; index < 16; ++index) {
+        bytes[index] = static_cast<uint8_t>((sequence + index) & 0xFFu);
+      }
+      PublishedFrameView frame{bytes.data(), static_cast<uint16_t>(bytes.size()), sequence,
+                               RecordType::BoardEvent, UplinkPriority::Normal};
+      while (!queue.push(frame)) std::this_thread::yield();
+    }
+    producer_done.store(true, std::memory_order_release);
+  });
+
+  std::thread consumer([&] {
+    uint8_t bytes[37] = {};
+    while (!producer_done.load(std::memory_order_acquire) || !queue.empty()) {
+      const uint16_t copied = queue.copyFrontBytes(bytes, sizeof(bytes));
+      if (copied == 0) {
+        std::this_thread::yield();
+        continue;
+      }
+      received.insert(received.end(), bytes, bytes + copied);
+      const auto consumed = queue.consumeMany(copied);
+      if (consumed.bytes != copied) consumer_error.store(true);
+    }
+  });
+  producer.join();
+  consumer.join();
+
+  CHECK(received.size() == kFrames * kFrameBytes);
+  CHECK(!consumer_error.load());
+  bool content_ok = received.size() == kFrames * kFrameBytes;
+  for (uint32_t sequence = 0; content_ok && sequence < kFrames; ++sequence) {
+    for (uint16_t index = 0; index < kFrameBytes; ++index) {
+      if (received[sequence * kFrameBytes + index] !=
+          static_cast<uint8_t>((sequence + index) & 0xFFu)) {
+        content_ok = false;
+        break;
+      }
+    }
+  }
+  CHECK(content_ok);
+  CHECK(queue.empty());
+}
+
+void wifi_mailbox_critical_urgency_tracks_consumer_completion() {
+  using namespace csm::board::uplink;
+  WifiWorkerMailbox mailbox;
+  uint8_t bytes[16] = {};
+  PublishedFrameView frame{bytes, sizeof(bytes), 1, RecordType::StreamSession,
+                           UplinkPriority::Critical};
+  CHECK(mailbox.tryOffer(frame, 10) == WifiMailboxOfferResult::Accepted);
+  CHECK(mailbox.queueSnapshot().urgent);
+  uint8_t staged[32] = {};
+  WifiMailboxTxLease lease;
+  CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
+  WifiWorkerMailbox::TxConsumeResult consumed;
+  bool stale = false;
+  CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));
+  CHECK(!stale);
+  CHECK(consumed.frames == 1);
+  CHECK(consumed.critical_frames == 1);
+  CHECK(!mailbox.queueSnapshot().urgent);
+}
+
 void runtime_diagnostic_layout_is_fixed_and_bounded() {
   CHECK(static_cast<uint8_t>(RecordType::RuntimeDiagnostic) == 19);
   CHECK(csm::kRuntimeDiagnosticSchema == 2);
@@ -218,16 +330,29 @@ void can_segment_batches_with_bounded_latency() {
   CHECK(capture.sequence == 1);
 }
 
+void wifi_queue_snapshot_supports_product_descriptor_capacity() {
+  csm::board::uplink::WifiMailboxQueueSnapshot snapshot;
+  snapshot.queued_records = 300;
+  snapshot.high_water_records = 512;
+  CHECK(snapshot.queued_records == 300);
+  CHECK(snapshot.high_water_records == 512);
+  static_assert(sizeof(snapshot.queued_records) >= sizeof(uint16_t));
+}
+
 }  // namespace
 
 int main() {
   session_is_identical_before_fanout();
+  late_joining_sink_must_receive_its_own_session_anchor();
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();
   fixed_queue_batches_without_losing_frame_boundaries();
   byte_queue_wraps_without_losing_frame_boundaries();
+  byte_queue_spsc_preserves_order_without_shared_lock();
+  wifi_mailbox_critical_urgency_tracks_consumer_completion();
   runtime_diagnostic_layout_is_fixed_and_bounded();
   can_segment_batches_with_bounded_latency();
+  wifi_queue_snapshot_supports_product_descriptor_capacity();
   if (failures != 0) return 1;
   std::puts("PASS: canonical publisher fanout contract");
   return 0;

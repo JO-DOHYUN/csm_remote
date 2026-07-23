@@ -29,6 +29,7 @@ struct SinkServiceResult {
   bool backpressure_event = false;
   uint32_t backpressure_duration_ms = 0;
   bool epoch_changed = false;
+  bool queue_pressure_event = false;
 };
 
 class IFrameSink {

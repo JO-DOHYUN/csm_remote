@@ -30,6 +30,44 @@ CanFrameRequest makeFrame(const OperatorCommand& command,
   return frame;
 }
 
+CanFrameRequest makeDriveFrame(const OperatorCommand& command,
+                               const VehicleCommandProfile& profile) {
+  CanFrameRequest frame = makeFrame(command, profile, kRemoteDriveCanId);
+  frame.data[0] = kRemoteDriveHeader;
+  const int32_t signed_speed = command.throttle_permille;
+  const uint16_t speed = static_cast<uint16_t>(
+      signed_speed < 0 ? -signed_speed : signed_speed);
+  if (speed == 0) {
+    frame.data[1] = kRemoteDriveStopMode;
+    return frame;
+  }
+  frame.data[1] = kRemoteDriveMode;
+  frame.data[2] = static_cast<uint8_t>(speed & 0xFFu);
+  frame.data[3] = static_cast<uint8_t>((speed >> 8u) & 0xFFu);
+  frame.data[4] = signed_speed > 0 ? kRemoteDriveForward : kRemoteDriveReverse;
+  return frame;
+}
+
+CanFrameRequest makeSteeringFrame(const OperatorCommand& command,
+                                  const VehicleCommandProfile& profile) {
+  CanFrameRequest frame = makeFrame(command, profile, kRemoteSteeringCanId);
+  if (command.auxiliary_permille != 0) {
+    frame.data[7] = command.auxiliary_permille < 0
+        ? kRemoteAuxiliaryNegative
+        : kRemoteAuxiliaryPositive;
+  } else {
+    frame.data[0] = mapSteering(command.steer_permille);
+    if (command.momentary_overlay_permille > 0) {
+      frame.data[7] = kRemoteAuxiliaryNegative;
+    } else if (command.steering_overlay_permille < 0) {
+      frame.data[7] = kRemoteAuxiliaryNegative;
+    } else if (command.steering_overlay_permille > 0) {
+      frame.data[7] = kRemoteAuxiliaryPositive;
+    }
+  }
+  return frame;
+}
+
 }  // namespace
 
 void VehicleCommandMapper::begin(uint32_t) {
@@ -70,23 +108,9 @@ VehicleCommandMapResult VehicleCommandMapper::map(const OperatorCommand& command
   }
 
   switch (profile_.mapping) {
-    case VehicleCommandMapping::MdpsBench0x007: {
-      CanFrameRequest frame = makeFrame(command, profile_, kRemoteSteeringCanId);
-      if (command.auxiliary_permille != 0) {
-        frame.data[7] = command.auxiliary_permille < 0
-            ? kRemoteAuxiliaryNegative
-            : kRemoteAuxiliaryPositive;
-      } else {
-        frame.data[0] = mapSteering(command.steer_permille);
-        if (command.momentary_overlay_permille > 0) {
-          frame.data[7] = kRemoteAuxiliaryNegative;
-        } else if (command.steering_overlay_permille < 0) {
-          frame.data[7] = kRemoteAuxiliaryNegative;
-        } else if (command.steering_overlay_permille > 0) {
-          frame.data[7] = kRemoteAuxiliaryPositive;
-        }
-      }
-      result.frames[result.frame_count++] = frame;
+    case VehicleCommandMapping::VehicleBench0x005And0x007: {
+      result.frames[result.frame_count++] = makeDriveFrame(command, profile_);
+      result.frames[result.frame_count++] = makeSteeringFrame(command, profile_);
       result.mapped = true;
       result.decision = authority::ControlDecisionCode::Accepted;
       result.detail = 0;
@@ -100,12 +124,30 @@ VehicleCommandMapResult VehicleCommandMapper::map(const OperatorCommand& command
   }
 }
 
+VehicleCommandMapResult VehicleCommandMapper::mapSafetyStop(
+    uint32_t command_seq) const {
+  VehicleCommandMapResult result;
+  if (!profile_.configured || !profile_.output_enabled ||
+      profile_.mapping != VehicleCommandMapping::VehicleBench0x005And0x007) {
+    result.decision = authority::ControlDecisionCode::RejectedFramePolicy;
+    result.detail = kDetailProfileNotConfigured;
+    return result;
+  }
+  OperatorCommand command;
+  command.source = authority::ControlSourceId::SafetyNeutral;
+  command.command_seq = command_seq;
+  result.frames[result.frame_count++] = makeDriveFrame(command, profile_);
+  result.mapped = true;
+  result.decision = authority::ControlDecisionCode::Accepted;
+  return result;
+}
+
 bool VehicleCommandMapper::isValidProfile(const VehicleCommandProfile& profile) {
   if (!profile.configured || profile.bus == authority::kAuthorityNoBus) {
     return false;
   }
   if (profile.mapping != VehicleCommandMapping::None &&
-      profile.mapping != VehicleCommandMapping::MdpsBench0x007) {
+      profile.mapping != VehicleCommandMapping::VehicleBench0x005And0x007) {
     return false;
   }
   return profile.throttle_limit_permille >= 0 &&

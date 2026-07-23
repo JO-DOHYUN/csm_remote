@@ -28,6 +28,8 @@ struct PublishServiceResult {
   bool record_published = false;
   bool session_record = false;
   uint8_t sink_accept_count = 0;
+  uint8_t connected_sink_mask = 0;
+  uint8_t sink_accept_mask = 0;
   uint64_t publish_seq = 0;
 };
 
@@ -39,7 +41,8 @@ class CanonicalPublisher {
   bool enqueueRecord(csm::RecordType type, const uint8_t* payload, uint16_t length,
                      UplinkPriority priority, uint8_t flags = 0);
   PublishServiceResult service(uint64_t now_us);
-  void requestSessionAnnouncement(SessionAnnouncementReason reason);
+  void requestSessionAnnouncement(SessionAnnouncementReason reason,
+                                  uint8_t target_sink_mask = 0);
   void discardQueuedRecords();
 
   bool hasConnectedSink() const;
@@ -70,6 +73,7 @@ class CanonicalPublisher {
   uint64_t boot_session_id_ = 0;
   uint64_t publish_seq_next_ = 0;
   bool session_pending_ = false;
+  uint8_t session_target_sink_mask_ = 0;
   SessionAnnouncementReason session_reason_ = SessionAnnouncementReason::Boot;
   PublisherCounters counters_;
 
@@ -77,6 +81,7 @@ class CanonicalPublisher {
                                uint16_t length, UplinkPriority priority,
                                uint8_t flags, bool session_record);
   PublishServiceResult publishSession(uint64_t now_us);
+  uint8_t connectedSinkMask() const;
 };
 
 }  // namespace csm::board::uplink
