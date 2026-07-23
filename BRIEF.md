@@ -22,7 +22,7 @@ Updated: 2026-07-23
 ## 2026-07-23 RC/Service shared vehicle bench contract
 
 - RC source is CRSF CH2(index 1), positive forward. RC and Android Service/HIL now share standard `0x005` DLC8 drive (`AA 52 speedLE direction 00 00 00`, stop `AA 02 00 00 00 00 00 00`) and standard `0x007` DLC8 steering byte0 `10..130..250`/zero tail.
-- Drive maps the post-deadband joystick linearly to `0..1000`, applies the existing time-equivalent slew and zero-before-reverse rule, and transmits at 100 Hz. Steering remains 50 Hz. Unqualified/lost/failsafe RC emits only the drive stop frame when autonomy is explicitly released and hard/hardware gates are healthy.
+- Drive maps the post-deadband joystick linearly to `0..1000`, applies the existing time-equivalent slew and zero-before-reverse rule, and is configured at 200 Hz. Steering remains independently configured at 50 Hz. Unqualified/lost/failsafe RC emits only the drive stop frame when autonomy is explicitly released and hard/hardware gates are healthy. A 20 s PCAN/J4 capture measured `0x005` median 5.163 ms, p95 5.206 ms, max 6.168 ms with no interval above 7.5 ms; bus status, error/status frames, invalid payloads, runtime deadline misses, and CAN write failures were all zero.
 - Service/HIL permits RC or host through the same authority boundary, never both as motion owners. Host allowlist validates exact ID/DLC/payload. Normal app joystick release keeps ARM while sending neutral; lifecycle/session/authority failures still disarm.
 - Wi-Fi identity uses a connection-edge `STREAM_SESSION` anchor, with an
   idempotent `HOST_QUERY_CAPABILITY` recovery handshake ordered as

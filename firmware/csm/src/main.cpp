@@ -5483,12 +5483,14 @@ void setup() {
       : csm::board::control::VehicleCommandMapping::None;
   remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
   remote_config.policy_id = 0x5243u;
-  remote_config.cycle_period_ms = 10;
+  remote_config.cycle_period_ms = 5;
+  remote_config.steering_period_ms = 20;
   remote_config.frame_gap_ms = 2;
   remote_config.m4_heartbeat_timeout_ms = 100;
   remote_config.neutral_qualification_ms = 500;
   remote_config.release_qualification_ms = 1000;
   remote_config.neutral_deadband_permille = 50;
+  remote_config.drive_deadband_permille = 20;
   remote_config.steering_deadband_permille = 20;
   remote_config.auxiliary_threshold_permille = 500;
   remote_config.steering_step_permille = 30;

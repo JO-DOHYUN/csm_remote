@@ -163,7 +163,7 @@ its absolute magnitude maps linearly to speed `0..1000` in standard ID `0x005`, 
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
 Neutral, unqualified RC, and RC failsafe use only `AA 02 00 00 00 00 00 00` when
 upstream autonomy is explicitly released and the hardware/safety gate allows TX.
-Drive is periodic at 10 ms; steering is periodic at 20 ms. Both pass the limiter,
+Drive is periodic at 5 ms; steering is independently periodic at 20 ms. Both pass the limiter,
 and a direction reversal reaches zero before applying the opposite direction. A repeated or frozen
 mailbox sequence cannot refresh source freshness.
 

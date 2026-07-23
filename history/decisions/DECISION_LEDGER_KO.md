@@ -193,3 +193,25 @@
 - Service/HIL transport: sink epoch announcement는 해당 sink queue가 수락할 때까지 재시도하며, canonical record 순서를 흔드는 periodic anchor는 사용하지 않는다. CAN_RX_SEGMENT flush는 20 ms로 고정하고 freshness timeout 증가는 금지한다.
 - 실측상 Wi-Fi high-water 24,248/49,152 B에서 overflow가 증가해 용량 부족이 아니라 mailbox lock `Busy` 즉시-drop임을 확인했다. producer yield 재시도안은 main/RC/CAN 비대기 원칙 위반으로 폐기하고, TX mailbox를 main-producer/socket-worker-consumer SPSC ownership으로 변경한다. abort만 worker 소유의 nonblocking producer gate를 사용하며 Reserved/Full은 sink miss로 남긴다.
 - worker는 byte 또는 descriptor queue 75%에서 해당 Wi-Fi client만 Full 전에 선제 격리한다. 5 s 무진행, socket/RX 오류 정책은 독립 유지하며 재연결은 새 sink epoch와 명시적 loss boundary를 생성한다.
+
+## D-017 Vehicle bench drive cadence correction
+
+- Date: 2026-07-23
+- Status: Configured, host-tested, uploaded, and PCAN cadence/payload verified;
+  controller-fault-free vehicle HIL remains open.
+- New hardware fact: the drive controller is configured for a 5 ms receive
+  period. This supersedes D-016's 10 ms drive cadence; the byte contract and
+  `0..1000` little-endian scale do not change.
+- Decision: J4 `0x005` is scheduled every 5 ms and `0x007` remains independently
+  scheduled every 20 ms. CH2 applies the documented 2% deadband before the
+  shared limiter and mapper.
+- Evidence: the 2026-07-23 20 s PCAN/J4 capture observed 3,873 `0x005` frames
+  with 5.163 ms median, 5.206 ms p95, 6.168 ms maximum, and zero intervals above
+  7.5 ms. It also observed zero PCAN error/status frames, invalid drive payloads,
+  unsafe direction changes, runtime deadline misses, and CAN write failures.
+  The raw capture SHA-256 is
+  `63C0EDCBFFE02213539402645428868E2DF724B01EAF9BD1A91E98DFE94AE460`.
+- Evidence boundary: an invalid application payload can cause an ECU fault but
+  cannot itself create a physical CAN error frame. The capture accepts CSM
+  cadence and bus integrity for this bench run; it does not prove the vehicle
+  controller remains fault-free under every motion/load case.

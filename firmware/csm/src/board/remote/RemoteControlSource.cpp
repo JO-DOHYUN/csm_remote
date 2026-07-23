@@ -43,7 +43,8 @@ bool RemoteControlSource::configure(const RemoteControlSourceConfig& config) {
       if (channels[index] == channels[other]) return false;
     }
   }
-  if (config.steering_deadband_permille > 100 ||
+  if (config.drive_deadband_permille > 100 ||
+      config.steering_deadband_permille > 100 ||
       config.auxiliary_threshold_permille < 100 ||
       config.auxiliary_threshold_permille > 1000) {
     return false;
@@ -104,7 +105,9 @@ void RemoteControlSource::update(uint32_t now_ms,
   const int16_t momentary_overlay = quantizeAuxiliary(
       snapshot.sample.ch[config_.momentary_overlay_channel_index],
       config_.auxiliary_threshold_permille);
-  command_.throttle_permille = config_.invert_drive ? -drive : drive;
+  const int16_t directed_drive = config_.invert_drive ? -drive : drive;
+  command_.throttle_permille = applyDeadband(
+      directed_drive, config_.drive_deadband_permille);
   const int16_t directed_steering =
       config_.invert_steering ? -steering : steering;
   command_.steer_permille = applyDeadband(

@@ -64,7 +64,7 @@ profile을 차량 제어 release artifact로 판정하지 않는다.
 
 vehicle 벤치에는 별도 `remote_product_mdps_bench_wifi` artifact를 사용한다. 이
 artifact도 제품 authority/safety/limiter와 canonical USB/Wi-Fi 경계를 그대로
-사용하지만 J4의 drive `0x005` 100 Hz와 steering `0x007` 50 Hz mapper만 명시적으로 연다. MCP2515는 normal-mode
+사용하지만 J4의 drive `0x005` 200 Hz와 steering `0x007` 50 Hz mapper만 명시적으로 연다. MCP2515는 normal-mode
 RX/ACK용이며 MCP/host control TX는 허용하지 않는다. 따라서 이 artifact의 통과는
 MDPS 벤치 근거이지 실제 차량 mapping 또는 release 승인 근거가 아니다.
 

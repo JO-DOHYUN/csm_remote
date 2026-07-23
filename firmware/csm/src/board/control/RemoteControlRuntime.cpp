@@ -18,9 +18,13 @@ int16_t absoluteValue(int16_t value) {
 bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
                                  const RemoteControlRuntimeConfig& config) {
   if (!config.configured || config.bus == authority::kAuthorityNoBus ||
-      config.cycle_period_ms < 10 || config.cycle_period_ms > 100 ||
+      config.cycle_period_ms < 5 || config.cycle_period_ms > 100 ||
+      config.steering_period_ms < config.cycle_period_ms ||
+      config.steering_period_ms > 100 ||
+      (config.steering_period_ms % config.cycle_period_ms) != 0 ||
       config.frame_gap_ms >= config.cycle_period_ms ||
       config.neutral_deadband_permille > 250 ||
+      config.drive_deadband_permille > 100 ||
       config.steering_deadband_permille > 100 ||
       config.auxiliary_threshold_permille < 100 ||
       config.auxiliary_threshold_permille > 1000 ||
@@ -48,6 +52,7 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   source_config.auxiliary_channel_index = 4;
   source_config.steering_overlay_channel_index = 9;
   source_config.momentary_overlay_channel_index = 10;
+  source_config.drive_deadband_permille = config.drive_deadband_permille;
   source_config.steering_deadband_permille = config.steering_deadband_permille;
   source_config.auxiliary_threshold_permille = config.auxiliary_threshold_permille;
   source_config.invert_drive = config.invert_drive;
@@ -316,9 +321,12 @@ void RemoteControlRuntime::beginCycle(
     if (result.accepted) {
       pending_frame_count_ = 0;
       pending_frame_index_ = 0;
+      const uint32_t steering_cycle_divisor =
+          config_.steering_period_ms / config_.cycle_period_ms;
       for (uint8_t i = 0; i < result.frame_count; ++i) {
         const uint32_t can_id = result.frames[i].can_id_flags & 0x7FFu;
-        if (can_id == kRemoteSteeringCanId && (cycle_sequence_ & 1u) != 0u) {
+        if (can_id == kRemoteSteeringCanId &&
+            (cycle_sequence_ % steering_cycle_divisor) != 0u) {
           continue;
         }
         pending_frames_[pending_frame_count_++] = result.frames[i];

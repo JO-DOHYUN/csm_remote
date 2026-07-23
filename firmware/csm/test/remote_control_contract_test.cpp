@@ -183,6 +183,50 @@ void frozenMailboxCannotRemainFresh() {
   CHECK(reader.snapshot().age_ms == 101);
 }
 
+void drivePayloadMatchesVehicleBenchGoldenFrames() {
+  using namespace csm::board;
+  control::VehicleCommandMapper mapper;
+  mapper.begin(0);
+  control::VehicleCommandProfile profile;
+  profile.configured = true;
+  profile.output_enabled = true;
+  profile.mapping = control::VehicleCommandMapping::VehicleBench0x005And0x007;
+  profile.bus = 1;
+  profile.policy_id = 0x5243;
+  profile.throttle_limit_permille = 1000;
+  profile.steer_limit_permille = 1000;
+  profile.brake_limit_permille = 1000;
+  CHECK(mapper.configure(profile));
+
+  auto check = [&](int16_t throttle, const uint8_t expected[8]) {
+    control::OperatorCommand command;
+    command.source = authority::ControlSourceId::Remote;
+    command.throttle_permille = throttle;
+    const control::VehicleCommandMapResult mapped = mapper.map(command);
+    CHECK(mapped.mapped);
+    CHECK(mapped.frame_count == 2);
+    CHECK(mapped.frames[0].can_id_flags == control::kRemoteDriveCanId);
+    CHECK(mapped.frames[0].dlc == 8);
+    CHECK(std::memcmp(mapped.frames[0].data, expected, 8) == 0);
+  };
+
+  const uint8_t stop[8] =
+      {0xAA, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  const uint8_t forward_80[8] =
+      {0xAA, 0x52, 0x20, 0x03, 0x50, 0x00, 0x00, 0x00};
+  const uint8_t forward_100[8] =
+      {0xAA, 0x52, 0xE8, 0x03, 0x50, 0x00, 0x00, 0x00};
+  const uint8_t reverse_80[8] =
+      {0xAA, 0x52, 0x20, 0x03, 0x60, 0x00, 0x00, 0x00};
+  const uint8_t reverse_100[8] =
+      {0xAA, 0x52, 0xE8, 0x03, 0x60, 0x00, 0x00, 0x00};
+  check(0, stop);
+  check(800, forward_80);
+  check(1000, forward_100);
+  check(-800, reverse_80);
+  check(-1000, reverse_100);
+}
+
 void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   using namespace csm::board;
   authority::AuthorityManager authority_manager;
@@ -237,6 +281,7 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   source_config.auxiliary_channel_index = 4;
   source_config.steering_overlay_channel_index = 9;
   source_config.momentary_overlay_channel_index = 10;
+  source_config.drive_deadband_permille = 20;
   source_config.steering_deadband_permille = 20;
   source_config.auxiliary_threshold_permille = 500;
   CHECK(orchestrator.configureRemoteSource(source_config));
@@ -247,12 +292,12 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   inputs.mailbox_snapshot.link_state = remote::RemoteLinkState::Valid;
   inputs.mailbox_snapshot.sample.sample_state = remote::RcSampleState::Ok;
   inputs.mailbox_snapshot.sample.seq = 99;
-  inputs.mailbox_snapshot.sample.ch[1] = 1000;
-  inputs.mailbox_snapshot.sample.ch[3] = -1000;
+  inputs.mailbox_snapshot.sample.ch[1] = 10;
+  inputs.mailbox_snapshot.sample.ch[3] = 0;
   inputs.mailbox_snapshot.sample.ch[4] = 0;
   inputs.mailbox_snapshot.sample.ch[9] = 0;
   inputs.mailbox_snapshot.sample.ch[10] = -1000;
-  inputs.output_sequence = 7;
+  inputs.output_sequence = 6;
   inputs.autonomy_state = authority::AutonomyAuthorityState::InactiveConfirmed;
   inputs.local_tx_inhibit_latched = false;
   inputs.safety_supervisor_allows = true;
@@ -267,6 +312,14 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   deps.command_limiter = &limiter;
   deps.vehicle_mapper = &mapper;
   deps.can_tx_gateway = &gateway;
+  const auto drive_deadband = orchestrator.tick(10, inputs, deps);
+  CHECK(drive_deadband.accepted);
+  CHECK(drive_deadband.command.throttle_permille == 0);
+  CHECK(drive_deadband.frames[0].data[1] == control::kRemoteDriveStopMode);
+
+  inputs.mailbox_snapshot.sample.ch[1] = 1000;
+  inputs.mailbox_snapshot.sample.ch[3] = -1000;
+  inputs.output_sequence = 7;
   const auto result = orchestrator.tick(20, inputs, deps);
   CHECK(result.accepted);
   CHECK(result.command.command_seq == 7);
@@ -366,12 +419,14 @@ void runtimeHandoffLossAndFaultPolicy() {
   config.mapping = control::VehicleCommandMapping::VehicleBench0x005And0x007;
   config.bus = 1;
   config.policy_id = 0x5243;
-  config.cycle_period_ms = 10;
+  config.cycle_period_ms = 5;
+  config.steering_period_ms = 20;
   config.frame_gap_ms = 2;
   config.m4_heartbeat_timeout_ms = 100;
   config.neutral_qualification_ms = 500;
   config.release_qualification_ms = 1000;
   config.neutral_deadband_permille = 50;
+  config.drive_deadband_permille = 20;
   config.steering_deadband_permille = 20;
   config.auxiliary_threshold_permille = 500;
   config.steering_step_permille = 30;
@@ -424,7 +479,7 @@ void runtimeHandoffLossAndFaultPolicy() {
         ++emitted_frames;
         const uint32_t can_id = output.frame.can_id_flags & 0x7FFu;
         if (can_id == control::kRemoteDriveCanId) {
-          if (has_previous_drive && now_ms - previous_drive_ms != 10u) {
+          if (has_previous_drive && now_ms - previous_drive_ms != 5u) {
             drive_period_ok = false;
           }
           previous_drive_ms = now_ms;
@@ -449,8 +504,8 @@ void runtimeHandoffLossAndFaultPolicy() {
   };
 
   // Until RC is qualified, the released bench emits only the explicit 0x005
-  // stop contract at 100 Hz.
-  CHECK(serviceRange(0, 499, true) == 50);
+  // stop contract at 200 Hz.
+  CHECK(serviceRange(0, 499, true) == 100);
   CHECK(serviceRange(500, 500, true) == 1);
   CHECK(runtime.status().frontend_alive);
   CHECK(runtime.status().remote_reserved);
@@ -534,6 +589,7 @@ int main() {
   crsfChannelsDecodeAndNormalize();
   upstreamAutonomyPrecedesRemoteReservation();
   frozenMailboxCannotRemainFresh();
+  drivePayloadMatchesVehicleBenchGoldenFrames();
   remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11();
   runtimeHandoffLossAndFaultPolicy();
   if (failures != 0) {
