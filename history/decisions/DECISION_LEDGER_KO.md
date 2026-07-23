@@ -204,7 +204,9 @@
   `0..1000` little-endian scale do not change.
 - Decision: J4 `0x005` is scheduled every 5 ms and `0x007` remains independently
   scheduled every 20 ms. CH2 applies the documented 2% deadband before the
-  shared limiter and mapper.
+  shared limiter and mapper. A due drive/steering pair is submitted to the CAN
+  FIFO in one bounded two-frame service pass; it is not retained behind an
+  artificial 2 ms gap where the next 5 ms cycle could discard steering.
 - Evidence: the 2026-07-23 20 s PCAN/J4 capture observed 3,873 `0x005` frames
   with 5.163 ms median, 5.206 ms p95, 6.168 ms maximum, and zero intervals above
   7.5 ms. It also observed zero PCAN error/status frames, invalid drive payloads,

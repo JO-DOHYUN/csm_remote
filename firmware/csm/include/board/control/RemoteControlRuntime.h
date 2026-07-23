@@ -17,7 +17,7 @@ struct RemoteControlRuntimeConfig {
   uint16_t policy_id = 0;
   uint16_t cycle_period_ms = 5;
   uint16_t steering_period_ms = 20;
-  uint16_t frame_gap_ms = 2;
+  uint16_t frame_gap_ms = 0;
   uint16_t m4_heartbeat_timeout_ms = 100;
   uint16_t neutral_qualification_ms = 500;
   uint16_t release_qualification_ms = 1000;

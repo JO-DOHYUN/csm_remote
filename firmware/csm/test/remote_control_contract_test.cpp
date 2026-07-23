@@ -421,7 +421,7 @@ void runtimeHandoffLossAndFaultPolicy() {
   config.policy_id = 0x5243;
   config.cycle_period_ms = 5;
   config.steering_period_ms = 20;
-  config.frame_gap_ms = 2;
+  config.frame_gap_ms = 0;
   config.m4_heartbeat_timeout_ms = 100;
   config.neutral_qualification_ms = 500;
   config.release_qualification_ms = 1000;
@@ -474,8 +474,12 @@ void runtimeHandoffLossAndFaultPolicy() {
     uint32_t emitted_frames = 0;
     for (uint32_t now_ms = begin_ms; now_ms <= end_ms; ++now_ms) {
       if (refresh_frontend && (now_ms % 20u) == 0u) publish(now_ms);
-      const auto output = runtime.service(now_ms, inputs);
-      if (output.frame_ready) {
+      bool drive_emitted_this_tick = false;
+      for (uint8_t frame_budget = 0;
+           frame_budget < control::kVehicleCommandMapperMaxFrames;
+           ++frame_budget) {
+        const auto output = runtime.service(now_ms, inputs);
+        if (!output.frame_ready) break;
         ++emitted_frames;
         const uint32_t can_id = output.frame.can_id_flags & 0x7FFu;
         if (can_id == control::kRemoteDriveCanId) {
@@ -484,7 +488,9 @@ void runtimeHandoffLossAndFaultPolicy() {
           }
           previous_drive_ms = now_ms;
           has_previous_drive = true;
+          drive_emitted_this_tick = true;
         } else if (can_id == control::kRemoteSteeringCanId) {
+          CHECK(drive_emitted_this_tick);
           if (has_previous_steering && now_ms - previous_steering_ms != 20u) {
             steering_period_ok = false;
           }
@@ -499,6 +505,7 @@ void runtimeHandoffLossAndFaultPolicy() {
         }
         runtime.noteCanTxResult(now_ms, true);
       }
+      CHECK(!runtime.service(now_ms, inputs).frame_ready);
     }
     return emitted_frames;
   };
@@ -525,6 +532,7 @@ void runtimeHandoffLossAndFaultPolicy() {
   CHECK(first_motion_frame.data[7] == 0);
   CHECK(drive_period_ok);
   CHECK(steering_period_ok);
+  CHECK(runtime.status().cycle_deadline_misses == 0);
   CHECK(runtime.status().control_cycles > 0);
 
   // Upstream autonomy states fail closed even with a fresh, qualified RC
@@ -581,6 +589,7 @@ void runtimeHandoffLossAndFaultPolicy() {
   CHECK(runtime.status().remote_reserved);
   CHECK(runtime.status().ipc_rejects == 0);
   CHECK(runtime.status().last_ipc_reject_detail == 0);
+  CHECK(runtime.status().cycle_deadline_misses == 0);
 }
 
 }  // namespace

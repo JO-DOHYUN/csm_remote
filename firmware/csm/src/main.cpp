@@ -3875,16 +3875,19 @@ static void service_remote_control() {
 #endif
   }
 
-  const csm::board::control::RemoteControlRuntimeOutput output =
-      remote_control_runtime.service(now_ms, inputs);
+  for (uint8_t frame_budget = 0;
+       frame_budget < csm::board::control::kVehicleCommandMapperMaxFrames;
+       ++frame_budget) {
+    const csm::board::control::RemoteControlRuntimeOutput output =
+        remote_control_runtime.service(now_ms, inputs);
 #if BOARD_ENABLE_REMOTE_AUTHORITY
-  if (safety_supervisor.leaseAlive(now_ms) &&
-      !remote_control_runtime.status().host_control_allowed) {
-    safety_supervisor.disarm(now_ms);
-    safety_state = safety_supervisor.state();
-  }
+    if (frame_budget == 0 && safety_supervisor.leaseAlive(now_ms) &&
+        !remote_control_runtime.status().host_control_allowed) {
+      safety_supervisor.disarm(now_ms);
+      safety_state = safety_supervisor.state();
+    }
 #endif
-  if (output.frame_ready) {
+    if (!output.frame_ready) break;
     const auto& frame = output.frame;
     const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
     const bool rtr = (frame.can_id_flags & (1u << 30)) != 0;
@@ -3913,6 +3916,7 @@ static void service_remote_control() {
       ++builtin_can_tx_failed_total;
     }
     remote_control_runtime.noteCanTxResult(now_ms, success);
+    if (!success) break;
   }
 
   const auto& status = remote_control_runtime.status();
@@ -5485,7 +5489,7 @@ void setup() {
   remote_config.policy_id = 0x5243u;
   remote_config.cycle_period_ms = 5;
   remote_config.steering_period_ms = 20;
-  remote_config.frame_gap_ms = 2;
+  remote_config.frame_gap_ms = 0;
   remote_config.m4_heartbeat_timeout_ms = 100;
   remote_config.neutral_qualification_ms = 500;
   remote_config.release_qualification_ms = 1000;
