@@ -35,11 +35,20 @@ CanFrameRequest makeDriveFrame(const OperatorCommand& command,
   CanFrameRequest frame = makeFrame(command, profile, kRemoteDriveCanId);
   frame.data[0] = kRemoteDriveHeader;
   const int32_t signed_speed = command.throttle_permille;
-  const uint16_t speed = static_cast<uint16_t>(
+  const uint16_t requested_speed = static_cast<uint16_t>(
       signed_speed < 0 ? -signed_speed : signed_speed);
-  if (speed == 0) {
+  if (requested_speed <= kRemoteDriveDeadbandPermille) {
     frame.data[1] = kRemoteDriveStopMode;
     return frame;
+  }
+  uint16_t speed = static_cast<uint16_t>(
+      ((requested_speed + (kRemoteDriveStepPermille / 2u)) /
+       kRemoteDriveStepPermille) * kRemoteDriveStepPermille);
+  if (speed < kRemoteDriveMinimumPermille) {
+    speed = kRemoteDriveMinimumPermille;
+  }
+  if (speed > 1000u) {
+    speed = 1000u;
   }
   frame.data[1] = kRemoteDriveMode;
   frame.data[2] = static_cast<uint8_t>(speed & 0xFFu);

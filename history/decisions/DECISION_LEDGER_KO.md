@@ -217,3 +217,16 @@
   cannot itself create a physical CAN error frame. The capture accepts CSM
   cadence and bus integrity for this bench run; it does not prove the vehicle
   controller remains fault-free under every motion/load case.
+
+## D-018 Vehicle bench minimum traction command
+
+- Date: 2026-07-23
+- Status: Implemented and host-tested; vehicle Encoder Fault retest open.
+- Decision: RC CH2 uses a 5% deadband. The drive mapper emits stop through that
+  boundary, jumps to minimum `speed=200` for the first active `AA 52` command,
+  and quantizes all later speeds to 50-unit steps. It never emits active speeds
+  `1..199`.
+- Reason: the prior smooth limiter exposed active low-speed values such as
+  12/24/36 while the traction controller could still have zero encoder motion.
+  This restores the known bench behavior without changing ID, DLC, direction,
+  stop payload, cadence, authority, or safety fallback.

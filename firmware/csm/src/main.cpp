@@ -5494,7 +5494,8 @@ void setup() {
   remote_config.neutral_qualification_ms = 500;
   remote_config.release_qualification_ms = 1000;
   remote_config.neutral_deadband_permille = 50;
-  remote_config.drive_deadband_permille = 20;
+  remote_config.drive_deadband_permille =
+      csm::board::control::kRemoteDriveDeadbandPermille;
   remote_config.steering_deadband_permille = 20;
   remote_config.auxiliary_threshold_permille = 500;
   remote_config.steering_step_permille = 30;

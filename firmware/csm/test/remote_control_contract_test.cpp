@@ -220,7 +220,19 @@ void drivePayloadMatchesVehicleBenchGoldenFrames() {
       {0xAA, 0x52, 0x20, 0x03, 0x60, 0x00, 0x00, 0x00};
   const uint8_t reverse_100[8] =
       {0xAA, 0x52, 0xE8, 0x03, 0x60, 0x00, 0x00, 0x00};
+  const uint8_t forward_minimum[8] =
+      {0xAA, 0x52, 0xC8, 0x00, 0x50, 0x00, 0x00, 0x00};
+  const uint8_t forward_25[8] =
+      {0xAA, 0x52, 0xFA, 0x00, 0x50, 0x00, 0x00, 0x00};
+  const uint8_t reverse_minimum[8] =
+      {0xAA, 0x52, 0xC8, 0x00, 0x60, 0x00, 0x00, 0x00};
   check(0, stop);
+  check(50, stop);
+  check(51, forward_minimum);
+  check(224, forward_minimum);
+  check(225, forward_25);
+  check(-51, reverse_minimum);
+  check(799, forward_80);
   check(800, forward_80);
   check(1000, forward_100);
   check(-800, reverse_80);
@@ -281,7 +293,8 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   source_config.auxiliary_channel_index = 4;
   source_config.steering_overlay_channel_index = 9;
   source_config.momentary_overlay_channel_index = 10;
-  source_config.drive_deadband_permille = 20;
+  source_config.drive_deadband_permille =
+      control::kRemoteDriveDeadbandPermille;
   source_config.steering_deadband_permille = 20;
   source_config.auxiliary_threshold_permille = 500;
   CHECK(orchestrator.configureRemoteSource(source_config));
@@ -426,7 +439,7 @@ void runtimeHandoffLossAndFaultPolicy() {
   config.neutral_qualification_ms = 500;
   config.release_qualification_ms = 1000;
   config.neutral_deadband_permille = 50;
-  config.drive_deadband_permille = 20;
+  config.drive_deadband_permille = control::kRemoteDriveDeadbandPermille;
   config.steering_deadband_permille = 20;
   config.auxiliary_threshold_permille = 500;
   config.steering_step_permille = 30;

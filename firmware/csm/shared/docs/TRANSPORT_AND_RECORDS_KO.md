@@ -158,9 +158,11 @@ CH5 is the auxiliary three-position switch. CH4 `-1000/0/+1000` maps to standard
 CAN ID `0x007`, DLC 8, byte 0 decimal `10/130/250`; bytes 1..6 are zero. CH5 is
 quantized to `-1000/0/+1000`: negative writes byte 7 `0x01`, positive writes
 byte 7 `0x80`, and neutral writes `0x00`. A non-neutral CH5 overrides other RC
-motion targets to neutral. CH2 positive is forward and negative is reverse. After a 2% deadband,
-its absolute magnitude maps linearly to speed `0..1000` in standard ID `0x005`, DLC8:
+motion targets to neutral. CH2 positive is forward and negative is reverse. Absolute
+magnitude through 5% emits stop. Above 5%, the first active speed is 200 and later
+speeds are rounded to 50-unit steps through 1000 in standard ID `0x005`, DLC8:
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
+Active mode never carries speed `1..199`.
 Neutral, unqualified RC, and RC failsafe use only `AA 02 00 00 00 00 00 00` when
 upstream autonomy is explicitly released and the hardware/safety gate allows TX.
 Drive is periodic at 5 ms; steering is independently periodic at 20 ms. Both pass the limiter,
