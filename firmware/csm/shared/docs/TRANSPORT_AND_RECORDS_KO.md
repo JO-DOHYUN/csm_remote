@@ -375,6 +375,10 @@ Safety-gated control session:
   - `16..19 model_pack_hash u32`
   - `20..23 aux u32`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
+  A valid query refreshes the requesting Wi-Fi epoch with
+  `STREAM_SESSION -> CAPABILITY -> CONTROL_ACK` in that order. The query is
+  idempotent and gives a reconnecting host a fresh boot identity/sequence
+  anchor even if it missed the connection-edge announcement.
 - `HOST_CLEAR_FAULT_LOCKOUT` payload is `command_id u32`.
 - Production host TX requires heartbeat alive, arm accepted, lease valid, safe
   inputs, and a ready target backend. Heartbeat resume alone never auto-arms.

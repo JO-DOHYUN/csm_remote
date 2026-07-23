@@ -104,6 +104,38 @@ void late_joining_sink_must_receive_its_own_session_anchor() {
   CHECK(!publisher.service(4).session_record);
 }
 
+void explicit_session_refresh_precedes_queued_handshake_records() {
+  FakeSink wifi;
+  CanonicalPublisher publisher;
+  publisher.begin(0x1020304050607080ULL, nullptr, &wifi);
+  CHECK(publisher.service(1).session_record);
+
+  const uint8_t capability[] = {0x01};
+  const uint8_t ack[] = {0x02};
+  CHECK(publisher.enqueueRecord(RecordType::Capability, capability,
+                                sizeof(capability), UplinkPriority::Critical));
+  CHECK(publisher.enqueueRecord(RecordType::ControlAck, ack, sizeof(ack),
+                                UplinkPriority::Critical));
+  publisher.requestSessionAnnouncement(
+      csm::board::uplink::SessionAnnouncementReason::SinkEpochChanged,
+      1u << 1);
+
+  const auto session = publisher.service(2);
+  CHECK(session.session_record);
+  CHECK(wifi.bytes[3] == static_cast<uint8_t>(RecordType::StreamSession));
+  CHECK(wifi.bytes[9 + csm::kStreamSessionReasonOffset] ==
+        static_cast<uint8_t>(
+            csm::board::uplink::SessionAnnouncementReason::SinkEpochChanged));
+
+  const auto first_response = publisher.service(3);
+  CHECK(!first_response.session_record);
+  CHECK(wifi.bytes[3] == static_cast<uint8_t>(RecordType::Capability));
+
+  const auto second_response = publisher.service(4);
+  CHECK(!second_response.session_record);
+  CHECK(wifi.bytes[3] == static_cast<uint8_t>(RecordType::ControlAck));
+}
+
 void one_sink_overflow_does_not_block_other_sink() {
   FakeSink usb;
   FakeSink wifi;
@@ -344,6 +376,7 @@ void wifi_queue_snapshot_supports_product_descriptor_capacity() {
 int main() {
   session_is_identical_before_fanout();
   late_joining_sink_must_receive_its_own_session_anchor();
+  explicit_session_refresh_precedes_queued_handshake_records();
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();
   fixed_queue_batches_without_losing_frame_boundaries();

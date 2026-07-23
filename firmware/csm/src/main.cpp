@@ -1589,9 +1589,9 @@ static void discard_session_uplink_payloads() {
   discard_can_queue_for_session_quarantine();
   canonical_publisher.discardQueuedRecords();
   usb_cdc_sink.abortQueuedFrames();
-#if BOARD_ENABLE_WIFI_UPLINK
-  wifi_tcp_sink.abortQueuedFrames();
-#endif
+  // The Wi-Fi worker clears its TX queue synchronously on both accept and
+  // close. Posting another asynchronous abort here can race the new epoch's
+  // STREAM_SESSION into the queue and delete that anchor after acceptance.
 }
 
 static void note_can_rx_task_elapsed(uint32_t start_us) {
@@ -5007,6 +5007,8 @@ static void handle_host_query_capability(uint16_t seq, const uint8_t* payload, u
     emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0, 0);
     return;
   }
+  canonical_publisher.requestSessionAnnouncement(
+      SessionAnnouncementReason::SinkEpochChanged, kWifiSessionSinkMask);
   emit_capability();
   emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0, 0, 0);
 }
