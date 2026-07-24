@@ -965,6 +965,27 @@ Final CSM protocol freeze for VMS:
 - VMS must treat `CONTROL_ACK` as board decision evidence only. Actual sent
   evidence is the matching `CAN_TX_RAW` on the requested bus.
 
+RP2040 feeder successor profile major `4`:
+- descriptor 0 is `bus=0`, backend `5` RP2040 feeder UART, transceiver `4`
+  MCP25625 integrated, RX supported, TX/control unsupported.
+- descriptor 1 remains `bus=1` Mid Carrier J4/U2 through the built-in CAN
+  backend. Its authority and TX policy are profile driven and unchanged by the
+  feeder.
+- feeder physical link is Mid Carrier J14 `RX2` (`PG9/USART6_RX`), 1 Mbaud
+  8N1, receive-only on M7.
+- feeder wire packets use COBS delimiter `0x00`, CRC32C, version `1`, contract
+  ID `0x46575231`, boot ID, packet sequence, and per-CAN-frame sequence.
+- accepted feeder frames receive the CSM global capture sequence and are
+  published through the existing `CAN_RX_SEGMENT`; no feeder-specific Android
+  record type exists.
+- BOARD_EVENT codes:
+  - `46 FEEDER_LINK_STARTED`
+  - `47 FEEDER_SESSION_CHANGED`
+  - `48 FEEDER_SEQUENCE_GAP`
+  - `49 FEEDER_TRANSPORT_ERROR`
+  - `50 FEEDER_SOURCE_FAULT`
+  - `51 FEEDER_LINK_STALE`
+
 ## 권장 방향
 - 링크 계층: framed transport
 - 데이터 계층: typed records

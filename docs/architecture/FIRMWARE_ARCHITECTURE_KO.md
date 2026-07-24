@@ -71,7 +71,9 @@ MDPS 벤치 근거이지 실제 차량 mapping 또는 release 승인 근거가 �
 ## 관측 데이터 흐름
 
 ```text
-CAN/RC/authority/safety evidence sources
+bus0: RP2040 feeder MCP25625/SPI -> COBS+CRC32C UART -> M7 circular DMA
+bus1: Mid Carrier J4 built-in CAN
+RC/authority/safety evidence sources
   -> bounded priority admission
   -> CanonicalPublisher
   -> immutable encoded frame
@@ -80,6 +82,13 @@ CAN/RC/authority/safety evidence sources
 ```
 
 관측 pipeline은 제어 pipeline의 결과를 읽을 수 있지만 제어 state를 직접 변경하지 않는다.
+
+successor feeder profile에서 bus0의 SPI/CAN ingest와 ACK는 RP2040이 소유한다.
+M7은 feeder로 TX하지 않으며 UART packet의 boot ID, packet/frame sequence, CRC,
+source counter를 검증한 뒤에만 기존 CAN truth queue에 넣는다. feeder UART sink
+정체는 RP2040 core0의 CAN ingest를 막지 않고, CSM USB/Wi-Fi sink 정체는 UART
+DMA ingest를 막지 않는다. J4 bus1, RC authority, safety, control TX 소유권은
+기존 M7 경계를 유지한다.
 
 ## 실행 및 메모리 원칙
 

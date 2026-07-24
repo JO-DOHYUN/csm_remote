@@ -1,6 +1,24 @@
 # BRIEF
 
-Updated: 2026-07-23
+Updated: 2026-07-24
+
+## 2026-07-24 RP2040 CAN feeder ingress gate
+
+- Adafruit Feather RP2040 CAN이 bus0의 MCP25625/SPI ingest와 CAN ACK를 단독
+  소유한다. M7 direct MCP2515 path는 successor profile에서 compile-out된다.
+- feeder core0 CAN ingest와 core1 UART framing을 fixed SPSC ring으로 분리했다.
+  CSM은 Mid Carrier J14 `RX2` (`PG9/USART6_RX`)의 circular DMA로 수신하고 기존
+  canonical `CAN_RX_SEGMENT`에 admission한다. 링크는 1 Mbaud, COBS + CRC32C,
+  boot/packet/frame sequence를 사용하며 observation-only다.
+- feeder 단독 2,000 fps/60초에서 120,000/120,000, gap/duplicate/reorder/
+  corruption/overflow/bus-off 모두 0이었다.
+- 최종 feeder→CSM 2,000 fps/5초에서 시험 frame `0..9999` 10,000개가 CSM USB에
+  정확히 도착했다. CSM CAN/segment/USB drop, typed/segment/capture gap,
+  feeder UART write/MCP/ring fault는 모두 0이고 boot session은 하나였다.
+- 4 Mbaud는 bench jumper에서 H7 framing error가 재현되어 폐기했다. 실측 약
+  62.5 kB/s를 수용하는 1 Mbaud 8N1(100 kB/s)을 현재 검증 계약으로 고정한다.
+- 현재 통과 범위는 bus0 feeder vertical slice다. J4 RC/MDPS 동시부하와 Wi-Fi
+  observer를 포함한 장시간 product gate는 아직 남아 있다.
 
 ## 2026-07-23 nonblocking Wi-Fi fanout closure
 

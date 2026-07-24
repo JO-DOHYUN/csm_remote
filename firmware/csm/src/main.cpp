@@ -19,6 +19,7 @@
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
+#include "board/feeder/FeederUartIngress.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/CanonicalPublisher.h"
 #include "board/uplink/UplinkPriorityPolicy.h"
@@ -92,6 +93,10 @@
 #define BOARD_HW_PROFILE_MID_MCP2515 0
 #endif
 
+#ifndef BOARD_HW_PROFILE_MID_FEEDER_UART
+#define BOARD_HW_PROFILE_MID_FEEDER_UART 0
+#endif
+
 #ifndef BOARD_TARGET_INTERNAL_CAN_LANE0
 #define BOARD_TARGET_INTERNAL_CAN_LANE0 0
 #endif
@@ -106,6 +111,26 @@
 
 #ifndef BOARD_ENABLE_MCP2515_INIT
 #define BOARD_ENABLE_MCP2515_INIT BOARD_ENABLE_MCP2515
+#endif
+
+#ifndef BOARD_ENABLE_FEEDER_UART
+#define BOARD_ENABLE_FEEDER_UART 0
+#endif
+
+#ifndef BOARD_FEEDER_UART_BAUD
+#define BOARD_FEEDER_UART_BAUD 1000000UL
+#endif
+
+#ifndef BOARD_FEEDER_UART_STALE_MS
+#define BOARD_FEEDER_UART_STALE_MS 250UL
+#endif
+
+#ifndef BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET
+#define BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET 4096UL
+#endif
+
+#ifndef BOARD_FEEDER_CAN_BUS_ID
+#define BOARD_FEEDER_CAN_BUS_ID 0
 #endif
 
 #ifndef BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -465,8 +490,10 @@
 #if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
     (!BOARD_CSM_PROFILE_REMOTE_PRODUCT || !BOARD_ENABLE_REMOTE_CONTROL || \
      !BOARD_ENABLE_REMOTE_AUTHORITY || !BOARD_ENABLE_MDPS_BENCH_MAPPING || \
-     !BOARD_ENABLE_MCP2515 || !BOARD_ENABLE_MCP2515_INIT || \
-     BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT || BOARD_ENABLE_HOST_CAN_TX || \
+     (!BOARD_ENABLE_FEEDER_UART && \
+      (!BOARD_ENABLE_MCP2515 || !BOARD_ENABLE_MCP2515_INIT)) || \
+     (BOARD_ENABLE_MCP2515 && BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) || \
+     BOARD_ENABLE_HOST_CAN_TX || \
      BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515 || \
      BOARD_MCP2515_CONTROL_TX_ALLOWED)
 #error "Remote MDPS bench profile violates its authority/CAN safety contract"
@@ -661,6 +688,12 @@ using csm::board::uplink::SessionAnnouncementReason;
 using csm::board::uplink::UplinkPriority;
 using csm::board::uplink::UsbCdcSink;
 using csm::board::uplink::WifiTcpSink;
+using csm::board::feeder::FeederCanFrame;
+using csm::board::feeder::FeederStatus;
+using csm::board::feeder::FeederUartIngress;
+using csm::board::feeder::FeederUartIngressConfig;
+using csm::board::feeder::FeederUartIngressStats;
+using csm::board::feeder::FeederWireStats;
 
 using SafetyState = csm::board::SafetyState;
 
@@ -711,6 +744,12 @@ enum BoardEventCode : uint16_t {
   EventRuntimeBreadcrumbRecovered = csm::kBoardEventRuntimeBreadcrumbRecoveredCode,
   EventRemoteControlInitFailed = csm::kBoardEventRemoteControlInitFailedCode,
   EventRemoteControlStateChanged = csm::kBoardEventRemoteControlStateChangedCode,
+  EventFeederLinkStarted = csm::kBoardEventFeederLinkStartedCode,
+  EventFeederSessionChanged = csm::kBoardEventFeederSessionChangedCode,
+  EventFeederSequenceGap = csm::kBoardEventFeederSequenceGapCode,
+  EventFeederTransportError = csm::kBoardEventFeederTransportErrorCode,
+  EventFeederSourceFault = csm::kBoardEventFeederSourceFaultCode,
+  EventFeederLinkStale = csm::kBoardEventFeederLinkStaleCode,
 };
 
 enum RuntimeBreadcrumbStage : uint8_t {
@@ -873,6 +912,16 @@ static WifiTcpSink wifi_tcp_sink;
 #endif
 static CanonicalPublisher canonical_publisher;
 static CanRxSegmentBuilder can_rx_segment_builder;
+#if BOARD_ENABLE_FEEDER_UART
+static FeederUartIngress feeder_uart_ingress;
+static bool feeder_uart_ready = false;
+static bool feeder_session_announced = false;
+static bool feeder_stale_latched = true;
+static uint32_t feeder_stale_total = 0;
+static FeederWireStats feeder_last_wire_stats = {};
+static FeederUartIngressStats feeder_last_ingress_stats = {};
+static FeederStatus feeder_last_source_status = {};
+#endif
 static uint32_t uplink_tx_bytes_since_can_service = 0;
 #if BOARD_ENABLE_MCP2515
 static MCP2515* mcp2515 = nullptr;
@@ -2085,6 +2134,11 @@ static bool required_can_lanes_ok() {
   any_required = true;
   all_ready = all_ready && can_backend_ok;
 #endif
+#if BOARD_ENABLE_FEEDER_UART
+  any_required = true;
+  all_ready = all_ready && feeder_uart_ready &&
+              feeder_session_announced && !feeder_stale_latched;
+#endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   any_required = true;
   all_ready = all_ready && builtin_can_tx_ok;
@@ -2380,7 +2434,8 @@ static void __attribute__((unused)) emit_control_ack(uint32_t command_id, uint8_
   emit_record(RecordType::ControlAck, payload, sizeof(payload));
 }
 
-#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_TJA1051_DUAL
+#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_FEEDER_UART || \
+    BOARD_HW_PROFILE_MID_TJA1051_DUAL
 static csm::board::CapabilityBusDescriptor make_capability_bus_descriptor(
     uint8_t bus_id, uint8_t role, uint8_t backend, uint8_t transceiver,
     uint8_t rx_supported, uint8_t tx_supported, uint8_t control_tx_allowed,
@@ -2403,6 +2458,8 @@ static void emit_capability() {
   csm::board::CapabilityPayloadConfig config;
 #if BOARD_HW_PROFILE_MID_MCP2515
   config.profile_major = 3;   // Mid Carrier + external MCP2515 current CSM
+#elif BOARD_HW_PROFILE_MID_FEEDER_UART
+  config.profile_major = 4;   // Mid Carrier + isolated RP2040 CAN feeder
 #elif BOARD_HW_PROFILE_MID_TJA1051_DUAL
   config.profile_major = 2;   // Mid Carrier + TJA1051 target
 #else
@@ -2426,6 +2483,9 @@ static void emit_capability() {
 #if BOARD_ENABLE_MCP2515
   lane_flags |= (1u << 0);
   lane_flags |= (BOARD_CAN_IRQ_MODE != 0) ? (1u << 4) : 0;
+#endif
+#if BOARD_ENABLE_FEEDER_UART
+  lane_flags |= (1u << 0);
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_RX
   lane_flags |= (1u << 1);
@@ -2459,10 +2519,11 @@ static void emit_capability() {
 #endif
   config.limitation_flags = limitation_flags;
 
-#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_TJA1051_DUAL
+#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_FEEDER_UART || \
+    BOARD_HW_PROFILE_MID_TJA1051_DUAL
   config.include_v2 = true;
   config.include_v3 = true;
-#if BOARD_HW_PROFILE_MID_MCP2515
+#if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_FEEDER_UART
   config.bus_count = BOARD_ENABLE_BUILTIN_CAN_LANE ? 2 : 1;
 #else
   config.bus_count = 2;
@@ -2616,6 +2677,44 @@ static void emit_capability() {
 #endif
   config.bus_transceiver_reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #endif
+#elif BOARD_HW_PROFILE_MID_FEEDER_UART
+  config.buses[0] = make_capability_bus_descriptor(
+      BOARD_FEEDER_CAN_BUS_ID,
+      0,
+      5,  // RP2040 feeder over internal UART
+      4,  // MCP25625 integrated transceiver/controller
+      (feeder_uart_ready && feeder_session_announced &&
+       !feeder_stale_latched) ? 1 : 0,
+      0,
+      0,
+      0,
+      0);
+  config.bus_mode[0] = kBusModeNormal;
+  config.bus_ack_capability[0] =
+      (feeder_uart_ready && feeder_session_announced &&
+       !feeder_stale_latched) ? 1 : 0;
+  config.bus_error_frame_capability[0] = config.bus_ack_capability[0];
+  config.bus_transceiver_reset_safe[0] = 1;
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+  config.buses[1] = make_capability_bus_descriptor(
+      BOARD_BUILTIN_CAN_BUS_ID,
+      0,
+      2,
+      3,
+      BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
+      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
+       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
+      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
+       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
+        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
+      0,
+      0);
+  config.bus_mode[1] = kBusModeNormal;
+  config.bus_ack_capability[1] = 1;
+  config.bus_error_frame_capability[1] = 1;
+  config.bus_transceiver_reset_safe[1] =
+      BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
+#endif
 #else
   config.buses[0] = make_capability_bus_descriptor(
       0,
@@ -2686,6 +2785,11 @@ static void service_capability_advertisement() {
 }
 
 static int8_t can_bus_runtime_index(uint8_t bus) {
+#if BOARD_ENABLE_FEEDER_UART
+  if (bus == BOARD_FEEDER_CAN_BUS_ID) {
+    return 0;
+  }
+#endif
   if (bus == BOARD_MCP2515_BUS_ID) {
     return 0;
   }
@@ -2770,6 +2874,136 @@ static bool can_queue_pop(CanRxItem& out) {
   }
   return false;
 }
+
+#if BOARD_ENABLE_FEEDER_UART
+static bool accept_feeder_can_frame(void*, const FeederCanFrame& frame) {
+  CanRxItem item;
+  item.capture_seq = can_capture_seq_next++;
+  item.mono_us = frame.estimated_mono_us;
+  item.can_id_flags = frame.can_id_flags;
+  item.dlc_flags = frame.dlc_flags & 0x0F;
+  item.bus = BOARD_FEEDER_CAN_BUS_ID;
+  memcpy(item.data, frame.data, sizeof(item.data));
+  return can_queue_push(item);
+}
+
+static void emit_feeder_changed_event(uint32_t current, uint32_t previous,
+                                      BoardEventCode code, uint16_t detail) {
+  if (current != previous) {
+    emit_board_event(code, detail, current);
+  }
+}
+
+static void service_feeder_link_events(uint64_t now_mono_us) {
+  const FeederWireStats wire = feeder_uart_ingress.wireStats();
+  const FeederUartIngressStats ingress = feeder_uart_ingress.ingressStats();
+
+  if (wire.packets_ok > 0 &&
+      (!feeder_session_announced ||
+       wire.current_boot_id != feeder_last_wire_stats.current_boot_id)) {
+    const bool first = !feeder_session_announced;
+    feeder_session_announced = true;
+    feeder_stale_latched = false;
+    if (!first) {
+      feeder_last_source_status = {};
+    }
+    emit_board_event(first ? EventFeederLinkStarted
+                           : EventFeederSessionChanged,
+                     csm::board::feeder::kFeederWireVersion,
+                     wire.current_boot_id);
+    emit_capability();
+    last_capability_ms = millis();
+  }
+
+  emit_feeder_changed_event(
+      wire.packet_sequence_gaps,
+      feeder_last_wire_stats.packet_sequence_gaps,
+      EventFeederSequenceGap, 1);
+  emit_feeder_changed_event(
+      wire.frame_sequence_gaps,
+      feeder_last_wire_stats.frame_sequence_gaps,
+      EventFeederSequenceGap, 2);
+  emit_feeder_changed_event(
+      wire.crc_failures, feeder_last_wire_stats.crc_failures,
+      EventFeederTransportError, 1);
+  const uint32_t parser_failures =
+      wire.cobs_failures + wire.contract_failures + wire.length_failures +
+      wire.encoded_overflow;
+  const uint32_t previous_parser_failures =
+      feeder_last_wire_stats.cobs_failures +
+      feeder_last_wire_stats.contract_failures +
+      feeder_last_wire_stats.length_failures +
+      feeder_last_wire_stats.encoded_overflow;
+  emit_feeder_changed_event(
+      parser_failures, previous_parser_failures,
+      EventFeederTransportError, 2);
+  emit_feeder_changed_event(
+      ingress.dma_overrun_bytes,
+      feeder_last_ingress_stats.dma_overrun_bytes,
+      EventFeederTransportError, 3);
+  emit_feeder_changed_event(
+      ingress.uart_error_events,
+      feeder_last_ingress_stats.uart_error_events,
+      EventFeederTransportError, 4);
+  emit_feeder_changed_event(
+      ingress.dma_transfer_errors,
+      feeder_last_ingress_stats.dma_transfer_errors,
+      EventFeederTransportError, 5);
+
+  if (feeder_uart_ingress.statusValid()) {
+    const FeederStatus source = feeder_uart_ingress.feederStatus();
+    emit_feeder_changed_event(
+        source.ring_overflow, feeder_last_source_status.ring_overflow,
+        EventFeederSourceFault, 1);
+    emit_feeder_changed_event(
+        source.mcp_overflow_events,
+        feeder_last_source_status.mcp_overflow_events,
+        EventFeederSourceFault, 2);
+    emit_feeder_changed_event(
+        source.mcp_error_irq_events,
+        feeder_last_source_status.mcp_error_irq_events,
+        EventFeederSourceFault, 3);
+    emit_feeder_changed_event(
+        source.mcp_bus_off_events,
+        feeder_last_source_status.mcp_bus_off_events,
+        EventFeederSourceFault, 4);
+    emit_feeder_changed_event(
+        source.eflg_or, feeder_last_source_status.eflg_or,
+        EventFeederSourceFault, 5);
+    feeder_last_source_status = source;
+  }
+
+  if (feeder_session_announced) {
+    const bool stale = feeder_uart_ingress.stale(now_mono_us);
+    if (stale && !feeder_stale_latched) {
+      feeder_stale_latched = true;
+      ++feeder_stale_total;
+      emit_board_event(EventFeederLinkStale, 1, feeder_stale_total);
+      emit_capability();
+      last_capability_ms = millis();
+    } else if (!stale && feeder_stale_latched) {
+      feeder_stale_latched = false;
+      emit_board_event(EventFeederLinkStarted, 2,
+                       wire.current_boot_id);
+      emit_capability();
+      last_capability_ms = millis();
+    }
+  }
+
+  feeder_last_wire_stats = wire;
+  feeder_last_ingress_stats = ingress;
+}
+
+static void service_feeder_uart_to_queue(size_t byte_budget) {
+  if (!feeder_uart_ready) {
+    return;
+  }
+  const uint64_t now_mono_us = mono64_us();
+  feeder_uart_ingress.service(byte_budget, now_mono_us,
+                              accept_feeder_can_frame, nullptr);
+  service_feeder_link_events(now_mono_us);
+}
+#endif
 
 static void discard_can_queue_for_session_quarantine() {
   for (uint8_t index = 0; index < 2; ++index) {
@@ -3144,6 +3378,12 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[47] = 0;
   payload[47] |= kTestMode ? (1u << 0) : 0;
   payload[47] |= can_backend_ok ? (1u << 1) : 0;
+#if BOARD_ENABLE_FEEDER_UART
+  payload[47] |= (feeder_uart_ready && feeder_session_announced &&
+                  !feeder_stale_latched)
+                     ? (1u << 1)
+                     : 0;
+#endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   payload[47] |= builtin_can_tx_ok ? (1u << 2) : 0;
 #endif
@@ -3193,6 +3433,13 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[112], safety_supervisor.transitionCounter());
   uint32_t backend_flags = 0;
   backend_flags |= can_backend_ok ? (1u << 0) : 0;
+#if BOARD_ENABLE_FEEDER_UART
+  backend_flags |=
+      (feeder_uart_ready && feeder_session_announced &&
+       !feeder_stale_latched)
+          ? (1u << 0)
+          : 0;
+#endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   backend_flags |= builtin_can_tx_ok ? (1u << 1) : 0;
 #endif
@@ -5402,6 +5649,15 @@ void setup() {
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootPublisherReady);
 #endif
   can_rx_segment_builder.begin(emit_can_rx_segment_callback, nullptr, BOARD_CAN_RX_SEGMENT_FLUSH_US);
+#if BOARD_ENABLE_FEEDER_UART
+  FeederUartIngressConfig feeder_config;
+  feeder_config.baud = BOARD_FEEDER_UART_BAUD;
+  feeder_config.stale_timeout_ms = BOARD_FEEDER_UART_STALE_MS;
+  feeder_uart_ready = feeder_uart_ingress.begin(feeder_config);
+  if (!feeder_uart_ready) {
+    emit_board_event(EventFeederTransportError, 6, 1);
+  }
+#endif
 
   safety_supervisor.begin(millis());
   safety_state = safety_supervisor.state();
@@ -5551,6 +5807,9 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
+#if BOARD_ENABLE_FEEDER_UART
+  service_feeder_uart_to_queue(BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET);
+#endif
   poll_uplink_connections(millis());
   service_uplink_session_state();
   service_recovered_runtime_breadcrumb();
