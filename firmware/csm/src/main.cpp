@@ -15,6 +15,7 @@
 #include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
 #include "board/can/BuiltinFdcanDiagnostics.h"
+#include "board/can/BuiltinCanTxOwner.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
@@ -81,10 +82,6 @@
 #define BOARD_WIFI_AP_CHANNEL 6
 #endif
 
-#ifndef BOARD_WIFI_MAIN_IDLE_SLICE_MS
-#define BOARD_WIFI_MAIN_IDLE_SLICE_MS 1
-#endif
-
 #ifndef BOARD_HW_PROFILE_MID_TJA1051_DUAL
 #define BOARD_HW_PROFILE_MID_TJA1051_DUAL 0
 #endif
@@ -127,6 +124,10 @@
 
 #ifndef BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET
 #define BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET 4096UL
+#endif
+
+#ifndef BOARD_FEEDER_UART_SERVICE_TIME_BUDGET_US
+#define BOARD_FEEDER_UART_SERVICE_TIME_BUDGET_US 750UL
 #endif
 
 #ifndef BOARD_FEEDER_CAN_BUS_ID
@@ -411,8 +412,8 @@
 #define BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS 100
 #endif
 
-#ifndef BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US
-#define BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US 5000
+#ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
+#define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 5000
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -818,19 +819,6 @@ struct alignas(32) RuntimeDiagnosticRetainedSlot {
 static_assert(sizeof(RuntimeDiagnosticRetainedSlot) == 160,
               "runtime diagnostic retained slot must cover five cache lines");
 
-struct RuntimeDiagnosticPendingTx {
-  bool active;
-  bool outcome_captured;
-  uint16_t reserved;
-  uint32_t request_mask;
-  uint32_t attempt_sequence;
-  uint32_t can_id_flags;
-  uint32_t started_us;
-  uint32_t write_duration_us;
-  int32_t write_result;
-  csm::board::can::BuiltinFdcanSnapshot before;
-  uint8_t outcome_payload[csm::kRuntimeDiagnosticPayloadLen];
-};
 #endif
 
 using CanRxItem = CanRxSegmentItem;
@@ -916,8 +904,12 @@ static CanRxSegmentBuilder can_rx_segment_builder;
 static FeederUartIngress feeder_uart_ingress;
 static bool feeder_uart_ready = false;
 static bool feeder_session_announced = false;
+static bool feeder_operational_last = false;
 static bool feeder_stale_latched = true;
+static bool feeder_stale_event_pending = false;
+static bool feeder_recovery_event_pending = false;
 static uint32_t feeder_stale_total = 0;
+static uint32_t feeder_last_parser_failures = 0;
 static FeederWireStats feeder_last_wire_stats = {};
 static FeederUartIngressStats feeder_last_ingress_stats = {};
 static FeederStatus feeder_last_source_status = {};
@@ -959,31 +951,41 @@ static Mcp2515ServiceState mcp_service = {};
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-using RuntimeDiagnosticCan = csm::board::can::BuiltinFdcanDiagnosticCan;
-alignas(RuntimeDiagnosticCan) static uint8_t
-    runtime_diagnostic_can_storage[sizeof(RuntimeDiagnosticCan)];
-static RuntimeDiagnosticCan* runtime_diagnostic_can = nullptr;
+using ProductBuiltinCan = csm::board::can::BuiltinFdcanCan;
+alignas(ProductBuiltinCan) static uint8_t
+    builtin_can_storage[sizeof(ProductBuiltinCan)];
+static ProductBuiltinCan* builtin_can = nullptr;
 static csm::board::can::BuiltinFdcanDiagnostics builtin_fdcan_diagnostics;
 
-static bool construct_builtin_can_for_runtime_diagnostics() {
-  if (runtime_diagnostic_can != nullptr) return builtin_fdcan_diagnostics.valid();
-  runtime_diagnostic_can =
-      new (runtime_diagnostic_can_storage) RuntimeDiagnosticCan(PIN_CAN0_RX, PIN_CAN0_TX);
-  return builtin_fdcan_diagnostics.attach(*runtime_diagnostic_can);
+static bool construct_builtin_can() {
+  if (builtin_can != nullptr) return builtin_fdcan_diagnostics.valid();
+  builtin_can =
+      new (builtin_can_storage) ProductBuiltinCan(PIN_CAN0_RX, PIN_CAN0_TX);
+  return builtin_fdcan_diagnostics.attach(*builtin_can);
 }
 
-static mbed::CAN& builtin_can_ref() { return *runtime_diagnostic_can; }
-#else
-static mbed::CAN builtin_can(PIN_CAN0_RX, PIN_CAN0_TX);
-static mbed::CAN& builtin_can_ref() { return builtin_can; }
-#endif
+static mbed::CAN& builtin_can_ref() { return *builtin_can; }
 static bool builtin_can_tx_ok = false;
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
 static uint32_t builtin_can_tx_total = 0;
 static uint32_t builtin_can_tx_failed_total = 0;
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+static csm::board::can::BuiltinCanTxOwner builtin_can_tx_owner;
+static bool builtin_can_tx_inhibit_latched = false;
+#endif
+#endif
+
+#if BOARD_ENABLE_BUILTIN_CAN_LANE
+static bool builtin_can_runtime_ready_for_health() {
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+    BOARD_ENABLE_REMOTE_CONTROL
+  return builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
+#else
+  return builtin_can_tx_ok;
+#endif
+}
 #endif
 
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
@@ -1158,7 +1160,6 @@ static int32_t runtime_diagnostic_last_write_result = 0;
 static bool runtime_diagnostic_write_in_progress = false;
 static csm::board::can::BuiltinFdcanSnapshot runtime_diagnostic_before = {};
 static csm::board::can::BuiltinFdcanSnapshot runtime_diagnostic_after = {};
-static RuntimeDiagnosticPendingTx runtime_diagnostic_pending_tx[8] = {};
 static uint32_t runtime_diagnostic_last_periodic_ms = 0;
 static bool runtime_diagnostic_first_loop_recorded = false;
 static csm::board::diagnostics::BootRecoveryEvent
@@ -1564,26 +1565,6 @@ static void runtime_diagnostic_after_can_write(uint32_t started_us,
       runtime_diagnostic_last_write_duration_us, write_result, false,
       runtime_diagnostic_before, runtime_diagnostic_after);
   runtime_diagnostic_commit_payload(payload);
-
-  RuntimeDiagnosticPendingTx* free_slot = nullptr;
-  for (RuntimeDiagnosticPendingTx& pending : runtime_diagnostic_pending_tx) {
-    if (!pending.active) {
-      free_slot = &pending;
-      break;
-    }
-  }
-  if (free_slot == nullptr) {
-    free_slot = &runtime_diagnostic_pending_tx[0];
-  }
-  free_slot->active = true;
-  free_slot->outcome_captured = false;
-  free_slot->request_mask = runtime_diagnostic_after.latest_tx_request_mask;
-  free_slot->attempt_sequence = runtime_diagnostic_attempt_sequence;
-  free_slot->can_id_flags = runtime_diagnostic_last_can_id_flags;
-  free_slot->started_us = started_us;
-  free_slot->write_duration_us = runtime_diagnostic_last_write_duration_us;
-  free_slot->write_result = write_result;
-  free_slot->before = runtime_diagnostic_before;
 }
 #endif
 
@@ -2054,52 +2035,10 @@ static void service_runtime_diagnostic_boot_history() {
   }
 }
 
-static void service_runtime_diagnostic_tx_outcomes() {
-  const csm::board::can::BuiltinFdcanSnapshot current =
-      builtin_fdcan_diagnostics.snapshot();
-  const uint32_t now_us = micros();
-  for (RuntimeDiagnosticPendingTx& pending : runtime_diagnostic_pending_tx) {
-    if (!pending.active) continue;
-
-    if (!pending.outcome_captured) {
-      csm::board::can::BuiltinFdcanSnapshot outcome = current;
-      outcome.latest_tx_request_mask = pending.request_mask;
-      bool final = pending.write_result <= 0 || pending.request_mask == 0 ||
-                   (pending.request_mask & ~0x7u) != 0 || !outcome.valid;
-      if (outcome.valid && pending.request_mask != 0 &&
-          (pending.request_mask & ~0x7u) == 0) {
-        const uint32_t mask = pending.request_mask;
-        const bool occurred = (outcome.txbto & mask) != 0;
-        const bool cancelled = (outcome.txbcf & mask) != 0;
-        const bool still_pending = (outcome.txbrp & mask) != 0;
-        final = occurred || cancelled || !still_pending ||
-                static_cast<uint32_t>(now_us - pending.started_us) >=
-                    BOARD_RUNTIME_DIAGNOSTIC_TX_OUTCOME_TIMEOUT_US;
-      }
-      if (!final) continue;
-
-      runtime_diagnostic_make_payload(
-          pending.outcome_payload, csm::kRuntimeDiagnosticPhaseTxOutcome,
-          pending.attempt_sequence, pending.can_id_flags,
-          pending.write_duration_us, pending.write_result, false,
-          pending.before, outcome);
-      runtime_diagnostic_commit_payload(pending.outcome_payload);
-      pending.outcome_captured = true;
-    }
-
-    if (emit_record(RecordType::RuntimeDiagnostic, pending.outcome_payload,
-                    sizeof(pending.outcome_payload), UplinkPriority::Diagnostic)) {
-      pending.active = false;
-      pending.outcome_captured = false;
-    }
-  }
-}
-
 static void service_runtime_diagnostics() {
   service_runtime_diagnostic_recovery_replay();
   service_runtime_diagnostic_recovered();
   service_runtime_diagnostic_boot_history();
-  service_runtime_diagnostic_tx_outcomes();
 
   const uint32_t now_ms = millis();
   if (static_cast<uint32_t>(now_ms - runtime_diagnostic_last_periodic_ms) <
@@ -2122,6 +2061,99 @@ static void service_runtime_diagnostics() {
 }
 #endif
 
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_REMOTE_CONTROL)
+static csm::board::can::BuiltinCanTxDriverResult builtin_can_driver_write(
+    void*, const csm::board::can::BuiltinCanTxFrame& frame,
+    uint32_t submission_sequence) {
+  const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
+  const uint32_t can_id =
+      frame.can_id_flags & (extended ? 0x1FFFFFFFu : 0x7FFu);
+  const mbed::CANMessage message(
+      can_id, frame.data, frame.dlc, CANData,
+      extended ? CANExtended : CANStandard);
+  latch_passive_violation(kPassiveViolationCanTxCalled);
+  const uint32_t write_started_us = micros();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_before_can_write(frame.can_id_flags);
+#endif
+  csm::board::can::BuiltinCanTxDriverResult write_result;
+  write_result.driver_result = builtin_can_ref().write(message);
+  write_result.driver_sequence = submission_sequence;
+  write_result.write_duration_us = micros() - write_started_us;
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_after_can_write(write_started_us,
+                                     write_result.driver_result);
+#endif
+  if (write_result.driver_result > 0) {
+    const csm::board::can::BuiltinFdcanSnapshot snapshot =
+        builtin_fdcan_diagnostics.snapshot();
+    if (snapshot.valid) {
+      write_result.request_mask = snapshot.latest_tx_request_mask;
+    }
+  }
+  return write_result;
+}
+
+static csm::board::can::BuiltinCanTxCancelResult builtin_can_driver_cancel(
+    void*, uint32_t request_mask) {
+  csm::board::can::BuiltinCanTxCancelResult result;
+  result.driver_result =
+      builtin_fdcan_diagnostics.abortTxRequest(request_mask);
+  result.request_accepted =
+      result.driver_result == static_cast<int32_t>(HAL_OK);
+  return result;
+}
+
+static void service_builtin_can_tx_completions() {
+  if (!builtin_can_tx_owner.configured()) return;
+  // Capture time before the register snapshot. A completion that occurs while
+  // the snapshot is read must not be classified against a later deadline.
+  const uint32_t now_us = micros();
+  const csm::board::can::BuiltinFdcanSnapshot snapshot =
+      builtin_fdcan_diagnostics.snapshot();
+  builtin_can_tx_owner.serviceCompletions(
+      now_us, snapshot.valid, snapshot.txbrp, snapshot.txbto,
+      snapshot.txbcf);
+}
+
+static csm::board::can::BuiltinCanTxOutcome submit_builtin_can_frame(
+    uint8_t bus, uint32_t can_id_flags, uint8_t dlc, const uint8_t* data,
+    csm::board::can::BuiltinCanTxOrigin origin,
+    const csm::board::can::CanBackendState& backend) {
+  service_builtin_can_tx_completions();
+  csm::board::can::BuiltinCanTxFrame frame;
+  frame.bus = bus;
+  frame.can_id_flags = can_id_flags;
+  frame.dlc = dlc;
+  frame.origin = origin;
+  if (data != nullptr && dlc <= sizeof(frame.data)) {
+    memcpy(frame.data, data, dlc);
+  }
+  csm::board::can::CanBackendState effective_backend = backend;
+  effective_backend.ready =
+      effective_backend.ready && !builtin_can_tx_inhibit_latched;
+  return builtin_can_tx_owner.submit(frame, effective_backend, micros());
+}
+#endif
+
+#if BOARD_ENABLE_FEEDER_UART
+static bool feeder_source_operational(uint64_t now_mono_us) {
+  if (!feeder_uart_ready || !feeder_session_announced ||
+      !feeder_uart_ingress.initialized() ||
+      feeder_uart_ingress.stale(now_mono_us) ||
+      !feeder_uart_ingress.statusFresh(now_mono_us)) {
+    return false;
+  }
+  const FeederUartIngressStats ingress =
+      feeder_uart_ingress.ingressStats();
+  return ingress.dma_cursor_faults == 0U &&
+         csm::board::feeder::feederSourceHealthy(
+             feeder_uart_ingress.feederStatus());
+}
+#endif
+
 #if BOARD_ENABLE_STATUS_LED
 static void init_status_led() {
   status_led.begin();
@@ -2136,12 +2168,11 @@ static bool required_can_lanes_ok() {
 #endif
 #if BOARD_ENABLE_FEEDER_UART
   any_required = true;
-  all_ready = all_ready && feeder_uart_ready &&
-              feeder_session_announced && !feeder_stale_latched;
+  all_ready = all_ready && feeder_source_operational(mono64_us());
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   any_required = true;
-  all_ready = all_ready && builtin_can_tx_ok;
+  all_ready = all_ready && builtin_can_runtime_ready_for_health();
 #endif
   return any_required && all_ready;
 }
@@ -2678,21 +2709,20 @@ static void emit_capability() {
   config.bus_transceiver_reset_safe[1] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
 #endif
 #elif BOARD_HW_PROFILE_MID_FEEDER_UART
+  const bool feeder_operational =
+      feeder_source_operational(mono64_us());
   config.buses[0] = make_capability_bus_descriptor(
       BOARD_FEEDER_CAN_BUS_ID,
       0,
       5,  // RP2040 feeder over internal UART
       4,  // MCP25625 integrated transceiver/controller
-      (feeder_uart_ready && feeder_session_announced &&
-       !feeder_stale_latched) ? 1 : 0,
+      feeder_operational ? 1 : 0,
       0,
       0,
       0,
       0);
   config.bus_mode[0] = kBusModeNormal;
-  config.bus_ack_capability[0] =
-      (feeder_uart_ready && feeder_session_announced &&
-       !feeder_stale_latched) ? 1 : 0;
+  config.bus_ack_capability[0] = feeder_operational ? 1 : 0;
   config.bus_error_frame_capability[0] = config.bus_ack_capability[0];
   config.bus_transceiver_reset_safe[0] = 1;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
@@ -2887,11 +2917,16 @@ static bool accept_feeder_can_frame(void*, const FeederCanFrame& frame) {
   return can_queue_push(item);
 }
 
-static void emit_feeder_changed_event(uint32_t current, uint32_t previous,
+static bool emit_feeder_changed_event(uint32_t current, uint32_t* observed,
                                       BoardEventCode code, uint16_t detail) {
-  if (current != previous) {
-    emit_board_event(code, detail, current);
+  if (observed == nullptr || current == *observed) {
+    return true;
   }
+  if (!emit_board_event(code, detail, current)) {
+    return false;
+  }
+  *observed = current;
+  return true;
 }
 
 static void service_feeder_link_events(uint64_t now_mono_us) {
@@ -2902,96 +2937,126 @@ static void service_feeder_link_events(uint64_t now_mono_us) {
       (!feeder_session_announced ||
        wire.current_boot_id != feeder_last_wire_stats.current_boot_id)) {
     const bool first = !feeder_session_announced;
+    if (!emit_board_event(first ? EventFeederLinkStarted
+                                : EventFeederSessionChanged,
+                          csm::board::feeder::kFeederWireVersion,
+                          wire.current_boot_id)) {
+      // The session anchor must precede all evidence from the new epoch.
+      return;
+    }
     feeder_session_announced = true;
     feeder_stale_latched = false;
-    if (!first) {
-      feeder_last_source_status = {};
-    }
-    emit_board_event(first ? EventFeederLinkStarted
-                           : EventFeederSessionChanged,
-                     csm::board::feeder::kFeederWireVersion,
-                     wire.current_boot_id);
+    feeder_stale_event_pending = false;
+    feeder_recovery_event_pending = false;
+    feeder_last_wire_stats.current_boot_id = wire.current_boot_id;
+    feeder_last_source_status = {};
+    feeder_operational_last =
+        feeder_source_operational(now_mono_us);
     emit_capability();
     last_capability_ms = millis();
   }
 
   emit_feeder_changed_event(
       wire.packet_sequence_gaps,
-      feeder_last_wire_stats.packet_sequence_gaps,
+      &feeder_last_wire_stats.packet_sequence_gaps,
       EventFeederSequenceGap, 1);
   emit_feeder_changed_event(
       wire.frame_sequence_gaps,
-      feeder_last_wire_stats.frame_sequence_gaps,
+      &feeder_last_wire_stats.frame_sequence_gaps,
       EventFeederSequenceGap, 2);
   emit_feeder_changed_event(
-      wire.crc_failures, feeder_last_wire_stats.crc_failures,
+      wire.packet_duplicates_or_reorders,
+      &feeder_last_wire_stats.packet_duplicates_or_reorders,
+      EventFeederSequenceGap, 3);
+  emit_feeder_changed_event(
+      wire.frame_duplicates_or_reorders,
+      &feeder_last_wire_stats.frame_duplicates_or_reorders,
+      EventFeederSequenceGap, 4);
+  emit_feeder_changed_event(
+      wire.crc_failures, &feeder_last_wire_stats.crc_failures,
       EventFeederTransportError, 1);
   const uint32_t parser_failures =
       wire.cobs_failures + wire.contract_failures + wire.length_failures +
       wire.encoded_overflow;
-  const uint32_t previous_parser_failures =
-      feeder_last_wire_stats.cobs_failures +
-      feeder_last_wire_stats.contract_failures +
-      feeder_last_wire_stats.length_failures +
-      feeder_last_wire_stats.encoded_overflow;
   emit_feeder_changed_event(
-      parser_failures, previous_parser_failures,
+      parser_failures, &feeder_last_parser_failures,
       EventFeederTransportError, 2);
   emit_feeder_changed_event(
       ingress.dma_overrun_bytes,
-      feeder_last_ingress_stats.dma_overrun_bytes,
+      &feeder_last_ingress_stats.dma_overrun_bytes,
       EventFeederTransportError, 3);
   emit_feeder_changed_event(
       ingress.uart_error_events,
-      feeder_last_ingress_stats.uart_error_events,
+      &feeder_last_ingress_stats.uart_error_events,
       EventFeederTransportError, 4);
   emit_feeder_changed_event(
       ingress.dma_transfer_errors,
-      feeder_last_ingress_stats.dma_transfer_errors,
+      &feeder_last_ingress_stats.dma_transfer_errors,
       EventFeederTransportError, 5);
+  emit_feeder_changed_event(
+      wire.callback_rejects,
+      &feeder_last_wire_stats.callback_rejects,
+      EventFeederTransportError, 7);
+  emit_feeder_changed_event(
+      ingress.dma_cursor_faults,
+      &feeder_last_ingress_stats.dma_cursor_faults,
+      EventFeederTransportError, 8);
 
   if (feeder_uart_ingress.statusValid()) {
     const FeederStatus source = feeder_uart_ingress.feederStatus();
     emit_feeder_changed_event(
-        source.ring_overflow, feeder_last_source_status.ring_overflow,
+        source.ring_overflow, &feeder_last_source_status.ring_overflow,
         EventFeederSourceFault, 1);
     emit_feeder_changed_event(
         source.mcp_overflow_events,
-        feeder_last_source_status.mcp_overflow_events,
+        &feeder_last_source_status.mcp_overflow_events,
         EventFeederSourceFault, 2);
     emit_feeder_changed_event(
         source.mcp_error_irq_events,
-        feeder_last_source_status.mcp_error_irq_events,
+        &feeder_last_source_status.mcp_error_irq_events,
         EventFeederSourceFault, 3);
     emit_feeder_changed_event(
         source.mcp_bus_off_events,
-        feeder_last_source_status.mcp_bus_off_events,
+        &feeder_last_source_status.mcp_bus_off_events,
         EventFeederSourceFault, 4);
     emit_feeder_changed_event(
-        source.eflg_or, feeder_last_source_status.eflg_or,
+        source.eflg_or, &feeder_last_source_status.eflg_or,
         EventFeederSourceFault, 5);
-    feeder_last_source_status = source;
   }
 
   if (feeder_session_announced) {
     const bool stale = feeder_uart_ingress.stale(now_mono_us);
     if (stale && !feeder_stale_latched) {
-      feeder_stale_latched = true;
-      ++feeder_stale_total;
-      emit_board_event(EventFeederLinkStale, 1, feeder_stale_total);
-      emit_capability();
-      last_capability_ms = millis();
+      feeder_stale_event_pending = true;
     } else if (!stale && feeder_stale_latched) {
-      feeder_stale_latched = false;
-      emit_board_event(EventFeederLinkStarted, 2,
-                       wire.current_boot_id);
-      emit_capability();
-      last_capability_ms = millis();
+      feeder_recovery_event_pending = true;
+    }
+    if (feeder_stale_event_pending && !feeder_stale_latched) {
+      const uint32_t next_stale_total = feeder_stale_total + 1U;
+      if (emit_board_event(EventFeederLinkStale, 1, next_stale_total)) {
+        feeder_stale_event_pending = false;
+        feeder_stale_latched = true;
+        feeder_stale_total = next_stale_total;
+        feeder_recovery_event_pending = !stale;
+      }
+    }
+    if (feeder_recovery_event_pending && feeder_stale_latched) {
+      if (emit_board_event(EventFeederLinkStarted, 2,
+                           wire.current_boot_id)) {
+        feeder_recovery_event_pending = false;
+        feeder_stale_latched = false;
+        feeder_stale_event_pending = stale;
+      }
     }
   }
 
-  feeder_last_wire_stats = wire;
-  feeder_last_ingress_stats = ingress;
+  const bool feeder_operational =
+      feeder_source_operational(now_mono_us);
+  if (feeder_operational != feeder_operational_last) {
+    feeder_operational_last = feeder_operational;
+    emit_capability();
+    last_capability_ms = millis();
+  }
 }
 
 static void service_feeder_uart_to_queue(size_t byte_budget) {
@@ -3225,6 +3290,66 @@ static void __attribute__((unused)) emit_can_tx_raw(uint8_t bus, uint32_t can_id
   emit_record(RecordType::CanTxRaw, payload, sizeof(payload));
 }
 
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_REMOTE_CONTROL)
+static void increment_builtin_can_counter(uint32_t* counter) {
+  if (counter != nullptr && *counter != UINT32_MAX) ++(*counter);
+}
+
+static void builtin_can_tx_completion(
+    void*, const csm::board::can::BuiltinCanTxCompletion& completion) {
+  const bool first_failure =
+      !completion.transmitted() &&
+      !completion.failure_previously_reported;
+  if (completion.transmitted()) {
+    increment_builtin_can_counter(&builtin_can_tx_total);
+    emit_can_tx_raw(completion.frame.bus, completion.frame.can_id_flags,
+                    completion.frame.dlc, completion.frame.data,
+                    builtin_can_tx_total, builtin_can_tx_failed_total);
+  } else if (first_failure) {
+    increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    const uint16_t detail =
+        (completion.terminal ? 0u : 0x8000u) |
+        (static_cast<uint16_t>(completion.code) << 8u) |
+        static_cast<uint16_t>(completion.request_mask & 0xFFu);
+    emit_board_event(EventBuiltinCanTxFailed, detail,
+                     builtin_can_tx_failed_total);
+  }
+
+  if (first_failure) {
+    builtin_can_tx_inhibit_latched = true;
+  }
+#if BOARD_ENABLE_REMOTE_CONTROL
+  if (completion.frame.origin ==
+      csm::board::can::BuiltinCanTxOrigin::RemoteControl) {
+    if (completion.transmitted()) {
+      remote_control_runtime.noteCanTxCompletion(millis(), true);
+    } else if (first_failure) {
+      remote_control_runtime.noteCanTxCompletion(millis(), false);
+    }
+  }
+#endif
+
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  // Runtime diagnostics observe the owner's terminal outcome directly. They
+  // do not retain a second pending-TX journal or decide completion.
+  csm::board::can::BuiltinFdcanSnapshot outcome =
+      builtin_fdcan_diagnostics.snapshot();
+  outcome.latest_tx_request_mask = completion.request_mask;
+  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
+  runtime_diagnostic_make_payload(
+      payload, csm::kRuntimeDiagnosticPhaseTxOutcome,
+      completion.submission_sequence, completion.frame.can_id_flags,
+      completion.write_duration_us, completion.driver_result, false, outcome,
+      outcome);
+  runtime_diagnostic_commit_payload(payload);
+  emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
+              UplinkPriority::Diagnostic);
+#endif
+}
+#endif
+
 #if BOARD_ENABLE_REMOTE_CONTROL
 static void emit_remote_control_state() {
   const auto& status = remote_control_runtime.status();
@@ -3379,13 +3504,13 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[47] |= kTestMode ? (1u << 0) : 0;
   payload[47] |= can_backend_ok ? (1u << 1) : 0;
 #if BOARD_ENABLE_FEEDER_UART
-  payload[47] |= (feeder_uart_ready && feeder_session_announced &&
-                  !feeder_stale_latched)
+  payload[47] |= feeder_source_operational(mono64_us())
                      ? (1u << 1)
                      : 0;
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-  payload[47] |= builtin_can_tx_ok ? (1u << 2) : 0;
+  payload[47] |=
+      builtin_can_runtime_ready_for_health() ? (1u << 2) : 0;
 #endif
 #if BOARD_ENABLE_MCP2515
   payload[47] |= (BOARD_CAN_IRQ_MODE != 0) ? (1u << 3) : 0;
@@ -3435,13 +3560,13 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   backend_flags |= can_backend_ok ? (1u << 0) : 0;
 #if BOARD_ENABLE_FEEDER_UART
   backend_flags |=
-      (feeder_uart_ready && feeder_session_announced &&
-       !feeder_stale_latched)
+      feeder_source_operational(mono64_us())
           ? (1u << 0)
           : 0;
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
-  backend_flags |= builtin_can_tx_ok ? (1u << 1) : 0;
+  backend_flags |=
+      builtin_can_runtime_ready_for_health() ? (1u << 1) : 0;
 #endif
   wr_u32_le(&payload[116], backend_flags);
   wr_u32_le(&payload[120], host_heartbeat_total);
@@ -4077,11 +4202,7 @@ static void update_safety_state() {
 #if BOARD_ENABLE_REMOTE_CONTROL
 static void service_remote_control() {
   if (!remote_control_runtime_ok) return;
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  // Capture a completed request before Mbed can reuse the same three-element
-  // TX FIFO slot for the next remote frame.
-  service_runtime_diagnostic_tx_outcomes();
-#endif
+  service_builtin_can_tx_completions();
 
   const uint32_t now_ms = millis();
   const csm::board::SafetyInputs safety_inputs = read_safety_inputs();
@@ -4105,8 +4226,11 @@ static void service_remote_control() {
   inputs.local_tx_inhibit_latched = true;
   inputs.autonomy_state = csm::board::authority::AutonomyAuthorityState::Unknown;
 #endif
+  inputs.local_tx_inhibit_latched =
+      inputs.local_tx_inhibit_latched || builtin_can_tx_inhibit_latched;
   inputs.backend_state.ready =
-      builtin_can_tx_ok && (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
+      builtin_can_tx_ok && !builtin_can_tx_inhibit_latched &&
+      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
   if (builtin_can_tx_ok) {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
     const csm::board::can::BuiltinFdcanSnapshot fdcan_state =
@@ -4136,33 +4260,18 @@ static void service_remote_control() {
 #endif
     if (!output.frame_ready) break;
     const auto& frame = output.frame;
-    const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
-    const bool rtr = (frame.can_id_flags & (1u << 30)) != 0;
-    const uint32_t can_id = frame.can_id_flags &
-        (extended ? 0x1FFFFFFFu : 0x7FFu);
-    const mbed::CANMessage message(
-        can_id, frame.data, frame.dlc,
-        rtr ? CANRemote : CANData,
-        extended ? CANExtended : CANStandard);
-    latch_passive_violation(kPassiveViolationCanTxCalled);
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-    runtime_diagnostic_before_can_write(frame.can_id_flags);
-    const uint32_t runtime_diagnostic_write_started_us = micros();
-#endif
-    const int write_result = builtin_can_ref().write(message);
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-    runtime_diagnostic_after_can_write(runtime_diagnostic_write_started_us,
-                                       write_result);
-#endif
-    const bool success = write_result > 0;
-    if (success) {
-      ++builtin_can_tx_total;
-      emit_can_tx_raw(frame.bus, frame.can_id_flags, frame.dlc, frame.data,
-                      builtin_can_tx_total, builtin_can_tx_failed_total);
-    } else {
-      ++builtin_can_tx_failed_total;
+    const csm::board::can::BuiltinCanTxOutcome tx_outcome =
+        submit_builtin_can_frame(frame.bus, frame.can_id_flags, frame.dlc,
+                                 frame.data,
+                                 csm::board::can::BuiltinCanTxOrigin::
+                                     RemoteControl,
+                                 inputs.backend_state);
+    const bool success = tx_outcome.fifoEnqueueAccepted();
+    if (!success) {
+      increment_builtin_can_counter(&builtin_can_tx_failed_total);
+      builtin_can_tx_inhibit_latched = true;
     }
-    remote_control_runtime.noteCanTxResult(now_ms, success);
+    remote_control_runtime.noteCanTxEnqueueResult(now_ms, success);
     if (!success) break;
   }
 
@@ -4614,6 +4723,10 @@ static void pump_can_rx_to_queue(int budget) {
 
 static bool __attribute__((unused)) init_builtin_can_lane() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
+  if (!builtin_fdcan_diagnostics.valid()) {
+    emit_board_event(EventBuiltinCanBeginFailed, 1, 1);
+    return false;
+  }
   if (builtin_can_ref().frequency(500000) != 1) {
     emit_board_event(EventBuiltinCanBeginFailed, 0, 1);
     return false;
@@ -5123,7 +5236,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
-  if (!builtin_can_tx_ok) {
+  if (!builtin_can_tx_ok || builtin_can_tx_inhibit_latched) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
@@ -5131,24 +5244,29 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
-  const mbed::CANMessage msg(can_id, data, dlc, CANData, extended ? CANExtended : CANStandard);
-  latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = builtin_can_ref().write(msg);
-  if (rc <= 0) {
-    builtin_can_tx_failed_total++;
+  csm::board::can::CanBackendState backend;
+  backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
+  const csm::board::can::BuiltinCanTxOutcome tx_outcome =
+      submit_builtin_can_frame(
+          bus, can_id_flags, dlc, data,
+          csm::board::can::BuiltinCanTxOrigin::HostControl, backend);
+  if (!tx_outcome.fifoEnqueueAccepted()) {
+    increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    builtin_can_tx_inhibit_latched = true;
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonCanWriteFailed, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
-    emit_board_event(EventBuiltinCanTxFailed, static_cast<uint16_t>(-rc), builtin_can_tx_failed_total);
+    emit_board_event(
+        EventBuiltinCanTxFailed,
+        static_cast<uint16_t>(-tx_outcome.driver_result),
+        builtin_can_tx_failed_total);
     return;
   }
 
-  builtin_can_tx_total++;
   host_can_tx_accepted_total++;
   emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
                    host_can_tx_accepted_total);
   safety_supervisor.noteControlTx(millis());
-  emit_can_tx_raw(bus, can_id_flags, dlc, data, builtin_can_tx_total, builtin_can_tx_failed_total);
 #else
   host_can_tx_rejected_total++;
   emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
@@ -5339,6 +5457,11 @@ static void service_host_downlink(int budget) {
   const uint32_t wifi_epoch = wifi_tcp_sink.counters().connection_epoch;
   if (wifi_epoch != last_wifi_epoch) {
     host_downlink_parser.reset();
+    // A transport epoch is also a control-authority epoch. A disconnected or
+    // newly accepted Wi-Fi client must establish a fresh heartbeat and arm;
+    // it cannot renew the prior client's lease.
+    safety_supervisor.invalidateHostSession(millis());
+    safety_state = safety_supervisor.state();
     last_wifi_epoch = wifi_epoch;
   }
   Stream* stream = wifi_tcp_sink.downlinkStream();
@@ -5379,20 +5502,27 @@ static void service_builtin_can_tx_test() {
     0x07,
   };
 
-  const mbed::CANMessage msg(BOARD_BUILTIN_CAN_TX_TEST_ID, data, sizeof(data), CANData, CANStandard);
-  latch_passive_violation(kPassiveViolationCanTxCalled);
-  const int rc = builtin_can_ref().write(msg);
-  if (rc <= 0) {
-    builtin_can_tx_failed_total++;
+  csm::board::can::CanBackendState backend;
+  backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
+  const csm::board::can::BuiltinCanTxOutcome tx_outcome =
+      submit_builtin_can_frame(BOARD_BUILTIN_CAN_BUS_ID,
+                               BOARD_BUILTIN_CAN_TX_TEST_ID,
+                               sizeof(data), data,
+                               csm::board::can::BuiltinCanTxOrigin::
+                                   BuiltinTest,
+                               backend);
+  if (!tx_outcome.fifoEnqueueAccepted()) {
+    increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    builtin_can_tx_inhibit_latched = true;
     if ((builtin_can_tx_failed_total & 0x0F) == 1) {
-      emit_board_event(EventBuiltinCanTxFailed, static_cast<uint16_t>(-rc), builtin_can_tx_failed_total);
+      emit_board_event(
+          EventBuiltinCanTxFailed,
+          static_cast<uint16_t>(-tx_outcome.driver_result),
+          builtin_can_tx_failed_total);
     }
     return;
   }
 
-  builtin_can_tx_total++;
-  emit_can_tx_raw(BOARD_BUILTIN_CAN_BUS_ID, BOARD_BUILTIN_CAN_TX_TEST_ID, sizeof(data), data,
-                  builtin_can_tx_total, builtin_can_tx_failed_total);
 }
 #endif
 
@@ -5612,9 +5742,9 @@ void setup() {
   wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
   wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
   wifi_sink_config.channel = BOARD_WIFI_AP_CHANNEL;
-  wifi_sink_config.drain_time_budget_us = BOARD_SERIAL_TX_DRAIN_TIME_BUDGET_US;
-  wifi_sink_config.max_writes_per_pump = BOARD_SERIAL_TX_MAX_WRITES_PER_PUMP;
-  wifi_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
+  wifi_sink_config.drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
+  wifi_sink_config.max_writes_per_pump = BOARD_WIFI_TX_MAX_WRITES_PER_PUMP;
+  wifi_sink_config.max_bytes_per_pump = BOARD_WIFI_TX_MAX_BYTES_PER_PUMP;
   wifi_sink_config.startup_attempt_limit = 1;
   wifi_sink_config.call_persistence.context = &wifi_call_latch;
   wifi_sink_config.call_persistence.enter = persist_wifi_call_enter;
@@ -5653,6 +5783,8 @@ void setup() {
   FeederUartIngressConfig feeder_config;
   feeder_config.baud = BOARD_FEEDER_UART_BAUD;
   feeder_config.stale_timeout_ms = BOARD_FEEDER_UART_STALE_MS;
+  feeder_config.service_time_budget_us =
+      BOARD_FEEDER_UART_SERVICE_TIME_BUDGET_US;
   feeder_uart_ready = feeder_uart_ingress.begin(feeder_config);
   if (!feeder_uart_ready) {
     emit_board_event(EventFeederTransportError, 6, 1);
@@ -5710,7 +5842,9 @@ void setup() {
       csm::board::diagnostics::BootProgress::BuiltinCanInitEntered);
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructEnter);
-  construct_builtin_can_for_runtime_diagnostics();
+#endif
+  construct_builtin_can();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructReturn);
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcan500kEnter);
 #endif
@@ -5725,6 +5859,19 @@ void setup() {
   record_boot_progress(
       csm::board::diagnostics::BootProgress::BuiltinCanInitReturned,
       builtin_can_tx_ok ? 1u : 0u);
+#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+    BOARD_ENABLE_REMOTE_CONTROL
+  builtin_can_tx_inhibit_latched = false;
+  if (!builtin_can_tx_owner.begin(
+          BOARD_BUILTIN_CAN_BUS_ID, builtin_can_driver_write, nullptr,
+          builtin_can_driver_cancel, nullptr,
+          BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US,
+          builtin_can_tx_completion, nullptr)) {
+    builtin_can_tx_inhibit_latched = true;
+    builtin_can_tx_ok = false;
+    emit_board_event(EventBuiltinCanBeginFailed, 2, 1);
+  }
+#endif
 #endif
 
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -5807,6 +5954,23 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_REMOTE_CONTROL)
+  // This poll is outside every profile-specific branch and therefore runs
+  // before passive-product early returns as well as RC/host/test services.
+  service_builtin_can_tx_completions();
+#endif
+#if BOARD_ENABLE_REMOTE_CONTROL
+  // The first bounded control poll precedes feeder, host, publisher, and
+  // Wi-Fi work. Later bounded polls reduce release latency without changing
+  // the runtime's absolute timeline or producing catch-up bursts.
+  update_safety_state();
+  service_remote_control();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  service_runtime_diagnostics();
+#endif
+#endif
 #if BOARD_ENABLE_FEEDER_UART
   service_feeder_uart_to_queue(BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET);
 #endif
@@ -5960,9 +6124,8 @@ void loop() {
   kick_runtime_watchdog();
   record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_WIFI_UPLINK
-  // The socket worker is deliberately below the safety/control main thread.
-  // Give it one bounded slice without allowing a Wi-Fi driver busy loop to
-  // starve RC, CAN, USB, or the main-loop watchdog heartbeat.
-  delay(BOARD_WIFI_MAIN_IDLE_SLICE_MS);
+  // Yield without imposing a fixed control-loop delay. The lower-priority
+  // socket worker remains independently bounded by its own pump contract.
+  rtos::ThisThread::yield();
 #endif
 }

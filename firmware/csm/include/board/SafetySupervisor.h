@@ -32,6 +32,9 @@ class SafetySupervisor {
   uint8_t arm(uint32_t now_ms, uint16_t lease_ms, bool control_backend_ready);
   uint8_t renewLease(uint32_t now_ms, uint16_t lease_ms);
   void disarm(uint32_t now_ms);
+  // A host transport epoch is an authority boundary. The next client must
+  // establish a fresh heartbeat and arm; it cannot inherit either lease.
+  void invalidateHostSession(uint32_t now_ms);
   void clearFaultLockout(uint32_t now_ms);
   void setFaultLockout(uint32_t now_ms);
   void noteControlTx(uint32_t now_ms);

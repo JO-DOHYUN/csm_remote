@@ -70,8 +70,13 @@ class WifiWorkerMailbox {
 
   void requestAbort();
   void requestDisconnect();
+  bool acknowledgeQueuePressureDisconnect(uint32_t handled_sequence);
+  void markQueuePressureDisconnectHandled(uint32_t handled_sequence);
   uint32_t abortRequestSequence() const;
   uint32_t disconnectRequestSequence() const;
+  uint32_t queuePressureDisconnectRequestSequence() const;
+  uint32_t queuePressureDisconnectHandledSequence() const;
+  bool queuePressureDisconnectLatched() const;
 
   WifiMailboxQueueSnapshot queueSnapshot() const;
 
@@ -95,14 +100,13 @@ class WifiWorkerMailbox {
   std::atomic<bool> producer_active_{false};
   std::atomic<bool> abort_in_progress_{false};
   std::atomic<uint32_t> queue_generation_{0};
-  std::atomic<uint32_t> queued_bytes_{0};
-  std::atomic<uint32_t> queue_high_water_bytes_{0};
   std::atomic<uint32_t> first_queued_ms_{0};
-  std::atomic<uint32_t> queued_records_{0};
-  std::atomic<uint32_t> queue_high_water_records_{0};
   std::atomic<uint32_t> urgent_records_{0};
   std::atomic<uint32_t> abort_request_sequence_{0};
   std::atomic<uint32_t> disconnect_request_sequence_{0};
+  std::atomic<uint32_t> queue_pressure_disconnect_request_sequence_{0};
+  std::atomic<uint32_t> queue_pressure_disconnect_handled_sequence_{0};
+  std::atomic<bool> queue_pressure_disconnect_latched_{false};
 
   static_assert((BOARD_WIFI_RX_MAILBOX_BYTES & (BOARD_WIFI_RX_MAILBOX_BYTES - 1u)) == 0,
                 "Wi-Fi RX mailbox capacity must be a power of two");
@@ -122,7 +126,7 @@ class WifiWorkerMailbox {
   mutable std::atomic_flag state_lock_ = ATOMIC_FLAG_INIT;
   WifiWorkerStateSnapshot state_;
 
-  void updateQueueSnapshot();
+  void requestQueuePressureDisconnect();
 };
 
 }  // namespace csm::board::uplink

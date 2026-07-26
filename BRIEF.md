@@ -1,6 +1,33 @@
 # BRIEF
 
-Updated: 2026-07-24
+Updated: 2026-07-26
+
+## 2026-07-26 deterministic executive closure and 100 fps combined gate
+
+- Built-in CAN TX now has one owner and reports `CAN_TX_RAW` only after FDCAN
+  hardware completion. Timeout/cancel/late completion and TX inhibit have
+  submission-correlated host coverage.
+- Drive/steering releases use an absolute-phase, no-catch-up schedule. Source
+  valid-to-stale transitions prepare the exact drive stop frame in the same
+  service call.
+- Feeder boot/session, packet/frame ordering, DMA cursor ambiguity, readiness,
+  and fault evidence now fail closed. The normal feeder firmware remained at
+  3,000/3,000 frames in the 100 fps full-standard-ID run with zero sequence,
+  payload, MCP, ring, or UART failure.
+- The final MDPS bench build passed all host contracts/guards, used
+  448,408/523,624 B RAM and 372,608/786,432 B flash, and was uploaded to COM7.
+- The simultaneous 30 s CSM gate passed one boot session, CRC and all
+  typed/segment/capture continuity, feeder/CAN/USB loss, and critical-fault
+  checks. Wi-Fi did not pass: the current AP/TCP path drained about 13 kB/s,
+  below the mixed 200 Hz `CAN_TX_RAW` plus 100 fps RX evidence rate, and the
+  508-normal-descriptor boundary isolated the client. A separate 1 ms,
+  four-write/4 KiB bounded Wi-Fi pump improved delivered data from 52,892 B to
+  282,923 B before isolation but did not remove the steady deficit.
+- The queue and pressure-close policy are intentionally unchanged. The next
+  gate is a direct socket-throughput characterization followed by either a
+  proven worker/driver correction or a deliberate evidence encoding/transport
+  decision. 2,000 fps combined HIL, fault injection, and soak are blocked on
+  that result; no product Wi-Fi completion is claimed.
 
 ## 2026-07-24 RP2040 CAN feeder ingress gate
 
@@ -128,7 +155,7 @@ Updated: 2026-07-24
 - typed v1 frame은 유지하면서 `CanonicalPublisher`가 fanout 전에 `publish_seq64`를 배정하고 `seq u16`에 하위 16비트를 기록한다. `STREAM_SESSION`이 full identity를 고정한다.
 - `TypedRecords.h`가 CAN raw/segment와 `BOARD_HEALTH v13` field offset constants를
   제공하며 v13은 v12의 472-byte prefix를 그대로 보존한다.
-- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 48-record queue, 4-record critical reserve, 2-record/75 ms bounded batching을 사용한다.
+- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 48 KiB byte pool, 512 descriptors, 4-record/2 KiB critical reserve와 2-record/75 ms bounded batching을 사용한다.
 - Wi-Fi observer env는 Arduino Mbed Wi-Fi AP direct와 TCP server `192.168.4.1:3333`, client 1개를 사용한다.
 - host fanout contract test, passive M7 build, Wi-Fi observer M7 build, M4 frontend proof/probe와 passive symbol guard가 통과했다.
 - 2026-07-15 D-016 Android diagnostics binding 변경 후 host fanout contract와 passive/Wi-Fi observer M7 build를 다시 통과했다.
@@ -157,9 +184,10 @@ Updated: 2026-07-24
 3. 재발 시 bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
 4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
 5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
-6. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`를 구현하고 Kvaser에서
-   ID/payload/주기/ACK를 대조한다. `0x007` mapper는 bench 전용이다.
-7. Windows USB + Android Wi-Fi + RC + dual CAN 동시 HIL, fault injection,
+6. FDCAN completion-correlated `CAN_TX_RAW` host contract는 완료했다. 실제
+   Kvaser ID/payload/주기/ACK와 late/cancel failure HIL은 남아 있다.
+7. Wi-Fi raw TCP capacity gate를 먼저 닫은 뒤 Windows USB + Android Wi-Fi +
+   RC + dual CAN 동시 HIL, fault injection,
    blocked-client/reconnect와 장시간 soak를 수행한다.
 
 Android 전용 wire 형식이나 sink별 별도 encode 경로는 만들지 않는다.

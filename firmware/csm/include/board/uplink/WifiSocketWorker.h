@@ -51,6 +51,7 @@ class WifiSocketWorker final {
   bool pending_consume_ = false;
   uint32_t handled_abort_sequence_ = 0;
   uint32_t handled_disconnect_sequence_ = 0;
+  uint32_t handled_queue_pressure_disconnect_sequence_ = 0;
   WifiTxProgressTracker tx_progress_;
   uint32_t last_accept_poll_ms_ = 0;
   uint32_t last_stack_sample_ms_ = 0;
@@ -69,7 +70,7 @@ class WifiSocketWorker final {
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);
   void serviceReceive(uint32_t now_ms);
-  void serviceTransmit(uint32_t now_ms);
+  WifiTransmitPumpResult serviceTransmit(uint32_t now_ms);
   bool applyPendingConsume();
   void closeClient(WifiCloseReason reason);
   void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);

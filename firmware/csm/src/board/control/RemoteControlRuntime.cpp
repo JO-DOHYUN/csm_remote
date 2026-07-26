@@ -6,7 +6,16 @@ namespace csm::board::control {
 namespace {
 
 bool timeReached(uint32_t now_ms, uint32_t deadline_ms) {
-  return static_cast<int32_t>(now_ms - deadline_ms) >= 0;
+  return (now_ms - deadline_ms) < 0x80000000u;
+}
+
+void saturatingAdd(uint32_t increment, uint32_t* value) {
+  if (value == nullptr || increment == 0) return;
+  if (increment > UINT32_MAX - *value) {
+    *value = UINT32_MAX;
+  } else {
+    *value += increment;
+  }
 }
 
 int16_t absoluteValue(int16_t value) {
@@ -100,8 +109,8 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   }
   if (!can_tx_gateway_.configure(gateway)) return false;
 
-  next_cycle_ms_ = now_ms;
-  return true;
+  return release_schedule_.begin(now_ms, config.cycle_period_ms,
+                                 config.steering_period_ms);
 }
 
 RemoteControlRuntimeOutput RemoteControlRuntime::service(
@@ -156,16 +165,35 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
     return output;
   }
 
-  if (timeReached(now_ms, next_cycle_ms_)) {
+  const ControlReleaseBatch releases = release_schedule_.poll(now_ms);
+  saturatingAdd(releases.steering.missed_releases,
+                &status_.steering_release_misses);
+  saturatingAdd(releases.drive.missed_releases,
+                &status_.drive_release_misses);
+  saturatingAdd(releases.drive.missed_releases,
+                &status_.cycle_deadline_misses);
+  if (releases.drive.due && releases.drive.scheduled_ms != now_ms) {
+    saturatingAdd(1u, &status_.cycle_deadline_misses);
+  }
+
+  // Source loss is an asynchronous safety boundary. Prepare the exact drive
+  // stop in this service call when the periodic lane is not already releasing.
+  // The periodic phase remains absolute; only the adjacent slot is suppressed.
+  if (immediate_stop_pending_ && !releases.drive.due &&
+      scheduleSafetyStop(now_ms, inputs)) {
+    immediate_stop_pending_ = false;
+    require_silent_cycle_ = false;
+    release_schedule_.noteDriveDispatch(now_ms);
+  }
+
+  if (releases.drive.due) {
     if (pending_frame_index_ < pending_frame_count_) {
-      ++status_.cycle_deadline_misses;
+      saturatingAdd(1u, &status_.cycle_deadline_misses);
       pending_frame_index_ = pending_frame_count_ = 0;
       requestImmediateSilence(now_ms);
     }
-    beginCycle(now_ms, inputs);
-    uint32_t next = next_cycle_ms_ + config_.cycle_period_ms;
-    if (timeReached(now_ms, next)) next = now_ms + config_.cycle_period_ms;
-    next_cycle_ms_ = next;
+    beginCycle(now_ms, inputs, releases.drive.sequence,
+               releases.steering.due);
   }
 
   if (pending_frame_index_ < pending_frame_count_ &&
@@ -176,12 +204,11 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
   return output;
 }
 
-void RemoteControlRuntime::noteCanTxResult(uint32_t now_ms, bool success) {
+void RemoteControlRuntime::noteCanTxEnqueueResult(uint32_t now_ms,
+                                                  bool accepted) {
   if (pending_frame_index_ >= pending_frame_count_) return;
-  if (success) {
-    ++status_.can_tx_success;
+  if (accepted) {
     ++pending_frame_index_;
-    pending_retry_count_ = 0;
     next_frame_ms_ = now_ms + config_.frame_gap_ms;
     if (pending_frame_index_ >= pending_frame_count_) {
       pending_frame_index_ = pending_frame_count_ = 0;
@@ -189,15 +216,19 @@ void RemoteControlRuntime::noteCanTxResult(uint32_t now_ms, bool success) {
     return;
   }
 
-  ++status_.can_tx_failed;
-  ++pending_retry_count_;
-  if (pending_retry_count_ >= 3) {
-    ++status_.cycle_deadline_misses;
-    pending_frame_index_ = pending_frame_count_ = 0;
-    requestImmediateSilence(now_ms);
-  } else {
-    next_frame_ms_ = now_ms + 1u;
+  saturatingAdd(1u, &status_.can_tx_failed);
+  saturatingAdd(1u, &status_.cycle_deadline_misses);
+  latchCanTxInhibit(now_ms);
+}
+
+void RemoteControlRuntime::noteCanTxCompletion(uint32_t now_ms,
+                                               bool transmitted) {
+  if (transmitted) {
+    saturatingAdd(1u, &status_.can_tx_success);
+    return;
   }
+  saturatingAdd(1u, &status_.can_tx_failed);
+  latchCanTxInhibit(now_ms);
 }
 
 void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
@@ -266,15 +297,16 @@ void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
 
 void RemoteControlRuntime::requestImmediateSilence(uint32_t now_ms) {
   require_silent_cycle_ = true;
+  immediate_stop_pending_ = true;
   command_limiter_.begin(now_ms);
   pending_frame_index_ = pending_frame_count_ = 0;
-  next_cycle_ms_ = now_ms;
 }
 
 void RemoteControlRuntime::beginCycle(
-    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs) {
+    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs,
+    uint32_t drive_release_sequence, bool steering_release_due) {
   if (!inputs.hard_safety_allows || !inputs.hardware_gate_allows ||
-      inputs.local_tx_inhibit_latched ||
+      inputs.local_tx_inhibit_latched || status_.can_tx_inhibit_latched ||
       !inputs.backend_state.ready || inputs.backend_state.bus_off ||
       inputs.backend_state.error_passive) {
     pending_frame_index_ = pending_frame_count_ = 0;
@@ -287,10 +319,12 @@ void RemoteControlRuntime::beginCycle(
     return;
   }
 
-  ++cycle_sequence_;
+  cycle_sequence_ = drive_release_sequence;
   if (require_silent_cycle_) {
-    require_silent_cycle_ = false;
-    scheduleSafetyStop(inputs);
+    if (scheduleSafetyStop(now_ms, inputs)) {
+      require_silent_cycle_ = false;
+      immediate_stop_pending_ = false;
+    }
     return;
   }
   if (status_.remote_valid && status_.handoff_qualified) {
@@ -321,12 +355,9 @@ void RemoteControlRuntime::beginCycle(
     if (result.accepted) {
       pending_frame_count_ = 0;
       pending_frame_index_ = 0;
-      const uint32_t steering_cycle_divisor =
-          config_.steering_period_ms / config_.cycle_period_ms;
       for (uint8_t i = 0; i < result.frame_count; ++i) {
         const uint32_t can_id = result.frames[i].can_id_flags & 0x7FFu;
-        if (can_id == kRemoteSteeringCanId &&
-            (cycle_sequence_ % steering_cycle_divisor) != 0u) {
+        if (can_id == kRemoteSteeringCanId && !steering_release_due) {
           continue;
         }
         pending_frames_[pending_frame_count_++] = result.frames[i];
@@ -336,11 +367,11 @@ void RemoteControlRuntime::beginCycle(
       return;
     }
   }
-  scheduleSafetyStop(inputs);
+  scheduleSafetyStop(now_ms, inputs);
 }
 
 bool RemoteControlRuntime::scheduleMappedFrames(
-    const VehicleCommandMapResult& mapped,
+    uint32_t ready_ms, const VehicleCommandMapResult& mapped,
     const CanTxGatewayInputs& gateway_inputs) {
   if (!mapped.mapped || mapped.frame_count == 0) return false;
   for (uint8_t i = 0; i < mapped.frame_count; ++i) {
@@ -353,17 +384,16 @@ bool RemoteControlRuntime::scheduleMappedFrames(
   }
   pending_frame_count_ = mapped.frame_count;
   pending_frame_index_ = 0;
-  pending_retry_count_ = 0;
   for (uint8_t i = 0; i < mapped.frame_count; ++i) {
     pending_frames_[i] = mapped.frames[i];
   }
-  next_frame_ms_ = 0;
+  next_frame_ms_ = ready_ms;
   return true;
 }
 
 bool RemoteControlRuntime::scheduleSafetyStop(
-    const RemoteControlRuntimeInputs& inputs) {
-  if (inputs.local_tx_inhibit_latched ||
+    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs) {
+  if (inputs.local_tx_inhibit_latched || status_.can_tx_inhibit_latched ||
       inputs.autonomy_state != authority::AutonomyAuthorityState::InactiveConfirmed) {
     return false;
   }
@@ -377,9 +407,14 @@ bool RemoteControlRuntime::scheduleSafetyStop(
   gateway_inputs.safety_supervisor_allows = inputs.hard_safety_allows;
   gateway_inputs.hardware_gate_allows = inputs.hardware_gate_allows;
   gateway_inputs.backend_state = inputs.backend_state;
-  if (!scheduleMappedFrames(mapped, gateway_inputs)) return false;
+  if (!scheduleMappedFrames(now_ms, mapped, gateway_inputs)) return false;
   ++status_.neutral_cycles;
   return true;
+}
+
+void RemoteControlRuntime::latchCanTxInhibit(uint32_t now_ms) {
+  status_.can_tx_inhibit_latched = true;
+  requestImmediateSilence(now_ms);
 }
 
 void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "board/authority/AuthorityManager.h"
+#include "board/control/ControlReleaseSchedule.h"
 #include "board/control/RemoteControlOrchestrator.h"
 #include "board/remote/M4RemoteMailboxReader.h"
 #include "board/remote/RemoteSharedMemory.h"
@@ -73,9 +74,12 @@ struct RemoteControlRuntimeStatus {
   uint8_t rssi_magnitude = remote::kRemoteMetricUnknown;
   uint32_t control_cycles = 0;
   uint32_t neutral_cycles = 0;
+  uint32_t drive_release_misses = 0;
+  uint32_t steering_release_misses = 0;
   uint32_t cycle_deadline_misses = 0;
   uint32_t can_tx_success = 0;
   uint32_t can_tx_failed = 0;
+  bool can_tx_inhibit_latched = false;
   uint32_t ipc_rejects = 0;
   uint8_t last_ipc_reject_detail = 0;
   remote::RemoteFrontendDiagnostics frontend_diagnostics = {};
@@ -92,7 +96,11 @@ class RemoteControlRuntime {
              const RemoteControlRuntimeConfig& config);
   RemoteControlRuntimeOutput service(uint32_t now_ms,
                                      const RemoteControlRuntimeInputs& inputs);
-  void noteCanTxResult(uint32_t now_ms, bool success);
+  // FIFO enqueue acceptance advances the bounded frame batch, but it is not
+  // physical CAN transmission evidence.
+  void noteCanTxEnqueueResult(uint32_t now_ms, bool accepted);
+  // Only the built-in CAN owner's hardware completion journal calls this.
+  void noteCanTxCompletion(uint32_t now_ms, bool transmitted);
 
   bool hostControlAllowed() const { return status_.host_control_allowed; }
   const RemoteControlRuntimeConfig& config() const { return config_; }
@@ -104,10 +112,15 @@ class RemoteControlRuntime {
  private:
   void updateRemoteState(uint32_t now_ms);
   void requestImmediateSilence(uint32_t now_ms);
-  void beginCycle(uint32_t now_ms, const RemoteControlRuntimeInputs& inputs);
-  bool scheduleMappedFrames(const VehicleCommandMapResult& mapped,
+  void beginCycle(uint32_t now_ms, const RemoteControlRuntimeInputs& inputs,
+                  uint32_t drive_release_sequence,
+                  bool steering_release_due);
+  bool scheduleMappedFrames(uint32_t ready_ms,
+                            const VehicleCommandMapResult& mapped,
                             const CanTxGatewayInputs& gateway_inputs);
-  bool scheduleSafetyStop(const RemoteControlRuntimeInputs& inputs);
+  bool scheduleSafetyStop(uint32_t now_ms,
+                          const RemoteControlRuntimeInputs& inputs);
+  void latchCanTxInhibit(uint32_t now_ms);
   void publishTelemetry(uint32_t now_ms);
   bool isNeutralSample(const remote::M4RemoteMailboxSnapshot& snapshot) const;
 
@@ -119,12 +132,12 @@ class RemoteControlRuntime {
   VehicleCommandMapper vehicle_mapper_ = {};
   CanTxGateway can_tx_gateway_ = {};
   RemoteControlOrchestrator orchestrator_ = {};
+  ControlReleaseSchedule release_schedule_ = {};
 
   uint32_t last_shared_sequence_ = 0;
   uint32_t last_frontend_seen_ms_ = 0;
   uint32_t neutral_since_ms_ = 0;
   uint32_t release_since_ms_ = 0;
-  uint32_t next_cycle_ms_ = 0;
   uint32_t next_frame_ms_ = 0;
   uint32_t last_telemetry_ms_ = 0;
   uint32_t cycle_sequence_ = 0;
@@ -133,10 +146,10 @@ class RemoteControlRuntime {
   bool neutral_timer_active_ = false;
   bool release_timer_active_ = false;
   bool require_silent_cycle_ = true;
+  bool immediate_stop_pending_ = true;
   bool prior_remote_valid_ = false;
   uint8_t pending_frame_index_ = 0;
   uint8_t pending_frame_count_ = 0;
-  uint8_t pending_retry_count_ = 0;
   CanFrameRequest pending_frames_[kVehicleCommandMapperMaxFrames] = {};
 };
 

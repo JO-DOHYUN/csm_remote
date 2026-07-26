@@ -26,6 +26,7 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   service_reported_frames_sent_total_ = 0;
   service_reported_stall_event_sequence_ = 0;
   service_reported_queue_pressure_close_total_ = 0;
+  acknowledged_queue_pressure_disconnect_sequence_ = 0;
   session_anchor_queued_ = false;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
@@ -100,8 +101,19 @@ SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
   SinkServiceResult result;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!enabled_) return result;
+  const uint32_t queue_pressure_handled =
+      mailbox_.queuePressureDisconnectHandledSequence();
   WifiWorkerStateSnapshot state;
-  if (mailbox_.tryReadState(state)) syncWorkerState(state, result);
+  if (mailbox_.tryReadState(state)) {
+    syncWorkerState(state, result);
+    if (queue_pressure_handled !=
+            acknowledged_queue_pressure_disconnect_sequence_ &&
+        mailbox_.acknowledgeQueuePressureDisconnect(
+            queue_pressure_handled)) {
+      acknowledged_queue_pressure_disconnect_sequence_ =
+          queue_pressure_handled;
+    }
+  }
   isolateStalledCall(mailbox_.callSnapshot(), now_ms, result);
 
   result.actual_bytes =
@@ -167,7 +179,6 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
     mailbox_.discardRx();
     session_anchor_queued_ = false;
   }
-
   worker_state_ = state;
   connected_ = state.tcp_enabled && state.connected && !isolation_latched_;
   backpressure_active_ = state.tcp_enabled && state.backpressure_active;

@@ -231,6 +231,109 @@ void byte_queue_wraps_without_losing_frame_boundaries() {
   CHECK(queue.highWaterBytes() == 500);
 }
 
+void byte_queue_distinguishes_exact_byte_full_from_empty() {
+  using namespace csm::board::uplink;
+  FixedFrameByteQueue<4, 523> queue;
+  uint8_t payload[523] = {};
+  for (uint16_t index = 0; index < sizeof(payload); ++index) {
+    payload[index] = static_cast<uint8_t>(index);
+  }
+  PublishedFrameView frame{payload, sizeof(payload), 9, RecordType::BoardEvent,
+                           UplinkPriority::Critical};
+  CHECK(queue.push(frame));
+  CHECK(queue.full());
+  CHECK(queue.queuedBytes() == sizeof(payload));
+  uint8_t staged[523] = {};
+  CHECK(queue.copyFrontBytes(staged, sizeof(staged)) == sizeof(staged));
+  CHECK(std::memcmp(staged, payload, sizeof(payload)) == 0);
+  CHECK(queue.consumeMany(522).frames == 0);
+  const auto final = queue.consumeMany(1);
+  CHECK(final.frames == 1);
+  CHECK(final.critical_frames == 1);
+  CHECK(final.last_publish_seq == 9);
+  CHECK(queue.empty());
+
+  CHECK(queue.push(frame));
+  CHECK(queue.clear() == sizeof(payload));
+  CHECK(queue.empty());
+  CHECK(queue.queuedBytes() == 0);
+}
+
+void byte_queue_uses_compact_descriptors_at_product_capacity() {
+  using namespace csm::board::uplink;
+  using ProductDescriptorQueue = FixedFrameByteQueue<512, 1024>;
+  static_assert(ProductDescriptorQueue::kDescriptorSizeBytes == 16);
+  static_assert(ProductDescriptorQueue::kDescriptorStorageBytes == 8192);
+
+  ProductDescriptorQueue queue;
+  uint8_t byte = 0xA5;
+  for (uint16_t index = 0; index < 512; ++index) {
+    PublishedFrameView frame{&byte, 1, index, RecordType::CanTxRaw,
+                             index == 511 ? UplinkPriority::Critical
+                                          : UplinkPriority::Normal};
+    CHECK(queue.push(frame));
+  }
+  PublishedFrameView overflow{&byte, 1, 512, RecordType::CanTxRaw,
+                              UplinkPriority::Normal};
+  CHECK(!queue.push(overflow));
+  CHECK(queue.count() == 512);
+  CHECK(queue.queuedBytes() == 512);
+  CHECK(queue.highWaterRecords() == 512);
+
+  uint8_t staged[512] = {};
+  CHECK(queue.copyFrontBytes(staged, sizeof(staged)) == sizeof(staged));
+  for (uint16_t index = 0; index < sizeof(staged); ++index) {
+    CHECK(staged[index] == byte);
+  }
+  const auto partial = queue.consumeMany(511);
+  CHECK(partial.bytes == 511);
+  CHECK(partial.frames == 511);
+  CHECK(partial.last_publish_seq == 510);
+  CHECK(partial.critical_frames == 0);
+  const auto final = queue.consumeMany(1);
+  CHECK(final.frames == 1);
+  CHECK(final.critical_frames == 1);
+  CHECK(final.last_publish_seq == 511);
+  CHECK(queue.empty());
+}
+
+void byte_queue_clear_releases_partial_frame_and_reuses_wrapped_ring() {
+  using namespace csm::board::uplink;
+  FixedFrameByteQueue<8, 523> queue;
+  uint8_t first[300] = {};
+  uint8_t second[200] = {};
+  std::memset(first, 0x11, sizeof(first));
+  std::memset(second, 0x22, sizeof(second));
+  PublishedFrameView first_view{first, sizeof(first), 1, RecordType::BoardEvent,
+                                UplinkPriority::Normal};
+  PublishedFrameView second_view{second, sizeof(second), 2, RecordType::BoardHealth,
+                                 UplinkPriority::Critical};
+  CHECK(queue.push(first_view));
+  CHECK(queue.push(second_view));
+  const auto partial = queue.consumeMany(450);
+  CHECK(partial.frames == 1);
+  CHECK(queue.queuedBytes() == 50);
+  CHECK(queue.clear() == 50);
+  CHECK(queue.empty());
+  CHECK(queue.queuedBytes() == 0);
+
+  uint8_t payload[37] = {};
+  for (uint16_t cycle = 0; cycle < 1000; ++cycle) {
+    std::memset(payload, static_cast<uint8_t>(cycle), sizeof(payload));
+    PublishedFrameView frame{payload, sizeof(payload), cycle,
+                             RecordType::BoardEvent, UplinkPriority::Normal};
+    CHECK(queue.push(frame));
+    uint8_t staged[37] = {};
+    CHECK(queue.copyFrontBytes(staged, 13) == 13);
+    CHECK(queue.consumeMany(13).frames == 0);
+    CHECK(queue.copyFrontBytes(staged, sizeof(staged)) == 24);
+    const auto consumed = queue.consumeMany(24);
+    CHECK(consumed.frames == 1);
+    CHECK(consumed.last_publish_seq == cycle);
+    CHECK(queue.empty());
+  }
+}
+
 void byte_queue_spsc_preserves_order_without_shared_lock() {
   using namespace csm::board::uplink;
   constexpr uint32_t kFrames = 10000;
@@ -304,6 +407,35 @@ void wifi_mailbox_critical_urgency_tracks_consumer_completion() {
   CHECK(consumed.frames == 1);
   CHECK(consumed.critical_frames == 1);
   CHECK(!mailbox.queueSnapshot().urgent);
+}
+
+void wifi_mailbox_abort_invalidates_staged_generation() {
+  using namespace csm::board::uplink;
+  WifiWorkerMailbox mailbox;
+  uint8_t bytes[16] = {};
+  PublishedFrameView frame{bytes, sizeof(bytes), 7, RecordType::BoardEvent,
+                           UplinkPriority::Normal};
+  CHECK(mailbox.tryOffer(frame, 10) == WifiMailboxOfferResult::Accepted);
+  uint8_t staged[32] = {};
+  WifiMailboxTxLease lease;
+  CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
+
+  uint32_t aborted_bytes = 0;
+  CHECK(mailbox.tryApplyAbort(aborted_bytes));
+  CHECK(aborted_bytes == sizeof(bytes));
+  WifiWorkerMailbox::TxConsumeResult consumed;
+  bool stale = false;
+  CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));
+  CHECK(stale);
+  CHECK(consumed.bytes == 0);
+  CHECK(mailbox.queueSnapshot().queued_bytes == 0);
+  CHECK(mailbox.queueSnapshot().queued_records == 0);
+
+  CHECK(mailbox.tryOffer(frame, 20) == WifiMailboxOfferResult::Accepted);
+  CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
+  CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));
+  CHECK(!stale);
+  CHECK(consumed.frames == 1);
 }
 
 void runtime_diagnostic_layout_is_fixed_and_bounded() {
@@ -381,8 +513,12 @@ int main() {
   disconnected_sink_preserves_admitted_record();
   fixed_queue_batches_without_losing_frame_boundaries();
   byte_queue_wraps_without_losing_frame_boundaries();
+  byte_queue_distinguishes_exact_byte_full_from_empty();
+  byte_queue_uses_compact_descriptors_at_product_capacity();
+  byte_queue_clear_releases_partial_frame_and_reuses_wrapped_ring();
   byte_queue_spsc_preserves_order_without_shared_lock();
   wifi_mailbox_critical_urgency_tracks_consumer_completion();
+  wifi_mailbox_abort_invalidates_staged_generation();
   runtime_diagnostic_layout_is_fixed_and_bounded();
   can_segment_batches_with_bounded_latency();
   wifi_queue_snapshot_supports_product_descriptor_capacity();

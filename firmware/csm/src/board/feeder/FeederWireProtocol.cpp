@@ -130,18 +130,6 @@ bool FeederWireDecoder::acceptHeader(const uint8_t* raw, size_t content_length,
     return false;
   }
 
-  if (!session_valid_ || boot_id != stats_.current_boot_id) {
-    if (session_valid_) {
-      ++stats_.boot_changes;
-    }
-    session_valid_ = true;
-    packet_sequence_valid_ = false;
-    frame_sequence_valid_ = false;
-    stats_.current_boot_id = boot_id;
-  }
-  notePacketSequence(packet_sequence);
-
-  const uint8_t* payload = &raw[kFeederWireHeaderSize];
   if (type == kFeederWireTypeCanBatch) {
     if (item_count == 0U || item_count > kFeederWireMaxCanItems ||
         item_size != kFeederWireCanItemSize ||
@@ -150,6 +138,38 @@ bool FeederWireDecoder::acceptHeader(const uint8_t* raw, size_t content_length,
       ++stats_.length_failures;
       return false;
     }
+  } else if (type == kFeederWireTypeStatus) {
+    if (item_count != 0U || item_size != 0U ||
+        payload_size != kFeederWireStatusPayloadSize) {
+      ++stats_.length_failures;
+      return false;
+    }
+  } else {
+    ++stats_.contract_failures;
+    return false;
+  }
+
+  if (!session_valid_ || boot_id != stats_.current_boot_id) {
+    if (session_valid_) {
+      ++stats_.boot_changes;
+    }
+    session_valid_ = true;
+    packet_sequence_valid_ = false;
+    frame_sequence_valid_ = false;
+    // Status belongs to one feeder boot epoch. A CAN batch may be the first
+    // packet from a restarted feeder, so never expose the prior boot's source
+    // health while waiting for the new status packet.
+    status_valid_ = false;
+    status_ = {};
+    last_status_mono_us_ = 0;
+    stats_.current_boot_id = boot_id;
+  }
+  if (!acceptPacketSequence(packet_sequence)) {
+    return false;
+  }
+
+  const uint8_t* payload = &raw[kFeederWireHeaderSize];
+  if (type == kFeederWireTypeCanBatch) {
     ++stats_.can_batches;
     for (uint8_t index = 0; index < item_count; ++index) {
       const uint8_t* item =
@@ -166,7 +186,9 @@ bool FeederWireDecoder::acceptHeader(const uint8_t* raw, size_t content_length,
           source_age_us <= 100000U && arrival_mono_us >= source_age_us
               ? arrival_mono_us - source_age_us
               : arrival_mono_us;
-      noteFrameSequence(frame.source_sequence);
+      if (!acceptFrameSequence(frame.source_sequence)) {
+        continue;
+      }
       if (frame_fn_ == nullptr || !frame_fn_(context_, frame)) {
         ++stats_.callback_rejects;
       }
@@ -176,11 +198,6 @@ bool FeederWireDecoder::acceptHeader(const uint8_t* raw, size_t content_length,
   }
 
   if (type == kFeederWireTypeStatus) {
-    if (item_count != 0U || item_size != 0U ||
-        payload_size != kFeederWireStatusPayloadSize) {
-      ++stats_.length_failures;
-      return false;
-    }
     uint32_t* values = &status_.uptime_ms;
     for (size_t index = 0;
          index < kFeederWireStatusPayloadSize / sizeof(uint32_t); ++index) {
@@ -194,16 +211,16 @@ bool FeederWireDecoder::acceptHeader(const uint8_t* raw, size_t content_length,
     return true;
   }
 
-  ++stats_.contract_failures;
+  // The packet type and shape were validated before sequence state changed.
   return false;
 }
 
-void FeederWireDecoder::notePacketSequence(uint32_t sequence) {
+bool FeederWireDecoder::acceptPacketSequence(uint32_t sequence) {
   if (!packet_sequence_valid_) {
     packet_sequence_valid_ = true;
     expected_packet_sequence_ = sequence + 1U;
     stats_.last_packet_sequence = sequence;
-    return;
+    return true;
   }
   if (sequence == expected_packet_sequence_) {
     ++expected_packet_sequence_;
@@ -215,17 +232,19 @@ void FeederWireDecoder::notePacketSequence(uint32_t sequence) {
       expected_packet_sequence_ = sequence + 1U;
     } else {
       ++stats_.packet_duplicates_or_reorders;
+      return false;
     }
   }
   stats_.last_packet_sequence = sequence;
+  return true;
 }
 
-void FeederWireDecoder::noteFrameSequence(uint32_t sequence) {
+bool FeederWireDecoder::acceptFrameSequence(uint32_t sequence) {
   if (!frame_sequence_valid_) {
     frame_sequence_valid_ = true;
     expected_frame_sequence_ = sequence + 1U;
     stats_.last_frame_sequence = sequence;
-    return;
+    return true;
   }
   if (sequence == expected_frame_sequence_) {
     ++expected_frame_sequence_;
@@ -237,9 +256,11 @@ void FeederWireDecoder::noteFrameSequence(uint32_t sequence) {
       expected_frame_sequence_ = sequence + 1U;
     } else {
       ++stats_.frame_duplicates_or_reorders;
+      return false;
     }
   }
   stats_.last_frame_sequence = sequence;
+  return true;
 }
 
 uint32_t FeederWireDecoder::crc32c(const uint8_t* data, size_t length) {
@@ -284,4 +305,3 @@ size_t FeederWireDecoder::cobsDecode(const uint8_t* input, size_t length,
 }
 
 }  // namespace csm::board::feeder
-

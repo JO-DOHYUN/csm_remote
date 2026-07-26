@@ -1,11 +1,9 @@
 #include "board/can/BuiltinFdcanDiagnostics.h"
 
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-
 namespace csm::board::can {
 
-bool BuiltinFdcanDiagnostics::attach(BuiltinFdcanDiagnosticCan& can) {
-  FDCAN_HandleTypeDef* const candidate = can.diagnosticHandle();
+bool BuiltinFdcanDiagnostics::attach(BuiltinFdcanCan& can) {
+  FDCAN_HandleTypeDef* const candidate = can.fdcanHandle();
 #if defined(FDCAN1)
   if (candidate == nullptr || candidate->Instance != FDCAN1) {
     handle_ = nullptr;
@@ -40,6 +38,13 @@ BuiltinFdcanSnapshot BuiltinFdcanDiagnostics::snapshot() const {
   return value;
 }
 
-}  // namespace csm::board::can
+int32_t BuiltinFdcanDiagnostics::abortTxRequest(uint32_t request_mask) {
+  if (handle_ == nullptr || handle_->Instance == nullptr ||
+      request_mask == 0u || (request_mask & ~0x07u) != 0u) {
+    return static_cast<int32_t>(HAL_ERROR);
+  }
+  return static_cast<int32_t>(
+      HAL_FDCAN_AbortTxRequest(handle_, request_mask));
+}
 
-#endif
+}  // namespace csm::board::can

@@ -52,9 +52,9 @@ v1 header의 `seq u16`은 fanout 전 `CanonicalPublisher`가 배정하는 `publi
 - network reconnect는 새 epoch이며 board backlog replay를 수행하지 않는다.
 - 초기 Wi-Fi 제품은 Android observer 1대만 허용한다.
 - TCP는 전송 순서와 신뢰성을 제공하지만 application loss/session 의미를 대신하지 않는다.
-- Wi-Fi write가 일시적으로 0을 반환해도 즉시 장애로 단정하지 않는다. 현재 stalled-client close 기준은 5 s이며 queue와 write는 계속 bounded/nonblocking이다.
-- Wi-Fi observer와 Service/HIL profile은 48 KiB byte pool과 252개 frame descriptor를 사용한다. 2 KiB byte와 4개 descriptor는 critical health/control evidence에 예약한다. 이 구조는 `record 수 × 최대 frame 크기` 메모리 낭비 없이 실제 적재 byte를 기준으로 bounded된다.
-- queue envelope는 5 s 연속 무진행 close 정책과 실측 약 8 KiB/s canonical 부하를 곱해 정했다. 5 s 미만 radio 정체는 queue가 흡수하고, 5 s 연속 무진행만 새 sink epoch로 닫는다. queue 수위 자체는 연결 종료 조건이 아니다.
+- Wi-Fi write가 일시적으로 0을 반환하거나 queue가 high-water를 통과해도 client 장애로 단정하지 않는다. high-water는 즉시 drain을 유도하는 scheduling hint일 뿐 close 조건이 아니다. socket이 실제로 2.5 s 연속 무진행일 때만 `TransmitNoProgress`로 닫는다. 그보다 느리더라도 계속 전진하는 client가 admission의 Reserved/Full에 닿으면 최초 손실에서 producer가 기다리지 않고 한 번만 `QueuePressure` epoch 종료를 요청한다.
+- Wi-Fi observer와 Service/HIL profile은 48 KiB byte pool과 512개 frame descriptor를 사용한다. 2 KiB byte와 4개 descriptor는 critical health/control evidence에 예약한다. descriptor는 16 B committed-frame cursor이며 payload는 byte pool에만 한 번 저장된다. 16-bit monotonic byte-end 차분은 48 KiB full과 32-bit counter wrap에서도 정확하고, `descriptor_tail` release가 유일한 record commit이므로 worker는 미완료 payload를 읽지 않는다. 이 구조는 `record 수 × 최대 frame 크기` 메모리 낭비 없이 byte와 record 수를 각각 bounded한다.
+- queue envelope는 현재 200 Hz `CAN_TX_RAW`를 포함한 실제 record 수/byte 부하로 정했다. queue 수위만으로는 닫지 않는다. Reserved/Full은 이미 해당 epoch의 무결성이 깨진 admission loss이므로 producer가 atomic one-shot latch로 worker에 close/abort를 요청하고 즉시 복귀한다. worker의 epoch 증가가 main에 관측될 때까지 재-admission을 막아 이전 epoch bytes가 새 연결로 넘어가지 않게 한다.
 - Remote Product의 CAN truth는 최대 20 ms 동안 최대 15 frame을 segment로 묶고, Wi-Fi worker는 최대 1024 B를 한 nonblocking send로 전달한다. critical record는 batch 대기 없이 전송 대상이 된다.
 - Remote Product의 정적 `CAPABILITY`는 session 시작·재연결 시 광고한다. periodic 광고는 reset 실험의 변수를 줄이기 위해 현재 Off지만, 과거 reset을 해당 광고나 정확히 3초 watchdog으로 확정하지 않는다.
 - 기본 Remote Product와 reset experiment는 외부 MCP2515를 compile-out하고 J4 built-in CAN을 관측한다. 명시적 MDPS bench profile만 MCP2515를 normal-mode RX/ACK로 열며 MCP/host control TX는 계속 금지한다. MCP2515를 RP2040 feeder로 교체할지는 별도 hardware/product gate이며 아직 확정하지 않는다. 외부 frontend를 바꾸더라도 authority와 canonical publish identity는 M7이 소유한다.
@@ -120,7 +120,7 @@ CanonicalPublisher
 - CSM AP direct, TCP `192.168.4.1:3333`, observer client 1개
 - sink epoch, overflow, high-water, frame progress, stalled-client close 계측
 - Wi-Fi record batching, critical 즉시 flush, critical queue reserve
-- 20 ms CAN segment aggregation, 1024 B TX chunk, 48 KiB/252 descriptor sink envelope
+- 20 ms CAN segment aggregation, 1024 B TX chunk, 48 KiB/512 descriptor sink envelope
 - Wi-Fi 비활성 profile에서 Wi-Fi library와 queue를 링크하지 않는 build 분리
 - reset experiment의 Wi-Fi Off/AP-only/Full runtime mode와 startup 1회 제한
 

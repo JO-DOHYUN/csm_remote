@@ -1,6 +1,6 @@
 #include "board/SafetySupervisor.h"
 
-#include "protocol/TypedRecords.h"
+#include "protocol/ControlProtocol.h"
 
 namespace csm::board {
 
@@ -159,6 +159,21 @@ void SafetySupervisor::disarm(uint32_t now_ms) {
   armed_ = false;
   lease_until_ms_ = now_ms;
   setState(heartbeatAlive(now_ms) ? SafetyState::Ready : SafetyState::MonitorOnly);
+}
+
+void SafetySupervisor::invalidateHostSession(uint32_t now_ms) {
+  has_heartbeat_ = false;
+  armed_ = false;
+  lease_until_ms_ = now_ms;
+  last_heartbeat_ms_ = now_ms;
+  if (inputs_.estop_asserted) {
+    setState(SafetyState::Estop);
+  } else if (!inputs_.field_power_ok || inputs_.encoder_fault ||
+             fault_lockout_) {
+    setState(SafetyState::FaultLockout);
+  } else {
+    setState(SafetyState::MonitorOnly);
+  }
 }
 
 void SafetySupervisor::clearFaultLockout(uint32_t now_ms) {

@@ -339,8 +339,9 @@ Current board host TX policy:
   identity/throughput controls; Android health/remote freshness thresholds are
   not relaxed.
 - Remote Product uses a 48 KiB byte pool plus 512 frame descriptors, with 2 KiB
-  plus four descriptors reserved for critical evidence. The worker isolates a
-  client at 75% byte or descriptor occupancy before Full, or after 2.5 s continuous
+  plus four descriptors reserved for critical evidence. The 75% byte or
+  descriptor mark only bypasses batching and accelerates drain; occupancy is
+  not a close condition. The worker isolates a client after 2.5 s continuous
   TX no-progress. Peer close, non-`WOULD_BLOCK` socket error, RX overflow, and
   explicit isolation also close only that sink. Reconnect starts a new epoch and
   reports the loss boundary; source truth and RC/CAN execution are unaffected.
@@ -353,10 +354,28 @@ Current board host TX policy:
   producer indices and the socket worker owns consumer indices; neither normal
   enqueue nor drain takes a shared queue lock. Abort ownership remains with the
   worker and uses a nonblocking producer gate. Reserved-capacity rejection or an
-  actual full queue remains explicit sink-miss evidence; main/RC/CAN never waits.
-  The 512-descriptor count is aligned to the measured ~95 B/record mix, so the
-  descriptor and byte thresholds both represent about 2.5 s of stalled drain;
-  neither dimension is allowed to become an accidental earlier timeout.
+  actual full queue remains explicit sink-miss evidence. The first such loss
+  atomically latches one `QueuePressure` disconnect request; the worker
+  aborts/closes that sink epoch, and admission remains closed until main observes
+  the worker epoch increment. Main/RC/CAN never waits.
+  Each descriptor is a fixed 16-byte committed-frame cursor; record type is not
+  duplicated and the low 16 bits of its monotonic committed byte end are stored.
+  Because the byte envelope is below 65,536 bytes, unsigned 16-bit subtraction
+  recovers the exact committed distance, including a completely full ring and
+  32-bit counter wrap.
+  Descriptor-tail release is the sole record commit, so the consumer cannot copy
+  bytes that the producer has not committed. Byte occupancy is published first,
+  so a concurrent health snapshot may conservatively lead by at most one
+  in-flight frame but never under-reports reserved storage. Mailbox health reads
+  the queue's atomic producer/consumer cursors directly; it does not maintain a
+  second cached snapshot that either side could overwrite out of order.
+  The 512-descriptor envelope is based
+  on the actual product mix, including 200 Hz `CAN_TX_RAW`; the former 252-entry
+  envelope reached descriptor pressure at only about 12.2 KiB and closed a
+  progressing low-load client before the byte envelope was relevant. Relative to
+  the former 252 x 24-byte layout, 512 x 16 bytes costs only 2,144 additional
+  static bytes. Neither dimension may be enlarged without a measured production
+  load envelope and memory gate.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 
@@ -975,16 +994,46 @@ RP2040 feeder successor profile major `4`:
   8N1, receive-only on M7.
 - feeder wire packets use COBS delimiter `0x00`, CRC32C, version `1`, contract
   ID `0x46575231`, boot ID, packet sequence, and per-CAN-frame sequence.
+- Sequence ordering uses unsigned 32-bit serial arithmetic within one boot ID.
+  Exact wrap from `0xffffffff` to `0` is in order. A forward jump smaller than
+  `2^31` is accepted and its missing distance is counted.
+- A duplicate/backward packet sequence in the same boot ID rejects the whole
+  packet before any CAN frame or status is exposed. A duplicate/backward frame
+  sequence rejects only that frame before the CAN callback. The existing
+  duplicate/reorder counters count these rejections, while `last_*_sequence`
+  remains the last accepted value. A changed boot ID starts fresh packet and
+  frame sequence epochs and immediately invalidates the prior status value and
+  status timestamp.
+- feeder bus readiness requires a live UART ingress, an announced boot session,
+  a fresh packet and status in that same session, no source ring/MCP overflow,
+  MCP error IRQ, bus-off, or EFLG evidence, and no unrecoverable M7 DMA cursor
+  fault. The same predicate drives capability, BOARD_HEALTH, and the status LED.
+- M7 feeder service retains the configured byte budget and also applies a
+  default 750 us CPU-time budget in chunks no larger than 64 bytes. The normal
+  NDTR-before-transfer-complete-callback race may reconcile exactly one wrap
+  only when the DMA TC flag is pending. Reconciliation and time-budget-hit
+  counters are internal load evidence and are not transport-error events. An
+  ambiguous backwards cursor stops the ingress epoch rather than replaying
+  bytes.
 - accepted feeder frames receive the CSM global capture sequence and are
   published through the existing `CAN_RX_SEGMENT`; no feeder-specific Android
   record type exists.
 - BOARD_EVENT codes:
-  - `46 FEEDER_LINK_STARTED`
-  - `47 FEEDER_SESSION_CHANGED`
-  - `48 FEEDER_SEQUENCE_GAP`
-  - `49 FEEDER_TRANSPORT_ERROR`
-  - `50 FEEDER_SOURCE_FAULT`
-  - `51 FEEDER_LINK_STALE`
+  - `46 FEEDER_LINK_STARTED`: detail `1` initial wire-v1 session, detail `2`
+    recovery from stale.
+  - `47 FEEDER_SESSION_CHANGED`: detail is wire version; counter is boot ID.
+  - `48 FEEDER_SEQUENCE_GAP`: detail `1` packet gap, `2` frame gap, `3` packet
+    duplicate/reorder rejection, `4` frame duplicate/reorder rejection.
+  - `49 FEEDER_TRANSPORT_ERROR`: detail `1` CRC, `2` parser/contract/length,
+    `3` DMA overrun bytes, `4` UART error, `5` DMA transfer error, `6` ingress
+    initialization failure, `7` CAN queue callback reject, `8` unrecoverable
+    DMA cursor fault.
+  - `50 FEEDER_SOURCE_FAULT`: detail `1` source ring overflow, `2` MCP overflow,
+    `3` MCP error IRQ, `4` MCP bus-off, `5` MCP EFLG OR.
+  - `51 FEEDER_LINK_STALE`: detail `1`; counter is cumulative stale transition.
+  - For counter-backed details, the last observed value advances only after the
+    BOARD_EVENT is accepted, so temporary evidence-queue pressure retries the
+    latest cumulative counter instead of silently consuming it.
 
 ## 권장 방향
 - 링크 계층: framed transport

@@ -18,9 +18,34 @@
 #define BOARD_WIFI_TX_BATCH_MIN_RECORDS 2
 #endif
 
+#ifndef BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US
+#define BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US 1000
+#endif
+
+#ifndef BOARD_WIFI_TX_MAX_WRITES_PER_PUMP
+#define BOARD_WIFI_TX_MAX_WRITES_PER_PUMP 4
+#endif
+
+#ifndef BOARD_WIFI_TX_MAX_BYTES_PER_PUMP
+#define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 4096
+#endif
+
+#ifndef BOARD_WIFI_WORKER_PERIOD_MS
+#define BOARD_WIFI_WORKER_PERIOD_MS 1
+#endif
+
 #ifndef BOARD_WIFI_ACCEPT_POLL_MS
 #define BOARD_WIFI_ACCEPT_POLL_MS 25
 #endif
+
+static_assert(BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US > 0,
+              "Wi-Fi worker drain time budget must be non-zero");
+static_assert(BOARD_WIFI_TX_MAX_WRITES_PER_PUMP > 0,
+              "Wi-Fi worker write budget must be non-zero");
+static_assert(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP > 0,
+              "Wi-Fi worker byte budget must be non-zero");
+static_assert(BOARD_WIFI_WORKER_PERIOD_MS > 0,
+              "Wi-Fi worker period must be non-zero");
 
 #ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
 #define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 75
@@ -115,9 +140,85 @@ struct WifiTxProgressObservation {
   uint32_t duration_ms = 0;
 };
 
-// Socket no-progress is tracked independently from queue pressure. The worker
-// may isolate a client before the bounded SPSC queue reaches Full; neither
-// condition is allowed to block the main/RC/CAN producer.
+// A pump is bounded by both socket call count and successfully transferred
+// bytes. Zero keeps the legacy one-call/one-chunk default bounded; production
+// profiles provide explicit limits.
+class WifiTxPumpBudget {
+ public:
+  constexpr WifiTxPumpBudget(uint32_t configured_max_writes,
+                             uint32_t configured_max_bytes,
+                             uint16_t write_chunk_bytes)
+      : max_writes_(configured_max_writes == 0 ? 1 : configured_max_writes),
+        max_bytes_(configured_max_bytes == 0 ? write_chunk_bytes
+                                             : configured_max_bytes),
+        write_chunk_bytes_(write_chunk_bytes) {}
+
+  constexpr bool canAttempt() const {
+    return write_chunk_bytes_ > 0 && writes_attempted_ < max_writes_ &&
+           bytes_progressed_ < max_bytes_;
+  }
+
+  constexpr uint16_t nextWriteCapacity() const {
+    if (!canAttempt()) return 0;
+    const uint32_t remaining = max_bytes_ - bytes_progressed_;
+    return static_cast<uint16_t>(
+        remaining < write_chunk_bytes_ ? remaining : write_chunk_bytes_);
+  }
+
+  void noteAttempt(uint32_t progressed_bytes) {
+    const uint32_t permitted = nextWriteCapacity();
+    if (progressed_bytes > permitted) progressed_bytes = permitted;
+    ++writes_attempted_;
+    bytes_progressed_ += progressed_bytes;
+  }
+
+  constexpr uint32_t writesAttempted() const { return writes_attempted_; }
+  constexpr uint32_t bytesProgressed() const { return bytes_progressed_; }
+
+ private:
+  uint32_t max_writes_ = 0;
+  uint32_t max_bytes_ = 0;
+  uint16_t write_chunk_bytes_ = 0;
+  uint32_t writes_attempted_ = 0;
+  uint32_t bytes_progressed_ = 0;
+};
+
+struct WifiTransmitPumpResult {
+  uint32_t writes_attempted = 0;
+  uint32_t bytes_progressed = 0;
+  uint32_t no_progress_duration_ms = 0;
+  bool would_block = false;
+  bool zero_write = false;
+
+  constexpr bool attempted() const { return writes_attempted != 0; }
+  constexpr bool progressed() const { return bytes_progressed != 0; }
+  constexpr bool blockedWithoutProgress() const {
+    return attempted() && !progressed() && (would_block || zero_write);
+  }
+};
+
+constexpr bool wifiQueuePressureReached(uint32_t queued_bytes,
+                                        uint32_t queued_records,
+                                        uint32_t byte_capacity,
+                                        uint32_t record_capacity,
+                                        uint32_t high_water_percent) {
+  if (high_water_percent == 0) return false;
+  const bool byte_pressure =
+      byte_capacity > 0 &&
+      static_cast<uint64_t>(queued_bytes) * 100u >=
+          static_cast<uint64_t>(byte_capacity) * high_water_percent;
+  const bool record_pressure =
+      record_capacity > 0 &&
+      static_cast<uint64_t>(queued_records) * 100u >=
+          static_cast<uint64_t>(record_capacity) * high_water_percent;
+  return byte_pressure || record_pressure;
+}
+
+// Queue high-water accelerates draining but is not a close condition. Socket
+// no-progress is closed only by this independent timeout. If a progressing
+// client is still too slow and admission reaches Reserved/Full, the producer
+// records the miss and atomically requests one QueuePressure epoch close; it
+// never waits for the worker.
 class WifiTxProgressTracker {
  public:
   WifiTxProgressObservation observe(uint32_t now_ms, bool progressed,

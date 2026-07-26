@@ -10,6 +10,9 @@ namespace csm::board::feeder {
 struct FeederUartIngressConfig {
   uint32_t baud = 1000000;
   uint32_t stale_timeout_ms = 250;
+  // Bounds decoder/callback CPU occupancy inside one main-loop service call.
+  // Zero disables the time bound; the byte budget remains mandatory.
+  uint32_t service_time_budget_us = 750;
 };
 
 struct FeederUartIngressStats {
@@ -21,7 +24,46 @@ struct FeederUartIngressStats {
   uint32_t max_service_us = 0;
   uint32_t service_calls = 0;
   uint32_t bytes_consumed = 0;
+  uint32_t dma_wrap_reconciliations = 0;
+  uint32_t dma_cursor_faults = 0;
+  uint32_t service_time_budget_hits = 0;
 };
+
+struct FeederDmaCursorResult {
+  uint64_t produced_total = 0;
+  bool valid = false;
+  bool reconciled_pending_wrap = false;
+};
+
+// DMA circular mode reloads NDTR before the transfer-complete callback updates
+// the software wrap count. Reconcile exactly that one pending wrap; any other
+// backwards cursor is ambiguous and must fail closed instead of replaying data.
+constexpr FeederDmaCursorResult reconcileFeederDmaCursor(
+    uint32_t completed_wraps, uint32_t position, uint32_t buffer_size,
+    bool transfer_complete_pending, uint64_t consumed_total) {
+  FeederDmaCursorResult result;
+  if (buffer_size == 0U || position > buffer_size) {
+    return result;
+  }
+  result.produced_total =
+      static_cast<uint64_t>(completed_wraps) * buffer_size + position;
+  if (result.produced_total >= consumed_total) {
+    result.valid = true;
+    return result;
+  }
+  if (!transfer_complete_pending) {
+    return result;
+  }
+  const uint64_t reconciled =
+      result.produced_total + static_cast<uint64_t>(buffer_size);
+  if (reconciled < consumed_total) {
+    return result;
+  }
+  result.produced_total = reconciled;
+  result.valid = true;
+  result.reconciled_pending_wrap = true;
+  return result;
+}
 
 class FeederUartIngress {
  public:
@@ -31,6 +73,7 @@ class FeederUartIngress {
 
   bool initialized() const { return initialized_; }
   bool stale(uint64_t now_mono_us) const;
+  bool statusFresh(uint64_t now_mono_us) const;
   const FeederUartIngressStats& ingressStats() const {
     return ingress_stats_;
   }
@@ -46,12 +89,13 @@ class FeederUartIngress {
   bool initialized_ = false;
   bool restart_pending_ = false;
   uint32_t stale_timeout_ms_ = 250;
+  uint32_t service_time_budget_us_ = 750;
   uint64_t consumed_total_ = 0;
   FeederUartIngressStats ingress_stats_ = {};
   FeederWireDecoder decoder_;
 
   bool startDma();
-  uint64_t producedTotal() const;
+  bool producedTotal(uint64_t* produced_total);
   void invalidateRange(size_t offset, size_t length);
   void pollUartErrors();
 };

@@ -11,6 +11,7 @@ namespace {
 
 constexpr size_t kDmaBufferSize = 4096;
 constexpr uint32_t kCacheLineSize = 32;
+constexpr size_t kServiceChunkBytes = 64;
 static_assert((kDmaBufferSize & (kDmaBufferSize - 1U)) == 0U,
               "DMA buffer must be a power of two");
 
@@ -48,6 +49,7 @@ bool FeederUartIngress::begin(const FeederUartIngressConfig& config) {
   }
   g_active = this;
   stale_timeout_ms_ = config.stale_timeout_ms;
+  service_time_budget_us_ = config.service_time_budget_us;
   consumed_total_ = 0;
   ingress_stats_ = {};
   decoder_.begin(nullptr, nullptr);
@@ -131,22 +133,40 @@ bool FeederUartIngress::startDma() {
   return true;
 }
 
-uint64_t FeederUartIngress::producedTotal() const {
+bool FeederUartIngress::producedTotal(uint64_t* produced_total) {
+  if (produced_total == nullptr) {
+    return false;
+  }
   uint32_t wraps_before = 0;
   uint32_t wraps_after = 0;
   uint32_t remaining = 0;
+  bool transfer_complete_pending = false;
   do {
     wraps_before = g_dma_wraps;
     __DMB();
     remaining = __HAL_DMA_GET_COUNTER(&g_dma);
+    transfer_complete_pending =
+        __HAL_DMA_GET_FLAG(
+            &g_dma, __HAL_DMA_GET_TC_FLAG_INDEX(&g_dma)) != RESET;
     __DMB();
     wraps_after = g_dma_wraps;
   } while (wraps_before != wraps_after);
   const uint32_t position =
       remaining <= kDmaBufferSize
           ? static_cast<uint32_t>(kDmaBufferSize - remaining)
-          : 0U;
-  return static_cast<uint64_t>(wraps_before) * kDmaBufferSize + position;
+          : static_cast<uint32_t>(kDmaBufferSize + 1U);
+  const FeederDmaCursorResult reconciled = reconcileFeederDmaCursor(
+      wraps_before, position, kDmaBufferSize, transfer_complete_pending,
+      consumed_total_);
+  if (!reconciled.valid) {
+    ++ingress_stats_.dma_cursor_faults;
+    return false;
+  }
+  if (reconciled.reconciled_pending_wrap) {
+    ++ingress_stats_.dma_wrap_reconciliations;
+  }
+  *produced_total = reconciled.produced_total;
+  return true;
 }
 
 void FeederUartIngress::invalidateRange(size_t offset, size_t length) {
@@ -198,11 +218,17 @@ void FeederUartIngress::service(size_t byte_budget,
     }
   }
 
-  uint64_t produced = producedTotal();
-  if (produced < consumed_total_) {
-    // A DMA restart or an interrupt race invalidated the previous cursor.
+  uint64_t produced = 0;
+  if (!producedTotal(&produced)) {
+    // The producer position can no longer be reconstructed without risking
+    // duplicate or silently skipped bytes. Stop this ingress epoch and require
+    // an explicit board recovery instead of resetting the consumer cursor.
+    HAL_UART_DMAStop(&g_uart);
     decoder_.resetFraming();
-    consumed_total_ = produced;
+    initialized_ = false;
+    ingress_stats_.max_service_us =
+        std::max(ingress_stats_.max_service_us, micros() - started_us);
+    return;
   }
   uint64_t available = produced - consumed_total_;
   if (available > kDmaBufferSize) {
@@ -221,10 +247,18 @@ void FeederUartIngress::service(size_t byte_budget,
       static_cast<size_t>(std::min<uint64_t>(available, byte_budget));
   decoder_.setCallback(frame_fn, context);
   while (remaining_budget > 0U) {
+    if (service_time_budget_us_ > 0U &&
+        static_cast<uint32_t>(micros() - started_us) >=
+            service_time_budget_us_) {
+      ++ingress_stats_.service_time_budget_hits;
+      break;
+    }
     const size_t offset =
         static_cast<size_t>(consumed_total_ & (kDmaBufferSize - 1U));
     const size_t chunk =
-        std::min(remaining_budget, kDmaBufferSize - offset);
+        std::min(
+            std::min(remaining_budget, kDmaBufferSize - offset),
+            kServiceChunkBytes);
     invalidateRange(offset, chunk);
     decoder_.push(&g_dma_buffer[offset], chunk, arrival_mono_us);
     consumed_total_ += chunk;
@@ -242,6 +276,16 @@ bool FeederUartIngress::stale(uint64_t now_mono_us) const {
     return true;
   }
   return now_mono_us - last >
+         static_cast<uint64_t>(stale_timeout_ms_) * 1000ULL;
+}
+
+bool FeederUartIngress::statusFresh(uint64_t now_mono_us) const {
+  const uint64_t last = decoder_.lastStatusMonoUs();
+  if (!initialized_ || !decoder_.statusValid() || last == 0U ||
+      now_mono_us < last) {
+    return false;
+  }
+  return now_mono_us - last <=
          static_cast<uint64_t>(stale_timeout_ms_) * 1000ULL;
 }
 

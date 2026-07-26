@@ -135,6 +135,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t service_reported_frames_sent_total_ = 0;
   uint32_t service_reported_stall_event_sequence_ = 0;
   uint32_t service_reported_queue_pressure_close_total_ = 0;
+  uint32_t acknowledged_queue_pressure_disconnect_sequence_ = 0;
   bool session_anchor_queued_ = false;
 
   void syncWorkerState(const WifiWorkerStateSnapshot& state,

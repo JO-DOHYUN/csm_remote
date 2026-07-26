@@ -44,6 +44,17 @@ struct FeederStatus {
   uint32_t ring_high_water = 0;
 };
 
+// These counters are cumulative within one feeder boot session. Any non-zero
+// value means the source CAN lane has observed a loss or controller fault and
+// must not be advertised as operational again until a new, healthy epoch.
+constexpr bool feederSourceHealthy(const FeederStatus& status) {
+  return status.ring_overflow == 0U &&
+         status.mcp_overflow_events == 0U &&
+         status.mcp_error_irq_events == 0U &&
+         status.mcp_bus_off_events == 0U &&
+         status.eflg_or == 0U;
+}
+
 struct FeederWireStats {
   uint32_t packets_ok = 0;
   uint32_t can_batches = 0;
@@ -56,12 +67,15 @@ struct FeederWireStats {
   uint32_t contract_failures = 0;
   uint32_t length_failures = 0;
   uint32_t packet_sequence_gaps = 0;
+  // Packets counted here are rejected before any contained frame is exposed.
   uint32_t packet_duplicates_or_reorders = 0;
   uint32_t frame_sequence_gaps = 0;
+  // Frames counted here are rejected before the frame callback is invoked.
   uint32_t frame_duplicates_or_reorders = 0;
   uint32_t callback_rejects = 0;
   uint32_t boot_changes = 0;
   uint32_t current_boot_id = 0;
+  // Last accepted sequence in the current feeder boot session.
   uint32_t last_packet_sequence = 0;
   uint32_t last_frame_sequence = 0;
 };
@@ -108,9 +122,8 @@ class FeederWireDecoder {
   void finishPacket(uint64_t arrival_mono_us);
   bool acceptHeader(const uint8_t* raw, size_t raw_length,
                     uint64_t arrival_mono_us);
-  void notePacketSequence(uint32_t sequence);
-  void noteFrameSequence(uint32_t sequence);
+  bool acceptPacketSequence(uint32_t sequence);
+  bool acceptFrameSequence(uint32_t sequence);
 };
 
 }  // namespace csm::board::feeder
-

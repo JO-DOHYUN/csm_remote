@@ -62,9 +62,10 @@ if "#define BOARD_WIFI_TX_CHUNK_BYTES 1024" not in worker_header:
 if "FixedFrameByteQueue" not in mailbox_header or "FixedFrameQueue<" in mailbox_header:
     fail("Wi-Fi mailbox must use the bounded byte-pool queue")
 for token in (
-    "BOARD_WIFI_SINK_QUEUE_RECORDS=252",
+    "BOARD_WIFI_SINK_QUEUE_RECORDS=512",
     "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
     "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2048",
+    "BOARD_WIFI_STALL_TIMEOUT_MS=2500",
     "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
 ):
     if token not in platformio:
@@ -79,6 +80,44 @@ for token in (
 ):
     if token not in worker:
         fail(f"socket worker is missing deterministic TX progress policy {token!r}")
+
+for token in (
+    "BOARD_WIFI_QUEUE_PRESSURE_NO_PROGRESS_GRACE_MS",
+    "queue_pressure_no_progress_grace_ms",
+    "wifiShouldIsolateQueuePressure",
+):
+    if token in contract or token in worker:
+        fail(f"legacy high-water timer close remains: found {token!r}")
+
+mailbox_source = (
+    ROOT / "src" / "board" / "uplink" / "WifiWorkerMailbox.cpp"
+).read_text(encoding="utf-8")
+for token in (
+    "queued_bytes_",
+    "queued_records_",
+    "queue_high_water_bytes_",
+    "queue_high_water_records_",
+    "updateQueueSnapshot",
+):
+    if token in mailbox_header or token in mailbox_source:
+        fail(f"mailbox contains a racing cached queue snapshot: found {token!r}")
+
+for token in (
+    "queuePressureDisconnectRequestSequence",
+    "queuePressureDisconnectHandledSequence",
+    "queue_pressure_disconnect_latched_",
+    "compare_exchange_strong",
+):
+    if token not in mailbox_header + mailbox_source:
+        fail(f"one-shot admission isolation latch is missing {token!r}")
+
+for token in (
+    "handled_queue_pressure_disconnect_sequence_",
+    "closeClient(WifiCloseReason::QueuePressure)",
+    "markQueuePressureDisconnectHandled",
+):
+    if token not in worker_header + worker:
+        fail(f"worker QueuePressure close boundary is missing {token!r}")
 
 for token in (
     "queued.queued_records >= normal_limit",
@@ -158,7 +197,9 @@ for token in (
         fail(f"socket worker contains forbidden cross-boundary action {token!r}")
 
 main = (ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
-if "delay(BOARD_WIFI_MAIN_IDLE_SLICE_MS)" not in main:
-    fail("main loop does not provide the bounded lower-priority Wi-Fi slice")
+if "BOARD_WIFI_MAIN_IDLE_SLICE_MS" in main:
+    fail("main loop must not impose a fixed Wi-Fi idle delay")
+if "rtos::ThisThread::yield();" not in main:
+    fail("main loop does not yield non-blockingly to the Wi-Fi worker")
 
 print("Wi-Fi architecture guard PASS")

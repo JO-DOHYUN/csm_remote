@@ -90,6 +90,12 @@ source counter를 검증한 뒤에만 기존 CAN truth queue에 넣는다. feede
 DMA ingest를 막지 않는다. J4 bus1, RC authority, safety, control TX 소유권은
 기존 M7 경계를 유지한다.
 
+feeder bus0 readiness는 단순 UART packet 수신으로 성립하지 않는다. 현재 boot
+ID에서 새로 수신한 status가 250 ms 이내이고, packet도 stale하지 않으며, source
+ring overflow/MCP overflow/error IRQ/bus-off/EFLG와 M7 DMA cursor fault가 모두
+없어야 한다. boot ID 변경은 이전 status와 그 timestamp를 즉시 무효화한다.
+이 readiness 전이는 capability, BOARD_HEALTH, status LED에 동일하게 투영한다.
+
 ## 실행 및 메모리 원칙
 
 - hot path는 고정 크기 storage와 bounded queue를 사용한다.
@@ -114,3 +120,69 @@ USB/Wi-Fi 독립 sink까지 연결됐다. 그러나 autonomy 입력은 제품 ru
 기본 Off다. 기존 passive
 profile은 회귀 기준으로 유지한다. reset/recovery 상세 경계는
 `DEBUG_AND_RECOVERY_ARCHITECTURE_KO.md`를 따른다.
+
+## 최종 결정론적 product executive
+
+제품 경로의 최종 소유권과 데이터 흐름은 아래 하나로 고정한다.
+
+```text
+hard-safety ISR ---------------------------> latched safety snapshot
+M4 RC latest / host latest / autonomy latest
+  -> RealtimeCoordinator (absolute release timeline)
+  -> authority -> safety -> limiter -> mapper
+  -> FdcanOwner -> hardware TX completion journal
+
+FDCAN RX ISR ring / feeder UART DMA ring
+  -> source validator -> EvidenceSequencer
+  -> CanonicalPublisher
+  -> independent USB worker / independent Wi-Fi worker
+```
+
+- `RealtimeCoordinator`만 authority와 control state를 갱신하고 control frame을
+  요청한다. RC, host, autonomy adapter는 latest-value snapshot 또는 ordered
+  command event만 제공하며 CAN driver를 직접 호출하지 않는다.
+- `FdcanOwner`만 built-in FDCAN register/FIFO를 소유한다. enqueue 성공과 실제
+  TX 완료를 구분하고 `CAN_TX_RAW` 성공 evidence는 hardware completion 뒤에만
+  생성한다.
+- feeder는 외부 CAN의 read-only source다. UART DMA 수신, COBS/CRC, boot/packet/
+  frame sequence 검증을 통과한 frame만 canonical input이 된다.
+- `EvidenceSequencer`는 sink 수락 여부와 무관하게 canonical record identity를
+  한 번 소비한다. USB와 Wi-Fi는 immutable record를 독립 소비하며 어느 sink도
+  source ingest, authority 또는 control deadline을 막지 않는다.
+
+## 시간과 과부하 계약
+
+- 기준 timeline은 1 ms absolute phase이며 drive 5 ms, steering 20 ms release는
+  `previous_release + period`로 진행한다. 지연 뒤 `now + period`로 재기준화하지
+  않고, 놓친 release 수를 정확히 계수하며 catch-up burst는 만들지 않는다.
+- 한 control job이 다음 release와 겹치면 timing fault를 기록하고 안전 정책에
+  따라 inhibit/neutral로 전이한다. watchdog은 단순 loop 생존이 아니라 ordered
+  checkpoints와 control progress를 감시한다.
+- hard safety는 atomic latched state, 연속 조작값은 latest snapshot, arm/session/
+  completion/fault는 bounded ordered event로 분리한다.
+- source별 ring은 single-producer/single-consumer 소유권을 갖는다. hot path에는
+  heap allocation, mutex 대기, transport retry/yield를 두지 않는다.
+- feeder UART decoder는 한 loop에서 byte budget과 CPU-time budget을 동시에
+  적용한다. 기본 CPU budget은 750 us이고 64-byte 이하 chunk 사이에서만
+  재평가하여 control release를 보호한다. circular DMA의 NDTR reload와
+  transfer-complete callback 사이 race는 pending TC가 증명하는 한 번의 wrap만
+  보정한다. 그 밖의 역행 cursor는 byte replay를 하지 않고 ingress epoch를
+  fail-closed로 중단한다.
+- Wi-Fi worker는 설정된 write/byte budget 안에서 먼저 배수한다. 실제
+  `WOULD_BLOCK` 또는 무진행 시간/고수위가 함께 성립할 때만 해당 client를
+  격리하고 새 sink epoch로 재연결한다.
+
+현재 검증된 feeder 운용 envelope는 UART 1,000,000 baud에서 2,000 CAN
+frame/s다. 더 높은 rate나 양방향 feeder는 wire/link budget, DMA overrun,
+fault-injection, soak gate를 새로 통과하기 전까지 제품 계약이 아니다.
+
+## 단계별 완성 gate
+
+1. absolute periodic scheduler와 Wi-Fi bounded drain을 host contract로 고정한다.
+2. FDCAN 단일 owner와 direct-write 금지 guard를 세운다.
+3. RX ISR ring/FIFO-lost evidence와 TX completion journal을 연결한다.
+4. RC와 Service/HIL을 같은 coordinator/authority/mapper 경로로 통합한다.
+5. feeder reset, CRC, truncation, duplicate/reorder, ring/UART overflow를 주입한다.
+6. legacy direct path를 제거하고 `main.cpp`를 composition root로 축소한다.
+7. 동시 RC + feeder 2,000 frame/s + USB + Wi-Fi fault/soak를 통과한 뒤 제품
+   readiness를 주장한다.

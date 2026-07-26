@@ -230,3 +230,81 @@
   12/24/36 while the traction controller could still have zero encoder motion.
   This restores the known bench behavior without changing ID, DLC, direction,
   stop payload, cadence, authority, or safety fallback.
+
+## D-019 RP2040 feeder external-CAN source boundary
+
+- Date: 2026-07-24
+- Status: Architecture accepted; standalone and feeder-to-CSM throughput gates
+  passed, fault-injection and combined soak remain open.
+- Decision: external CAN bus0 is ingested by the RP2040 feeder and delivered to
+  M7 as a read-only, COBS/CRC32C protected UART source. M7 remains the sole owner
+  of authority, canonical identity, product health, and all control TX. The
+  accepted bench envelope is 1,000,000 baud and 2,000 CAN frame/s; a higher
+  envelope requires a new measured link budget and HIL gate.
+- Required evidence: boot ID, packet/frame sequence, CRC, truncation, duplicate,
+  reorder, feeder reset, UART/ring overflow, and downstream sink loss are
+  distinct counters/events. Feeder or its host telemetry must never block CAN
+  ingest.
+- Migration rule: the legacy on-CSM MCP/SPI path is removed only after the
+  feeder fault and combined-load gates pass; two active owners are forbidden.
+
+## D-020 Deterministic M7 product executive
+
+- Date: 2026-07-24
+- Status: Architecture accepted; staged implementation and HIL in progress.
+- Decision: control uses one absolute periodic coordinator, one FDCAN owner, and
+  one evidence sequencer. Drive 5 ms and steering 20 ms keep fixed phase,
+  account exact missed releases, and do not emit catch-up bursts. USB/Wi-Fi are
+  independent bounded workers and cannot block authority, CAN ingest, or
+  control.
+- Evidence semantics: `CAN_TX_RAW` success follows hardware TX completion, not
+  FIFO enqueue. Watchdog health is based on ordered subsystem checkpoints and
+  control progress rather than a single main-loop heartbeat.
+- Migration rule: each staged owner move must add a host/HIL seam and delete or
+  explicitly disable the superseded direct path in the same change. No
+  second scheduler, queue, or driver owner may coexist as a temporary product
+  path.
+
+## D-021 Wi-Fi descriptor envelope follows the actual mixed-record load
+
+- Date: 2026-07-24
+- Status: Configured; final target build and concurrent HIL pending.
+- Decision: all product Wi-Fi profiles use the measured 48 KiB byte pool plus
+  512 descriptors and the 2 KiB/four-descriptor critical reserve. The SPSC
+  descriptor stores only `publish_seq`, length/cursor, low 16 bits of the
+  monotonic committed byte end, and priority; its size is compile-time fixed at
+  16 bytes. Since the byte envelope is below 65,536 bytes, uint16 subtraction
+  remains exact at a full ring and across uint32 counter wrap.
+- Reason: the product stream now includes 200 Hz individual `CAN_TX_RAW`
+  evidence in addition to segmented RX and health records. On the real board,
+  252 descriptors reached the 75% record threshold at only about 12.2 KiB and
+  caused a queue-pressure close under low CAN load, so the older low-rate
+  assumption was false. Removing unused `RecordType` and replacing the 32-bit
+  monotonic byte end with its 16-bit low word reduces descriptor storage from
+  24 to 16 bytes. `512 x 16` therefore costs only 2,144 bytes more than the
+  former `252 x 24` layout, rather than the 6,240-byte cost of an uncompressed
+  expansion. Descriptor-tail release remains the sole commit boundary.
+- Gate: queue overflow, critical-reserve loss, premature queue-pressure close,
+  and RAM use must all be zero/within budget in the final build and simultaneous
+  feeder 2,000 frame/s + USB + Wi-Fi HIL.
+
+## D-022 Wi-Fi throughput deficit is a transport gate, not a queue-size gate
+
+- Date: 2026-07-26
+- Status: 100 fps combined HIL failed at the Wi-Fi sink; CAN, feeder, USB, and
+  canonical integrity passed.
+- Evidence: the baseline client received 52,892 B before the 508-normal-record
+  reserve boundary isolated it. Giving Wi-Fi an independent 1 ms worker period
+  and a bounded four-write/4 KiB pump increased delivery to 282,923 B, but the
+  queue still reached the same descriptor boundary after about 20.7 s. The
+  capture retained one boot session, zero CRC/typed/segment/capture gaps, zero
+  CAN/feeder/USB loss, and zero socket/stall/send-call-budget errors.
+- Decision: do not enlarge the 48 KiB/512-descriptor queue or relax
+  QueuePressure isolation. Both would only delay a measured steady-state
+  deficit. Keep the better measured bounded pump and stop speculative scheduler
+  changes.
+- Next gate: measure raw board-to-PC TCP capacity independently of canonical
+  record production. If the socket path has sufficient margin, correct the
+  worker/driver boundary and repeat 100 fps then 2,000 fps. If it does not,
+  approve a product-level evidence batching/compression or transport/hardware
+  change before further combined-load work.

@@ -18,8 +18,11 @@ $include = Join-Path $project "include"
 $sources = @(
   (Join-Path $project "test\remote_control_contract_test.cpp"),
   (Join-Path $project "src\board\authority\AuthorityManager.cpp"),
+  (Join-Path $project "src\board\SafetySupervisor.cpp"),
+  (Join-Path $project "src\board\can\BuiltinCanTxOwner.cpp"),
   (Join-Path $project "src\board\control\CanTxGateway.cpp"),
   (Join-Path $project "src\board\control\CommandLimiter.cpp"),
+  (Join-Path $project "src\board\control\ControlReleaseSchedule.cpp"),
   (Join-Path $project "src\board\control\RemoteControlOrchestrator.cpp"),
   (Join-Path $project "src\board\control\RemoteControlRuntime.cpp"),
   (Join-Path $project "src\board\control\VehicleCommandMapper.cpp"),
