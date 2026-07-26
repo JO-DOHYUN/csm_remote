@@ -1,0 +1,32 @@
+{
+  "profile": "portenta_h7_m7_lwip_candidate_v1",
+  "framework": {
+    "platformio_ststm32": "19.2.0",
+    "arduino_mbed": "4.3.1",
+    "arduino_core_commit": "6816d442fd00bc17f83c73396d3d8d90285a6a8a",
+    "mbed_os_commit": "17dc3dc2e6e2817a8bd3df62f38583319f0e4fed",
+    "toolchain": "GCC_ARM 7-2017-q4-major"
+  },
+  "mbed_config": {
+    "lwip.tcp-mss": 1460,
+    "lwip.tcp-snd-buf": "(4 * TCP_MSS)",
+    "lwip.tcp-wnd": "(6 * TCP_MSS)",
+    "lwip.memp-num-tcp-seg": 24,
+    "lwip.pbuf-pool-size": 10,
+    "lwip.mem-size": 32768,
+    "lwip.tcpip-thread-stacksize": 4096
+  },
+  "build_evidence": {
+    "libmbed_sha256": "cb63a30794680f10ac13ee28c3109e25e4b5045b9ff81a5229a4adf1b4833a7a",
+    "libmbed_bytes": 7776886,
+    "raw_blocking_link": "failed",
+    "linker_region": "RAM_D2",
+    "overflow_bytes": 16403
+  },
+  "promotion": "rejected_ram_d2_overflow",
+  "constraints": [
+    "Do not replace the product profile solely because raw throughput rises.",
+    "Record libmbed.a, mbed_config.h, and full profile hashes.",
+    "Check product RAM, stack high-water, CAN/control deadlines, allocation failures, fault injection, and soak before promotion."
+  ]
+}

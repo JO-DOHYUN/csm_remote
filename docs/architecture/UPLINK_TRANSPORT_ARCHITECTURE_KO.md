@@ -87,9 +87,9 @@ CanonicalPublisher
 - Mbed `TCPSocket::accept()`가 반환한 factory socket은 `close()`가 객체까지 해제한다. worker는 close 뒤 포인터를 참조하거나 별도 `delete`하지 않는다.
 - 워커는 static 16 KiB stack의 단일 수명 thread이며 재생성하지 않는다.
   실제 free/max-used stack은 debug record에서 1초 주기로 계측한다.
-- Wi-Fi worker는 bounded nonblocking send/recv 한 회 뒤 5 ms sleep하는 Normal priority이며
-  메인은 끝에서 1 ms slice를 양보한다. BelowNormal worker가 항상 runnable인 system
-  thread에 굶어 canonical 생산율보다 낮아지던 경로는 제거했다. 이는 application thread 간 실행 계약이지,
+- 현재 제품 Wi-Fi worker는 1 ms 주기로 실행하고 한 pump에서 최대 4회/4096 B/1000 us까지
+  bounded nonblocking send를 수행하는 Normal priority이며, 메인은 끝에서 1 ms slice를 양보한다.
+  이는 application thread 간 실행 계약이지,
   같은 M7의 vendor driver/kernel/IRQ stall이나 radio·전원 장애로부터 물리
   격리한다는 뜻은 아니다. 연결 전 accept poll 요청은 25 ms다.
 - active client가 존재하는 동안 listener `accept()`를 다시 호출하지 않는다.
@@ -113,6 +113,26 @@ CanonicalPublisher
   시작하지 않고 USB와 retained evidence를 살리는 quarantine으로 진입한다.
 - deterministic mailbox/fault contract와 socket ownership guard가 HIL보다
   먼저 통과해야 한다.
+
+### 2026-07-26 raw AP/TCP 병목 격리
+
+- 제품 publisher·queue·CAN·RC·feeder를 제외한 영구 raw 진단 profile 두 개를 추가했다.
+  둘 다 같은 Portenta SoftAP와 Mbed 6.17/lwIP 기본 profile을 사용한다.
+- PC 30초 무결성 수신에서 blocking은 2,103,264 B, 평균 69,413 B/s였고,
+  nonblocking+`sigio`는 1,970,872 B, 평균 65,083 B/s였다. 두 경로 모두
+  pattern mismatch와 unexpected close는 0이지만 1초 수신량 0인 구간이 있었다.
+- blocking `send()`는 최대 1,046,520 us 동안 머물렀고, `sigio` 경로는
+  최대 4,297 ms 무진행을 관측했다. 따라서 기존 약 13 kB/s 제품 결과의 원인을
+  제품 queue 하나로 한정할 수 없으며, 현재 Mbed/lwIP/SoftAP 경로 자체에도
+  처리량과 지연 변동 문제가 있다.
+- 이 결과는 무선 하드웨어 최대치 판정이 아니다. 다음 격리 gate는 동일 raw
+  시험의 tuned Mbed profile 비교이며, 이후 STA/lwiperf로 SoftAP·TCPSocket
+  wrapper·하위 driver 경계를 추가 분리한다.
+- 문서 초안의 production-candidate 값(MSS 1460, send buffer 4 MSS,
+  window 6 MSS, mem 32768, TCP/IP stack 4096)을 실제 Mbed 6.17로 재빌드했으나
+  raw 펌웨어 링크에서 `RAM_D2`가 16,403 B 초과했다. 이 profile은 폐기했으며
+  제품에 적용하지 않는다. 다음 profile은 실제 linker section별 잔여량 안에서
+  산정하고 raw A/B를 통과해야 한다.
 
 구현 완료:
 

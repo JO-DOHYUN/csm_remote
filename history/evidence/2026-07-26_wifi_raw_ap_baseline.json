@@ -1,0 +1,55 @@
+{
+  "gate": "CSM_WIFI_RAW_AP_BASELINE",
+  "date_kst": "2026-07-26",
+  "board": "Arduino Portenta H7 M7",
+  "peer": "Windows 11 PC",
+  "network_mode": "SoftAP",
+  "framework": {
+    "platformio_ststm32": "19.2.0",
+    "arduino_mbed": "4.3.1",
+    "mbed_os": "6.17.0",
+    "lwip": {
+      "tcp_mss": 536,
+      "tcp_snd_buf": 1072,
+      "tcp_wnd": 2144,
+      "memp_num_tcp_seg": 16,
+      "pbuf_pool_size": 5,
+      "mem_size": 16000,
+      "tcpip_thread_stacksize": 1200
+    }
+  },
+  "runs": [
+    {
+      "mode": "blocking",
+      "pass": true,
+      "actual_seconds": 30.30051669999375,
+      "total_bytes": 2103264,
+      "average_bytes_per_s": 69413.469770977,
+      "minimum_interval_bytes_per_s": 0.0,
+      "maximum_interval_bytes_per_s": 142361.00640763988,
+      "max_send_call_us": 1046520,
+      "max_no_progress_ms": 0,
+      "send_errors": 0,
+      "pattern_mismatch": null,
+      "unexpected_close": false,
+      "stream_sha256": "389949f8722e0b63af623030b97f7816bc74948c6fba90353919dcbed177d5c8"
+    },
+    {
+      "mode": "nonblocking_sigio",
+      "pass": true,
+      "actual_seconds": 30.282635100011248,
+      "total_bytes": 1970872,
+      "average_bytes_per_s": 65082.579289781424,
+      "minimum_interval_bytes_per_s": 0.0,
+      "maximum_interval_bytes_per_s": 258563.8901640127,
+      "max_send_call_us": 139,
+      "max_no_progress_ms": 4297,
+      "send_errors": 0,
+      "pattern_mismatch": null,
+      "unexpected_close": false,
+      "stream_sha256": "caa5932ed9789bc0f908ddc6f6d7340a6ce35363f6075299ebad442f3716ac49"
+    }
+  ],
+  "decision": "The current product queue is not the only limiting layer. Compare a reproducibly rebuilt tuned Mbed profile before another product-worker or queue rewrite.",
+  "remaining_boundary": "This AP result does not distinguish TCPSocket/netconn, SoftAP, WHD/SDIO, RF, or the radio hardware maximum. STA and raw-lwIP/lwiperf comparisons remain open."
+}

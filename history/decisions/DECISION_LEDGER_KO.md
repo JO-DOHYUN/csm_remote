@@ -308,3 +308,28 @@
   worker/driver boundary and repeat 100 fps then 2,000 fps. If it does not,
   approve a product-level evidence batching/compression or transport/hardware
   change before further combined-load work.
+
+## D-023 Raw Wi-Fi isolates a platform-path deficit
+
+- Date: 2026-07-26
+- Status: Baseline raw AP comparison passed integrity and failed deterministic
+  throughput; tuned network-profile comparison remains open.
+- Evidence: with product publisher, queues, CAN, RC, feeder, and typed encoding
+  compiled out, the pinned Mbed 6.17 baseline delivered 2,103,264 B at
+  69,413 B/s average in blocking mode and 1,970,872 B at 65,083 B/s average
+  in nonblocking+`sigio` mode over valid 30 s PC runs. Both preserved the
+  deterministic byte pattern and connection, but both had zero-throughput
+  one-second windows. Blocking `send()` reached 1,046,520 us; `sigio` reached
+  4,297 ms without progress.
+- Decision: do not enlarge the product queue and do not rewrite the product
+  worker again before a reproducible Mbed network-profile A/B. Pin
+  `ststm32 19.2.0` and Arduino Mbed `4.3.1`, retain both raw benchmarks, and
+  compare a bounded tuned profile against this exact baseline.
+- Rejected candidate: the handoff's initial production profile was rebuilt
+  against Mbed OS commit `17dc3dc2` and produced `libmbed.a` SHA-256
+  `CB63A307...B4833A7A`, but the raw firmware exceeded Portenta `RAM_D2` by
+  16,403 B. It was neither uploaded nor promoted. The next profile must be
+  derived from the real linker-section budget rather than copied values.
+- Boundary: this result implicates the current Mbed/lwIP/SoftAP path but does
+  not prove a radio hardware limit or distinguish TCPSocket/netconn, SoftAP,
+  WHD/SDIO, and RF. STA and lwiperf/raw-lwIP gates remain required.

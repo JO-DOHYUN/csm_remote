@@ -2,6 +2,30 @@
 
 Updated: 2026-07-26
 
+## 2026-07-26 raw Wi-Fi platform boundary
+
+- PlatformIO `ststm32 19.2.0` and Arduino Mbed `4.3.1` are now pinned for the
+  CSM M7 build. The effective baseline is Mbed OS 6.17 with lwIP
+  `MSS=536`, `SND_BUF=1072`, `WND=2144`, 16 TCP segments, five pbufs,
+  16,000 B heap, and a 1,200 B TCP/IP thread stack.
+- Permanent blocking and nonblocking+`sigio` raw SoftAP/TCP benchmarks remove
+  CSM publisher, queues, CAN, RC, feeder, and product encoding from the path.
+  Both 30 s PC runs passed deterministic byte-pattern integrity with no
+  unexpected close. Blocking delivered 2,103,264 B at 69,413 B/s average;
+  `sigio` delivered 1,970,872 B at 65,083 B/s average.
+- Both raw paths still had zero-throughput one-second windows. Blocking
+  `send()` reached 1,046,520 us and `sigio` recorded 4,297 ms maximum
+  no-progress. This proves the product queue is not the only limiting layer;
+  the current Mbed/lwIP/SoftAP path requires a tuned-profile A/B before another
+  worker or queue rewrite.
+- The handoff's initial production-candidate Mbed values were rebuilt exactly,
+  producing `libmbed.a` SHA-256 `CB63A307...B4833A7A`, but even the small raw
+  firmware overflowed Portenta `RAM_D2` by 16,403 B. That candidate is rejected
+  and was not uploaded or applied to the product build.
+- Product readiness remains blocked. The next gate is a reproducible tuned
+  Mbed profile derived within the actual linker/RAM budget, followed by
+  STA/lwiperf isolation and mixed-load HIL.
+
 ## 2026-07-26 deterministic executive closure and 100 fps combined gate
 
 - Built-in CAN TX now has one owner and reports `CAN_TX_RAW` only after FDCAN
