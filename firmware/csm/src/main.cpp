@@ -412,6 +412,10 @@
 #define BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS 100
 #endif
 
+#ifndef BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS
+#define BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS 1000
+#endif
+
 #ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
 #define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 5000
 #endif
@@ -1040,6 +1044,9 @@ static uint16_t last_remote_state_signature = 0xFFFFu;
 #endif
 
 static uint32_t last_health_ms = 0;
+#if BOARD_ENABLE_WIFI_UPLINK
+static uint32_t last_wifi_transport_diagnostic_ms = 0;
+#endif
 static uint32_t last_capability_ms = 0;
 static uint32_t last_encoder_derived_ms = 0;
 static uint32_t uplink_boot_ms = 0;
@@ -1881,6 +1888,14 @@ static bool should_suppress_low_value_record(RecordType type, UplinkPriority pri
   if (priority != UplinkPriority::Diagnostic) {
     return false;
   }
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (type == RecordType::TransportDiagnostic) {
+    // This 1 Hz record is the evidence that distinguishes producer, queue,
+    // socket, and peer loss. Keep it subject to the bounded diagnostic
+    // admission lane, but do not hide it merely because a sink has backlog.
+    return false;
+  }
+#endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   if (type == RecordType::RuntimeDiagnostic) {
     // The first FDCAN outcomes are the evidence under test. Keep the bounded
@@ -1903,6 +1918,21 @@ static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
                         uint8_t flags = 0) {
   return emit_record(type, payload, len, csm::board::uplink::default_priority_for_record(type), flags);
 }
+
+#if BOARD_ENABLE_WIFI_UPLINK
+static void emit_wifi_transport_diagnostic(uint32_t now_ms) {
+  uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
+  const auto snapshot =
+      wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
+  const uint16_t length =
+      csm::board::uplink::build_wifi_transport_diagnostic_payload(
+          snapshot, payload, sizeof(payload));
+  if (length == sizeof(payload)) {
+    emit_record(RecordType::TransportDiagnostic, payload, length,
+                UplinkPriority::Diagnostic);
+  }
+}
+#endif
 
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
 static void service_runtime_diagnostic_recovery_replay() {
@@ -2575,6 +2605,10 @@ static void emit_capability() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::RuntimeDiagnostic));
+#endif
+#if BOARD_ENABLE_WIFI_UPLINK
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::TransportDiagnostic));
 #endif
 #if BOARD_ENABLE_ENCODER_IO
   config.supported_uplink_records |=
@@ -5928,6 +5962,9 @@ void setup() {
   last_capability_ms = millis();
 
   last_health_ms = millis();
+#if BOARD_ENABLE_WIFI_UPLINK
+  last_wifi_transport_diagnostic_ms = last_health_ms;
+#endif
   last_encoder_derived_ms = millis();
   last_watchdog_toggle_ms = millis();
   record_runtime_breadcrumb(RuntimeStageIdle);
@@ -6107,6 +6144,9 @@ void loop() {
   const uint32_t now_ms = millis();
   if (!uplink_host_session_open()) {
     last_health_ms = now_ms;
+#if BOARD_ENABLE_WIFI_UPLINK
+    last_wifi_transport_diagnostic_ms = now_ms;
+#endif
   } else if (now_ms - last_health_ms >= 1000) {
     record_runtime_breadcrumb(RuntimeStageHealthPublish);
     const EncoderSnapshot snap = poll_encoder();
@@ -6114,6 +6154,14 @@ void loop() {
     last_health_ms = now_ms;
     record_runtime_breadcrumb(RuntimeStageIdle);
   }
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (uplink_host_session_open() &&
+      now_ms - last_wifi_transport_diagnostic_ms >=
+          BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS) {
+    emit_wifi_transport_diagnostic(now_ms);
+    last_wifi_transport_diagnostic_ms = now_ms;
+  }
+#endif
   service_uplink(1024);
   service_deferred_loss_events();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS

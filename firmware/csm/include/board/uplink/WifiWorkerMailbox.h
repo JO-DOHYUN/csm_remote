@@ -41,6 +41,8 @@ struct WifiMailboxQueueSnapshot {
   uint32_t queued_bytes = 0;
   uint32_t high_water_bytes = 0;
   uint32_t first_queued_ms = 0;
+  uint32_t empty_to_nonempty_wake_total = 0;
+  uint32_t critical_wake_total = 0;
   uint16_t queued_records = 0;
   uint16_t high_water_records = 0;
   bool urgent = false;
@@ -59,6 +61,7 @@ class WifiWorkerMailbox {
 
   WifiWorkerMailbox();
 
+  void setNotifier(const WifiWorkerNotifier& notifier);
   WifiMailboxOfferResult tryOffer(const PublishedFrameView& frame,
                                   uint32_t now_ms);
   bool tryStageTx(uint8_t* destination, uint16_t capacity,
@@ -107,6 +110,9 @@ class WifiWorkerMailbox {
   std::atomic<uint32_t> queue_pressure_disconnect_request_sequence_{0};
   std::atomic<uint32_t> queue_pressure_disconnect_handled_sequence_{0};
   std::atomic<bool> queue_pressure_disconnect_latched_{false};
+  WifiWorkerNotifier notifier_;
+  std::atomic<uint32_t> empty_to_nonempty_wake_total_{0};
+  std::atomic<uint32_t> critical_wake_total_{0};
 
   static_assert((BOARD_WIFI_RX_MAILBOX_BYTES & (BOARD_WIFI_RX_MAILBOX_BYTES - 1u)) == 0,
                 "Wi-Fi RX mailbox capacity must be a power of two");
@@ -127,6 +133,7 @@ class WifiWorkerMailbox {
   WifiWorkerStateSnapshot state_;
 
   void requestQueuePressureDisconnect();
+  void notifyWorker(uint32_t bits) const;
 };
 
 }  // namespace csm::board::uplink

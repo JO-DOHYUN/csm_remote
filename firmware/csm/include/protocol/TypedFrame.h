@@ -34,6 +34,7 @@ enum class RecordType : uint8_t {
   StreamSession = 17,
   RemoteControlState = 18,
   RuntimeDiagnostic = 19,
+  TransportDiagnostic = 20,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

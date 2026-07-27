@@ -9,6 +9,7 @@
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/FixedFrameQueue.h"
 #include "board/uplink/FixedFrameByteQueue.h"
+#include "board/uplink/WifiTransportDiagnostic.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 #include "protocol/TypedRecords.h"
 
@@ -438,6 +439,45 @@ void wifi_mailbox_abort_invalidates_staged_generation() {
   CHECK(consumed.frames == 1);
 }
 
+struct WifiWakeCapture {
+  uint32_t calls = 0;
+  uint32_t bits = 0;
+};
+
+void captureWifiWake(void* context, uint32_t bits) {
+  auto* capture = static_cast<WifiWakeCapture*>(context);
+  capture->calls++;
+  capture->bits |= bits;
+}
+
+void wifi_mailbox_wakes_only_on_actionable_transitions() {
+  using namespace csm::board::uplink;
+  WifiWorkerMailbox mailbox;
+  WifiWakeCapture capture;
+  mailbox.setNotifier({&capture, captureWifiWake});
+
+  uint8_t bytes[16] = {};
+  PublishedFrameView normal{bytes, sizeof(bytes), 1, RecordType::BoardEvent,
+                            UplinkPriority::Normal};
+  PublishedFrameView critical{bytes, sizeof(bytes), 2,
+                              RecordType::StreamSession,
+                              UplinkPriority::Critical};
+  CHECK(mailbox.tryOffer(normal, 10) == WifiMailboxOfferResult::Accepted);
+  CHECK(capture.calls == 1);
+  CHECK((capture.bits & WifiWakeTxData) != 0);
+  CHECK(mailbox.tryOffer(normal, 11) == WifiMailboxOfferResult::Accepted);
+  CHECK(capture.calls == 1);
+  CHECK(mailbox.tryOffer(critical, 12) == WifiMailboxOfferResult::Accepted);
+  CHECK(capture.calls == 2);
+  const auto queued = mailbox.queueSnapshot();
+  CHECK(queued.empty_to_nonempty_wake_total == 1);
+  CHECK(queued.critical_wake_total == 1);
+
+  mailbox.requestAbort();
+  CHECK(capture.calls == 3);
+  CHECK((capture.bits & WifiWakeControl) != 0);
+}
+
 void runtime_diagnostic_layout_is_fixed_and_bounded() {
   CHECK(static_cast<uint8_t>(RecordType::RuntimeDiagnostic) == 19);
   CHECK(csm::kRuntimeDiagnosticSchema == 2);
@@ -451,6 +491,42 @@ void runtime_diagnostic_layout_is_fixed_and_bounded() {
   CHECK(csm::kRuntimeDiagnosticWifiWorkerStackMaxUsedOffset == 120);
   CHECK(csm::kRuntimeDiagnosticFirmwareBuildIdOffset + sizeof(uint32_t) ==
         csm::kRuntimeDiagnosticPayloadLen);
+}
+
+void transport_diagnostic_is_single_bounded_wire_record() {
+  using csm::board::uplink::WifiTransportDiagnosticSnapshot;
+  WifiTransportDiagnosticSnapshot snapshot;
+  snapshot.mono_us = 0x0102030405060708ULL;
+  snapshot.flags = csm::kTransportDiagnosticFlagEnabled |
+                   csm::kTransportDiagnosticFlagConnected;
+  snapshot.connection_epoch = 7;
+  snapshot.accepted_bytes_total = 12345;
+  snapshot.queue_bytes = 512;
+  snapshot.socket_bytes_total = 12000;
+  snapshot.wake_total = 77;
+  snapshot.last_accepted_publish_seq = 899;
+  snapshot.last_sent_publish_seq = 897;
+  uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
+  CHECK(csm::board::uplink::build_wifi_transport_diagnostic_payload(
+            snapshot, payload, sizeof(payload)) ==
+        csm::kTransportDiagnosticPayloadLen);
+  CHECK(static_cast<uint8_t>(RecordType::TransportDiagnostic) == 20);
+  CHECK(payload[csm::kTransportDiagnosticSchemaOffset] ==
+        csm::kTransportDiagnosticSchema);
+  CHECK(payload[csm::kTransportDiagnosticFlagsOffset] == snapshot.flags);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticAcceptedBytesOffset]) ==
+        snapshot.accepted_bytes_total);
+  CHECK(csm::rd_u32_le(&payload[csm::kTransportDiagnosticQueueBytesOffset]) ==
+        snapshot.queue_bytes);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticLastAcceptedPublishSeqOffset]) ==
+        static_cast<uint32_t>(snapshot.last_accepted_publish_seq));
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticLastSentPublishSeqOffset]) ==
+        static_cast<uint32_t>(snapshot.last_sent_publish_seq));
+  CHECK(csm::kTransportDiagnosticLastSentPublishSeqOffset + sizeof(uint64_t) ==
+        csm::kTransportDiagnosticPayloadLen);
 }
 
 struct SegmentCapture {
@@ -519,7 +595,9 @@ int main() {
   byte_queue_spsc_preserves_order_without_shared_lock();
   wifi_mailbox_critical_urgency_tracks_consumer_completion();
   wifi_mailbox_abort_invalidates_staged_generation();
+  wifi_mailbox_wakes_only_on_actionable_transitions();
   runtime_diagnostic_layout_is_fixed_and_bounded();
+  transport_diagnostic_is_single_bounded_wire_record();
   can_segment_batches_with_bounded_latency();
   wifi_queue_snapshot_supports_product_descriptor_capacity();
   if (failures != 0) return 1;

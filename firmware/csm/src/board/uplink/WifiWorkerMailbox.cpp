@@ -8,6 +8,10 @@ WifiWorkerMailbox::WifiWorkerMailbox() {
   state_lock_.clear(std::memory_order_release);
 }
 
+void WifiWorkerMailbox::setNotifier(const WifiWorkerNotifier& notifier) {
+  notifier_ = notifier;
+}
+
 WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     const PublishedFrameView& frame, uint32_t now_ms) {
   if (frame.bytes == nullptr || frame.length == 0 ||
@@ -24,6 +28,8 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     return WifiMailboxOfferResult::Busy;
   }
   WifiMailboxOfferResult result = WifiMailboxOfferResult::Accepted;
+  const bool was_empty = queue_.count() == 0;
+  const bool critical = frame.priority == UplinkPriority::Critical;
   const uint16_t normal_limit = static_cast<uint16_t>(
       BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
   const uint32_t normal_byte_limit =
@@ -33,7 +39,6 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
        queue_.queuedBytes() + frame.length > normal_byte_limit)) {
     result = WifiMailboxOfferResult::Reserved;
   } else {
-    const bool critical = frame.priority == UplinkPriority::Critical;
     if (critical) {
       urgent_records_.fetch_add(1, std::memory_order_release);
     }
@@ -51,6 +56,16 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     requestQueuePressureDisconnect();
   }
   producer_active_.store(false, std::memory_order_release);
+  if (result == WifiMailboxOfferResult::Accepted &&
+      (was_empty || critical)) {
+    if (was_empty) {
+      empty_to_nonempty_wake_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (critical) {
+      critical_wake_total_.fetch_add(1, std::memory_order_relaxed);
+    }
+    notifyWorker(WifiWakeTxData);
+  }
   return result;
 }
 
@@ -90,6 +105,7 @@ bool WifiWorkerMailbox::tryApplyAbort(uint32_t& aborted_bytes) {
 
 void WifiWorkerMailbox::requestAbort() {
   abort_request_sequence_.fetch_add(1, std::memory_order_release);
+  notifyWorker(WifiWakeControl);
 }
 
 void WifiWorkerMailbox::requestDisconnect() {
@@ -144,6 +160,10 @@ WifiMailboxQueueSnapshot WifiWorkerMailbox::queueSnapshot() const {
   snapshot.queued_bytes = queue_.queuedBytes();
   snapshot.high_water_bytes = queue_.highWaterBytes();
   snapshot.first_queued_ms = first_queued_ms_.load(std::memory_order_acquire);
+  snapshot.empty_to_nonempty_wake_total =
+      empty_to_nonempty_wake_total_.load(std::memory_order_acquire);
+  snapshot.critical_wake_total =
+      critical_wake_total_.load(std::memory_order_acquire);
   snapshot.queued_records = queue_.count();
   snapshot.high_water_records = queue_.highWaterRecords();
   snapshot.urgent = urgent_records_.load(std::memory_order_acquire) != 0;
@@ -253,6 +273,13 @@ void WifiWorkerMailbox::requestQueuePressureDisconnect() {
           std::memory_order_acquire)) {
     queue_pressure_disconnect_request_sequence_.fetch_add(
         1, std::memory_order_release);
+    notifyWorker(WifiWakeControl);
+  }
+}
+
+void WifiWorkerMailbox::notifyWorker(uint32_t bits) const {
+  if (notifier_.notify != nullptr) {
+    notifier_.notify(notifier_.context, bits);
   }
 }
 

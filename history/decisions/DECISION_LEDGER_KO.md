@@ -333,3 +333,24 @@
 - Boundary: this result implicates the current Mbed/lwIP/SoftAP path but does
   not prove a radio hardware limit or distinguish TCPSocket/netconn, SoftAP,
   WHD/SDIO, and RF. STA and lwiperf/raw-lwIP gates remain required.
+
+## D-024 Event-driven Wi-Fi worker with one canonical diagnostic boundary
+
+- Date: 2026-07-27
+- Status: Code/build/upload passed; physical throughput gate failed below the
+  required steady rate.
+- Decision: keep canonical producer and all socket ownership unchanged, but
+  replace the fixed 1 ms worker poll with RTOS event wakes from empty-to-
+  nonempty/critical/control/`sigio`, plus a 10 ms connected fallback. A
+  successful bounded pump self-wakes while queued data remains.
+- Evidence: add only record `20 TRANSPORT_DIAGNOSTIC`, one 128-byte snapshot at
+  1 Hz on the existing diagnostic lane. Offer, acceptance, queue, socket,
+  progress, wake, epoch, and publication-sequence values identify the first
+  losing boundary. No per-call log, second queue, replay, or new runtime owner
+  is introduced.
+- Gate result: the 30 s canonical diagnostic window measured accepted
+  8,943.4 B/s, socket 7,996.7 B/s, 26,495 B backlog growth, 3,289
+  `WOULD_BLOCK`, 312 `sigio`, one overflow/queue-pressure close, and zero
+  socket/stall errors. D-023 is confirmed for the product path: do not enlarge
+  queues or rewrite the worker again. The next approved work is the bounded
+  Mbed/lwIP/SoftAP profile/transport decision.

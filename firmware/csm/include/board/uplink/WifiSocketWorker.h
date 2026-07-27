@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <stdint.h>
 
 #include "board/uplink/WifiWorkerContract.h"
@@ -8,6 +9,7 @@
 #if BOARD_ENABLE_WIFI_UPLINK
 #include <TCPSocket.h>
 #include <WiFiServer.h>
+#include <rtos/EventFlags.h>
 #include <rtos/Thread.h>
 #endif
 
@@ -54,23 +56,32 @@ class WifiSocketWorker final {
   uint32_t handled_queue_pressure_disconnect_sequence_ = 0;
   WifiTxProgressTracker tx_progress_;
   uint32_t last_accept_poll_ms_ = 0;
+  uint32_t last_state_publish_ms_ = 0;
   uint32_t last_stack_sample_ms_ = 0;
   uint32_t next_startup_attempt_ms_ = 0;
   uint32_t current_call_started_us_ = 0;
   bool startup_complete_ = false;
   bool thread_started_ = false;
+  std::atomic<uint32_t> sigio_total_{0};
+  rtos::EventFlags wake_flags_;
 
   alignas(8) unsigned char thread_stack_[BOARD_WIFI_SOCKET_WORKER_STACK_BYTES] = {};
   alignas(rtos::Thread) unsigned char thread_storage_[sizeof(rtos::Thread)] = {};
   rtos::Thread* thread_ = nullptr;
 
   void run();
+  static void notifyFromMailbox(void* context, uint32_t bits);
+  void onSocketStateChanged();
+  void signalWake(uint32_t bits);
+  uint32_t nextWaitTimeoutMs(uint32_t now_ms) const;
+  void noteWake(uint32_t flags, bool fallback);
   bool initializeNetwork();
   void serviceRequests();
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);
   void serviceReceive(uint32_t now_ms);
   WifiTransmitPumpResult serviceTransmit(uint32_t now_ms);
+  void notePumpResult(const WifiTransmitPumpResult& result);
   bool applyPendingConsume();
   void closeClient(WifiCloseReason reason);
   void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);
@@ -79,7 +90,7 @@ class WifiSocketWorker final {
   void beginCall(WifiWorkerCallPhase phase);
   uint32_t endCall(int32_t result);
   void sampleStack(uint32_t now_ms);
-  void publishState(uint32_t now_ms);
+  void publishState(uint32_t now_ms, bool force = false);
 };
 #endif
 

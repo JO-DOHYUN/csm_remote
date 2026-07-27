@@ -45,6 +45,7 @@ Record types:
 - `17 STREAM_SESSION`
 - `18 REMOTE_CONTROL_STATE`
 - `19 RUNTIME_DIAGNOSTIC` debug profile uplink only
+- `20 TRANSPORT_DIAGNOSTIC` Wi-Fi-enabled product/debug uplink
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -63,6 +64,33 @@ parse by `payload_len` and skip unknown trailing bytes.
 `STREAM_SESSION` is critical evidence. On reconnect, a host waits for a valid
 session anchor before claiming full publication continuity. The board does not
 replay the disconnected interval.
+
+`TRANSPORT_DIAGNOSTIC` schema 1 payload is exactly 128 bytes and is emitted at
+1 Hz only while an uplink host session is open. It is one low-priority
+diagnostic record and never an event-per-call log. It always enters the bounded
+diagnostic admission lane so existing backlog cannot hide its own cause; actual
+lane/pool exhaustion remains an explicit admission failure:
+
+- `0..7 mono_us u64`, `8 schema u8`, `9 flags u8` (`enabled`, `connected`,
+  `backpressure`, `queue-pressure latched`), `10 close_reason u8`,
+  `11 runtime_mode u8`, `12..15 connection_epoch u32`
+- `16..31` offered bytes, accepted bytes, disconnected offers, and overflow
+  as cumulative `u32`
+- `32..47` current queue bytes/records, byte high-water, and oldest queued age
+  as `u32`
+- `48..83` socket bytes/frames, positive writes, would-block, socket errors,
+  maximum send-call/no-progress time, stall closes, and queue-pressure closes
+  as cumulative or maximum `u32`
+- `84..103` total/TX/socket/fallback wake counters and `sigio` callbacks as
+  `u32`
+- `104..111` worker heartbeat age and free stack as `u32`
+- `112..119 last_accepted_publish_seq u64`, `120..127
+  last_sent_publish_seq u64`
+
+Offer→accepted→socket deltas identify the first losing boundary without adding
+another queue. A stable gate requires zero disconnect/overflow/socket/stall/
+queue-pressure-close delta, positive socket progress, and no sustained backlog
+growth beyond one 4 KiB pump budget.
 
 `REMOTE_CONTROL_STATE` schema 2 payload, 228 bytes:
 - `0..7 mono_us u64`
@@ -327,6 +355,12 @@ Current board host TX policy:
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
   socket in Arduino `WiFiClient`, create another socket owner, or perform vendor
   socket calls from the CAN/main loop.
+- The worker is event-driven. Empty-to-nonempty producer transitions, critical
+  records, control requests, and socket `sigio` set RTOS event flags. The
+  callback performs no socket operation. A 10 ms connected fallback wake covers
+  lost/coalesced notifications; there is no 1 ms polling loop. Positive bounded
+  progress self-schedules another drain wake while data remains. Worker state is
+  coalesced to 100 ms except forced connection transitions.
 - A single active TCP client is allowed. While it is active, the listener is not
   polled; a second connection remains outside the canonical sink. Disconnect or
   stall handling clears only

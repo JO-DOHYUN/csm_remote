@@ -30,8 +30,12 @@
 #define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 4096
 #endif
 
-#ifndef BOARD_WIFI_WORKER_PERIOD_MS
-#define BOARD_WIFI_WORKER_PERIOD_MS 1
+#ifndef BOARD_WIFI_CONNECTED_FALLBACK_MS
+#define BOARD_WIFI_CONNECTED_FALLBACK_MS 10
+#endif
+
+#ifndef BOARD_WIFI_STATE_PUBLISH_PERIOD_MS
+#define BOARD_WIFI_STATE_PUBLISH_PERIOD_MS 100
 #endif
 
 #ifndef BOARD_WIFI_ACCEPT_POLL_MS
@@ -44,8 +48,10 @@ static_assert(BOARD_WIFI_TX_MAX_WRITES_PER_PUMP > 0,
               "Wi-Fi worker write budget must be non-zero");
 static_assert(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP > 0,
               "Wi-Fi worker byte budget must be non-zero");
-static_assert(BOARD_WIFI_WORKER_PERIOD_MS > 0,
-              "Wi-Fi worker period must be non-zero");
+static_assert(BOARD_WIFI_CONNECTED_FALLBACK_MS > 0,
+              "Wi-Fi connected fallback must be non-zero");
+static_assert(BOARD_WIFI_STATE_PUBLISH_PERIOD_MS > 0,
+              "Wi-Fi state publication period must be non-zero");
 
 #ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
 #define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 75
@@ -56,6 +62,21 @@ static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
               "Wi-Fi isolation high-water percent must be in (0, 100)");
 
 namespace csm::board::uplink {
+
+enum WifiWorkerWakeBits : uint32_t {
+  WifiWakeNone = 0,
+  WifiWakeTxData = 1u << 0,
+  WifiWakeSocketState = 1u << 1,
+  WifiWakeControl = 1u << 2,
+  WifiWakeStartup = 1u << 3,
+};
+
+// Framework-free producer-to-worker notification. The callback may only
+// coalesce wake bits; it must not call sockets, allocate, log, or block.
+struct WifiWorkerNotifier {
+  void* context = nullptr;
+  void (*notify)(void* context, uint32_t bits) = nullptr;
+};
 
 enum class WifiRuntimeMode : uint8_t {
   Disabled = 0,
@@ -298,6 +319,16 @@ struct WifiWorkerCounters {
   uint32_t rx_overflow_total = 0;
   uint32_t late_send_result_total = 0;
   uint32_t worker_returned_slow_call_total = 0;
+  uint32_t wake_total = 0;
+  uint32_t wake_tx_data_total = 0;
+  uint32_t wake_socket_state_total = 0;
+  uint32_t wake_control_total = 0;
+  uint32_t wake_startup_total = 0;
+  uint32_t wake_fallback_total = 0;
+  uint32_t sigio_total = 0;
+  uint32_t positive_write_total = 0;
+  uint32_t bytes_per_wake_max = 0;
+  uint32_t writes_per_wake_max = 0;
   uint64_t last_sent_publish_seq = 0;
 };
 

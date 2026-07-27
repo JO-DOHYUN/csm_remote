@@ -18,6 +18,7 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
     case csm::RecordType::BoardEvent:
       return UplinkPriority::Normal;
     case csm::RecordType::RuntimeDiagnostic:
+    case csm::RecordType::TransportDiagnostic:
       return UplinkPriority::Diagnostic;
     default:
       return UplinkPriority::Normal;

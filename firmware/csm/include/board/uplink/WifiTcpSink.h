@@ -18,6 +18,7 @@
 
 #include "board/uplink/WifiWorkerContract.h"
 #include "board/uplink/WifiWorkerMailbox.h"
+#include "board/uplink/WifiTransportDiagnostic.h"
 
 static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS < BOARD_WIFI_SINK_QUEUE_RECORDS,
               "Wi-Fi critical reserve must leave normal queue capacity");
@@ -41,7 +42,10 @@ struct WifiTcpSinkCounters {
   uint32_t ap_start_fail_total = 0;
   uint32_t server_start_total = 0;
   uint32_t server_start_fail_total = 0;
+  uint32_t offer_total = 0;
+  uint32_t offer_bytes_total = 0;
   uint32_t offer_accept_total = 0;
+  uint32_t offer_accept_bytes_total = 0;
   uint32_t offer_disconnected_total = 0;
   uint32_t offer_overflow_total = 0;
   uint32_t offer_busy_total = 0;
@@ -76,6 +80,18 @@ struct WifiTcpSinkCounters {
   uint32_t tx_late_result_total = 0;
   uint32_t rx_overflow_total = 0;
   uint32_t worker_returned_slow_call_total = 0;
+  uint32_t wake_total = 0;
+  uint32_t wake_tx_data_total = 0;
+  uint32_t wake_socket_state_total = 0;
+  uint32_t wake_control_total = 0;
+  uint32_t wake_startup_total = 0;
+  uint32_t wake_fallback_total = 0;
+  uint32_t sigio_total = 0;
+  uint32_t empty_to_nonempty_wake_total = 0;
+  uint32_t critical_wake_total = 0;
+  uint32_t positive_write_total = 0;
+  uint32_t bytes_per_wake_max = 0;
+  uint32_t writes_per_wake_max = 0;
   uint64_t first_accepted_publish_seq = 0;
   uint64_t last_accepted_publish_seq = 0;
   uint64_t last_sent_publish_seq = 0;
@@ -115,6 +131,8 @@ class WifiTcpSink final : public IFrameSink, public Stream {
     return worker_state_.last_close_reason;
   }
   uint32_t workerHeartbeatAgeMs(uint32_t now_ms) const;
+  WifiTransportDiagnosticSnapshot diagnosticSnapshot(
+      uint64_t mono_us, uint32_t now_ms) const;
 
  private:
   WifiWorkerMailbox mailbox_;

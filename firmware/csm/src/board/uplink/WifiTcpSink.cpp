@@ -1,5 +1,7 @@
 #include "board/uplink/WifiTcpSink.h"
 
+#include "protocol/TypedRecords.h"
+
 #if BOARD_ENABLE_WIFI_UPLINK
 #include "board/uplink/WifiSocketWorker.h"
 #endif
@@ -51,6 +53,8 @@ bool WifiTcpSink::connected() const {
 }
 
 SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
+  counters_.offer_total++;
+  counters_.offer_bytes_total += frame.length;
   if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode)) {
     return SinkOfferResult::Disabled;
   }
@@ -80,6 +84,7 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
       return SinkOfferResult::Invalid;
   }
   counters_.offer_accept_total++;
+  counters_.offer_accept_bytes_total += frame.length;
   if (frame.type == csm::RecordType::StreamSession) {
     session_anchor_queued_ = true;
   }
@@ -159,7 +164,58 @@ int WifiTcpSink::peek() { return mailbox_.peekRx(); }
 uint32_t WifiTcpSink::workerHeartbeatAgeMs(uint32_t now_ms) const {
   if (!worker_state_.worker_started) return 0;
   const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
-  return now_ms - call.heartbeat_ms;
+  const uint32_t call_age = now_ms - call.heartbeat_ms;
+  const uint32_t state_age = now_ms - worker_state_.heartbeat_ms;
+  return call_age < state_age ? call_age : state_age;
+}
+
+WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
+    uint64_t mono_us, uint32_t now_ms) const {
+  const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
+  WifiTransportDiagnosticSnapshot snapshot;
+  snapshot.mono_us = mono_us;
+  snapshot.last_accepted_publish_seq =
+      counters_.first_accepted_valid ? counters_.last_accepted_publish_seq : 0;
+  snapshot.last_sent_publish_seq = counters_.last_sent_publish_seq;
+  snapshot.connection_epoch = counters_.connection_epoch;
+  snapshot.offer_bytes_total = counters_.offer_bytes_total;
+  snapshot.accepted_bytes_total = counters_.offer_accept_bytes_total;
+  snapshot.disconnected_total = counters_.offer_disconnected_total;
+  snapshot.overflow_total = counters_.offer_overflow_total;
+  snapshot.queue_bytes = queue.queued_bytes;
+  snapshot.queue_records = queue.queued_records;
+  snapshot.queue_high_water_bytes = queue.high_water_bytes;
+  if (queue.queued_records != 0 && queue.first_queued_ms != 0) {
+    snapshot.queue_oldest_age_ms = now_ms - queue.first_queued_ms;
+  }
+  snapshot.socket_bytes_total = counters_.bytes_sent_total;
+  snapshot.socket_frames_total = counters_.frame_sent_total;
+  snapshot.positive_write_total = counters_.positive_write_total;
+  snapshot.would_block_total = counters_.would_block_total;
+  snapshot.socket_error_total = counters_.socket_error_total;
+  snapshot.send_call_max_us = counters_.send_call_max_us;
+  snapshot.no_progress_max_ms = counters_.backpressure_max_duration_ms;
+  snapshot.stall_close_total = counters_.stall_close_total;
+  snapshot.queue_pressure_close_total = counters_.queue_pressure_close_total;
+  snapshot.wake_total = counters_.wake_total;
+  snapshot.wake_tx_total = counters_.wake_tx_data_total;
+  snapshot.wake_socket_total = counters_.wake_socket_state_total;
+  snapshot.wake_fallback_total = counters_.wake_fallback_total;
+  snapshot.sigio_total = counters_.sigio_total;
+  snapshot.worker_heartbeat_age_ms = workerHeartbeatAgeMs(now_ms);
+  snapshot.worker_stack_free = worker_state_.stack_free_bytes;
+  snapshot.close_reason =
+      static_cast<uint8_t>(worker_state_.last_close_reason);
+  snapshot.runtime_mode = static_cast<uint8_t>(config_.runtime_mode);
+  if (enabled_) snapshot.flags |= csm::kTransportDiagnosticFlagEnabled;
+  if (connected()) snapshot.flags |= csm::kTransportDiagnosticFlagConnected;
+  if (backpressure_active_) {
+    snapshot.flags |= csm::kTransportDiagnosticFlagBackpressure;
+  }
+  if (mailbox_.queuePressureDisconnectLatched()) {
+    snapshot.flags |= csm::kTransportDiagnosticFlagQueuePressureLatched;
+  }
+  return snapshot;
 }
 
 void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
@@ -217,10 +273,23 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.rx_overflow_total = worker.rx_overflow_total;
   counters_.worker_returned_slow_call_total =
       worker.worker_returned_slow_call_total;
+  counters_.wake_total = worker.wake_total;
+  counters_.wake_tx_data_total = worker.wake_tx_data_total;
+  counters_.wake_socket_state_total = worker.wake_socket_state_total;
+  counters_.wake_control_total = worker.wake_control_total;
+  counters_.wake_startup_total = worker.wake_startup_total;
+  counters_.wake_fallback_total = worker.wake_fallback_total;
+  counters_.sigio_total = worker.sigio_total;
+  counters_.positive_write_total = worker.positive_write_total;
+  counters_.bytes_per_wake_max = worker.bytes_per_wake_max;
+  counters_.writes_per_wake_max = worker.writes_per_wake_max;
   counters_.last_sent_publish_seq = worker.last_sent_publish_seq;
   const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
   counters_.queue_high_water_bytes = queued.high_water_bytes;
   counters_.queue_high_water_records = queued.high_water_records;
+  counters_.empty_to_nonempty_wake_total =
+      queued.empty_to_nonempty_wake_total;
+  counters_.critical_wake_total = queued.critical_wake_total;
 }
 
 void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,

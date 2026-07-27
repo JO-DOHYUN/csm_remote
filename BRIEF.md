@@ -1,6 +1,30 @@
 # BRIEF
 
-Updated: 2026-07-26
+Updated: 2026-07-27
+
+## 2026-07-27 event-driven Wi-Fi data plane and bounded evidence
+
+- The Wi-Fi socket worker no longer polls every 1 ms. Producer transitions,
+  critical/control requests, and raw-socket `sigio` wake one RTOS EventFlags
+  owner; a 10 ms connected fallback covers coalesced/lost notification, and
+  positive bounded progress self-wakes until the queue is drained.
+- Main/RC/CAN remain nonblocking producers. Socket calls, close, abort, and
+  queue consumption remain worker-owned; state publication is coalesced to
+  100 ms except connection transitions.
+- Canonical record `20 TRANSPORT_DIAGNOSTIC` publishes one 128-byte snapshot at
+  1 Hz with offer/accept/queue/socket/wake/epoch/sequence boundaries. It uses
+  the bounded 128-byte diagnostic lane and is not pre-suppressed by sink
+  backlog.
+- Host contract, architecture guard, and the product M7 build pass. Product
+  memory is 448,632/523,624 B RAM (85.7%) and 374,544/786,432 B flash (47.6%);
+  upload to COM7 passed.
+- The final 30 s USB+PC-Wi-Fi gate kept one boot session with zero CRC,
+  typed/segment/capture gaps, CAN/USB loss, pool failure, or diagnostic
+  suppression. It failed at the Wi-Fi sink: accepted 8,943.4 B/s versus socket
+  7,996.7 B/s accumulated 26,495 B, then one queue-pressure close occurred.
+  The worker saw 3,289 `WOULD_BLOCK`, 312 `sigio`, 4,710 TX wakes, and zero
+  socket/stall error. Event scheduling is therefore not the remaining
+  bottleneck; the pinned Mbed/lwIP/SoftAP data path remains the product gate.
 
 ## 2026-07-26 raw Wi-Fi platform boundary
 

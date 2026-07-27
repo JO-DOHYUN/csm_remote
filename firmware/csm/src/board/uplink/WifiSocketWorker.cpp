@@ -4,7 +4,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <chrono>
 #include <new>
 
 namespace csm::board::uplink {
@@ -33,6 +32,10 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   }
   state_.worker_started = true;
   mailbox_.publishState(state_);
+  WifiWorkerNotifier notifier;
+  notifier.context = this;
+  notifier.notify = &WifiSocketWorker::notifyFromMailbox;
+  mailbox_.setNotifier(notifier);
   thread_ = new (thread_storage_)
       rtos::Thread(osPriorityNormal, sizeof(thread_stack_), thread_stack_,
                    "wifi-socket");
@@ -46,13 +49,23 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
     return false;
   }
   thread_started_ = true;
+  signalWake(WifiWakeStartup);
   return true;
 }
 
 void WifiSocketWorker::run() {
   state_.running = true;
-  publishState(millis());
+  publishState(millis(), true);
   while (true) {
+    const uint32_t wait_timeout_ms = nextWaitTimeoutMs(millis());
+    uint32_t flags = wake_flags_.wait_any(
+        WifiWakeTxData | WifiWakeSocketState | WifiWakeControl |
+            WifiWakeStartup,
+        wait_timeout_ms, true);
+    const bool fallback = (flags & osFlagsError) != 0;
+    if (fallback) flags = WifiWakeNone;
+    noteWake(flags, fallback);
+
     const uint32_t now_ms = millis();
     if (!startup_complete_) {
       if (!state_.startup_attempts_exhausted &&
@@ -69,8 +82,6 @@ void WifiSocketWorker::run() {
         }
       }
       publishState(millis());
-      rtos::ThisThread::sleep_for(
-          std::chrono::milliseconds(BOARD_WIFI_WORKER_PERIOD_MS));
       continue;
     }
 
@@ -78,8 +89,6 @@ void WifiSocketWorker::run() {
     // socket lifecycle is reachable in this mode.
     if (!state_.tcp_enabled) {
       publishState(now_ms);
-      rtos::ThisThread::sleep_for(
-          std::chrono::milliseconds(BOARD_WIFI_WORKER_PERIOD_MS));
       continue;
     }
 
@@ -94,9 +103,62 @@ void WifiSocketWorker::run() {
       serviceClient(now_ms);
     }
     publishState(millis());
-    rtos::ThisThread::sleep_for(
-        std::chrono::milliseconds(BOARD_WIFI_WORKER_PERIOD_MS));
   }
+}
+
+void WifiSocketWorker::notifyFromMailbox(void* context, uint32_t bits) {
+  if (context != nullptr) {
+    static_cast<WifiSocketWorker*>(context)->signalWake(bits);
+  }
+}
+
+void WifiSocketWorker::onSocketStateChanged() {
+  sigio_total_.fetch_add(1, std::memory_order_relaxed);
+  signalWake(WifiWakeSocketState);
+}
+
+void WifiSocketWorker::signalWake(uint32_t bits) {
+  if (bits != WifiWakeNone) wake_flags_.set(bits);
+}
+
+uint32_t WifiSocketWorker::nextWaitTimeoutMs(uint32_t now_ms) const {
+  if (!startup_complete_) {
+    if (state_.startup_attempts_exhausted ||
+        static_cast<int32_t>(now_ms - next_startup_attempt_ms_) >= 0) {
+      return BOARD_WIFI_STATE_PUBLISH_PERIOD_MS;
+    }
+    const uint32_t until_startup = next_startup_attempt_ms_ - now_ms;
+    return until_startup < BOARD_WIFI_STATE_PUBLISH_PERIOD_MS
+               ? until_startup
+               : BOARD_WIFI_STATE_PUBLISH_PERIOD_MS;
+  }
+  if (!state_.tcp_enabled) return BOARD_WIFI_STATE_PUBLISH_PERIOD_MS;
+  if (client_ == nullptr) {
+    const uint32_t elapsed = now_ms - last_accept_poll_ms_;
+    return elapsed >= BOARD_WIFI_ACCEPT_POLL_MS
+               ? 0
+               : BOARD_WIFI_ACCEPT_POLL_MS - elapsed;
+  }
+  return BOARD_WIFI_CONNECTED_FALLBACK_MS;
+}
+
+void WifiSocketWorker::noteWake(uint32_t flags, bool fallback) {
+  state_.counters.wake_total++;
+  if (fallback) state_.counters.wake_fallback_total++;
+  if ((flags & WifiWakeTxData) != 0) {
+    state_.counters.wake_tx_data_total++;
+  }
+  if ((flags & WifiWakeSocketState) != 0) {
+    state_.counters.wake_socket_state_total++;
+  }
+  if ((flags & WifiWakeControl) != 0) {
+    state_.counters.wake_control_total++;
+  }
+  if ((flags & WifiWakeStartup) != 0) {
+    state_.counters.wake_startup_total++;
+  }
+  state_.counters.sigio_total =
+      sigio_total_.load(std::memory_order_relaxed);
 }
 
 bool WifiSocketWorker::initializeNetwork() {
@@ -167,9 +229,16 @@ void WifiSocketWorker::serviceRequests() {
 
 void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   if (pending_consume_ && !applyPendingConsume()) return;
-  serviceTransmit(now_ms);
+  const WifiTransmitPumpResult transmitted = serviceTransmit(now_ms);
   if (client_ == nullptr) return;
   serviceReceive(now_ms);
+  if (client_ != nullptr && transmitted.progressed() &&
+      !transmitted.would_block && !transmitted.zero_write &&
+      mailbox_.queueSnapshot().queued_records != 0) {
+    // Yield after each bounded pump, then resume without waiting for the
+    // fallback timer while the socket continues to make positive progress.
+    signalWake(WifiWakeTxData);
+  }
 }
 
 void WifiSocketWorker::serviceAccept(uint32_t) {
@@ -192,6 +261,8 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
 
   beginCall(WifiWorkerCallPhase::ConfigureClient);
   candidate->set_blocking(false);
+  candidate->sigio(
+      mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
   endCall(0);
 
   uint32_t aborted_bytes = 0;
@@ -208,6 +279,8 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
   state_.backpressure_duration_ms = 0;
   state_.counters.connection_epoch++;
   state_.counters.connect_total++;
+  publishState(millis(), true);
+  signalWake(WifiWakeTxData);
 }
 
 void WifiSocketWorker::serviceReceive(uint32_t) {
@@ -297,12 +370,14 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       state_.counters.late_send_result_total++;
       closeClient(WifiCloseReason::IsolationRequest);
       applyAbortRequest();
+      notePumpResult(result);
       return result;
     }
 
     if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
       noteSocketError(static_cast<nsapi_error_t>(sent));
       closeClient(WifiCloseReason::SocketError);
+      notePumpResult(result);
       return result;
     }
     if (sent <= 0) {
@@ -327,12 +402,14 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       if (progress.close_no_progress) {
         closeClient(WifiCloseReason::TransmitNoProgress);
       }
+      notePumpResult(result);
       return result;
     }
 
     pending_lease_ = lease;
     pending_consumed_bytes_ = progressed_bytes;
     pending_consume_ = true;
+    state_.counters.positive_write_total++;
     if (pending_consumed_bytes_ < lease.length) {
       state_.counters.partial_write_total++;
     }
@@ -348,7 +425,18 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       state_.backpressure_duration_ms = 0;
     }
   }
+  notePumpResult(result);
   return result;
+}
+
+void WifiSocketWorker::notePumpResult(
+    const WifiTransmitPumpResult& result) {
+  if (result.bytes_progressed > state_.counters.bytes_per_wake_max) {
+    state_.counters.bytes_per_wake_max = result.bytes_progressed;
+  }
+  if (result.writes_attempted > state_.counters.writes_per_wake_max) {
+    state_.counters.writes_per_wake_max = result.writes_attempted;
+  }
 }
 
 bool WifiSocketWorker::applyPendingConsume() {
@@ -404,6 +492,7 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   }
   // Publish disconnected state before entering a potentially slow vendor
   // close. The facade must not misclassify the close itself as a new stall.
+  publishState(millis(), true);
   closeSocket(closing, WifiWorkerCallPhase::CloseClient);
 }
 
@@ -412,6 +501,7 @@ void WifiSocketWorker::closeSocket(TCPSocket*& socket,
   TCPSocket* owned = socket;
   socket = nullptr;
   if (owned == nullptr) return;
+  owned->sigio(nullptr);
   beginCall(close_phase);
   // Mbed TCPSocket::accept() returns a factory-allocated socket. Its close()
   // deallocates that object; touching or deleting owned afterwards is UB.
@@ -472,7 +562,13 @@ uint32_t WifiSocketWorker::endCall(int32_t result) {
   return duration_us;
 }
 
-void WifiSocketWorker::publishState(uint32_t now_ms) {
+void WifiSocketWorker::publishState(uint32_t now_ms, bool force) {
+  if (!force && last_state_publish_ms_ != 0 &&
+      static_cast<uint32_t>(now_ms - last_state_publish_ms_) <
+          BOARD_WIFI_STATE_PUBLISH_PERIOD_MS) {
+    return;
+  }
+  last_state_publish_ms_ = now_ms == 0 ? 1 : now_ms;
   sampleStack(now_ms);
   state_.heartbeat_ms = now_ms;
   mailbox_.publishState(state_);

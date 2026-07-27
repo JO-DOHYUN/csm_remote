@@ -49,12 +49,22 @@ for token in (
     "owned->close(",
     "osPriorityNormal",
     "BOARD_WIFI_ACCEPT_POLL_MS",
+    "wake_flags_.wait_any(",
+    "candidate->sigio(",
+    "owned->sigio(nullptr)",
+    "WifiWakeTxData",
+    "WifiWakeSocketState",
+    "WifiWakeControl",
 ):
     if token not in worker:
         fail(f"socket worker is missing required ownership marker {token!r}")
 
 if "osPriorityBelowNormal" in worker:
     fail("socket worker may be starved by always-runnable normal-priority threads")
+
+for token in ("sleep_for(", "BOARD_WIFI_WORKER_PERIOD_MS"):
+    if token in worker or token in contract:
+        fail(f"periodic polling remains the primary Wi-Fi trigger: found {token!r}")
 
 if "#define BOARD_WIFI_TX_CHUNK_BYTES 1024" not in worker_header:
     fail("Wi-Fi TX chunk must match the 1024-byte bounded pump budget")
@@ -110,6 +120,17 @@ for token in (
 ):
     if token not in mailbox_header + mailbox_source:
         fail(f"one-shot admission isolation latch is missing {token!r}")
+
+for token in (
+    "WifiWorkerNotifier",
+    "setNotifier",
+    "empty_to_nonempty_wake_total",
+    "critical_wake_total",
+    "notifyWorker(WifiWakeTxData)",
+    "notifyWorker(WifiWakeControl)",
+):
+    if token not in contract + mailbox_header + mailbox_source:
+        fail(f"event-driven producer wake boundary is missing {token!r}")
 
 for token in (
     "handled_queue_pressure_disconnect_sequence_",
@@ -201,5 +222,28 @@ if "BOARD_WIFI_MAIN_IDLE_SLICE_MS" in main:
     fail("main loop must not impose a fixed Wi-Fi idle delay")
 if "rtos::ThisThread::yield();" not in main:
     fail("main loop does not yield non-blockingly to the Wi-Fi worker")
+
+typed_frame = (ROOT / "include" / "protocol" / "TypedFrame.h").read_text(
+    encoding="utf-8"
+)
+typed_records = (ROOT / "include" / "protocol" / "TypedRecords.h").read_text(
+    encoding="utf-8"
+)
+priority_policy = (
+    ROOT / "src" / "board" / "uplink" / "UplinkPriorityPolicy.cpp"
+).read_text(encoding="utf-8")
+transport_diagnostic = (
+    ROOT / "src" / "board" / "uplink" / "WifiTransportDiagnostic.cpp"
+).read_text(encoding="utf-8")
+for token, corpus in (
+    ("TransportDiagnostic = 20", typed_frame),
+    ("kTransportDiagnosticPayloadLen = 128", typed_records),
+    ("RecordType::TransportDiagnostic", priority_policy),
+    ("BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS 1000", main),
+    ("build_wifi_transport_diagnostic_payload", main + transport_diagnostic),
+    ("if (type == RecordType::TransportDiagnostic)", main),
+):
+    if token not in corpus:
+        fail(f"bounded canonical transport evidence is missing {token!r}")
 
 print("Wi-Fi architecture guard PASS")
