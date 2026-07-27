@@ -4,7 +4,7 @@
 
 namespace csm::board::uplink {
 
-WifiWorkerMailbox::WifiWorkerMailbox() {
+WifiWorkerMailbox::WifiWorkerMailbox(TxStorage& storage) : queue_(storage) {
   state_lock_.clear(std::memory_order_release);
 }
 
@@ -23,13 +23,15 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     producer_active_.store(false, std::memory_order_release);
     return WifiMailboxOfferResult::Busy;
   }
-  if (queue_pressure_disconnect_latched_.load(std::memory_order_acquire)) {
+  if (queue_pressure_disconnect_latched_.load(std::memory_order_acquire) &&
+      frame.priority != UplinkPriority::Critical) {
     producer_active_.store(false, std::memory_order_release);
     return WifiMailboxOfferResult::Busy;
   }
   WifiMailboxOfferResult result = WifiMailboxOfferResult::Accepted;
   const bool was_empty = queue_.count() == 0;
-  const bool critical = frame.priority == UplinkPriority::Critical;
+  const bool latency_bounded =
+      frame.delivery == UplinkDeliveryClass::LatencyBounded;
   const uint16_t normal_limit = static_cast<uint16_t>(
       BOARD_WIFI_SINK_QUEUE_RECORDS - BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
   const uint32_t normal_byte_limit =
@@ -39,15 +41,23 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
        queue_.queuedBytes() + frame.length > normal_byte_limit)) {
     result = WifiMailboxOfferResult::Reserved;
   } else {
-    if (critical) {
-      urgent_records_.fetch_add(1, std::memory_order_release);
+    if (latency_bounded) {
+      latency_records_.fetch_add(1, std::memory_order_release);
     }
     if (!queue_.push(frame)) {
-      if (critical) urgent_records_.fetch_sub(1, std::memory_order_acq_rel);
+      if (latency_bounded) {
+        latency_records_.fetch_sub(1, std::memory_order_acq_rel);
+      }
       result = WifiMailboxOfferResult::Full;
     } else {
       if (queue_.count() == 1) {
         first_queued_ms_.store(now_ms, std::memory_order_relaxed);
+      }
+      if (wifiQueuePressureReached(
+              queue_.queuedBytes(), queue_.count(),
+              BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
+              BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT)) {
+        requestQueuePressureDisconnect();
       }
     }
   }
@@ -57,12 +67,12 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
   }
   producer_active_.store(false, std::memory_order_release);
   if (result == WifiMailboxOfferResult::Accepted &&
-      (was_empty || critical)) {
+      (was_empty || latency_bounded)) {
     if (was_empty) {
       empty_to_nonempty_wake_total_.fetch_add(1, std::memory_order_relaxed);
     }
-    if (critical) {
-      critical_wake_total_.fetch_add(1, std::memory_order_relaxed);
+    if (latency_bounded) {
+      latency_wake_total_.fetch_add(1, std::memory_order_relaxed);
     }
     notifyWorker(WifiWakeTxData);
   }
@@ -85,8 +95,9 @@ bool WifiWorkerMailbox::tryConsumeTx(
   if (!stale_generation) {
     const uint16_t applied = bytes > lease.length ? lease.length : bytes;
     result = queue_.consumeMany(applied);
-    if (result.critical_frames > 0) {
-      urgent_records_.fetch_sub(result.critical_frames, std::memory_order_acq_rel);
+    if (result.latency_frames > 0) {
+      latency_records_.fetch_sub(result.latency_frames,
+                                 std::memory_order_acq_rel);
     }
   }
   return true;
@@ -98,7 +109,7 @@ bool WifiWorkerMailbox::tryApplyAbort(uint32_t& aborted_bytes) {
   aborted_bytes = queue_.clear();
   queue_generation_.fetch_add(1, std::memory_order_relaxed);
   first_queued_ms_.store(0, std::memory_order_relaxed);
-  urgent_records_.store(0, std::memory_order_release);
+  latency_records_.store(0, std::memory_order_release);
   abort_in_progress_.store(false, std::memory_order_release);
   return true;
 }
@@ -162,11 +173,12 @@ WifiMailboxQueueSnapshot WifiWorkerMailbox::queueSnapshot() const {
   snapshot.first_queued_ms = first_queued_ms_.load(std::memory_order_acquire);
   snapshot.empty_to_nonempty_wake_total =
       empty_to_nonempty_wake_total_.load(std::memory_order_acquire);
-  snapshot.critical_wake_total =
-      critical_wake_total_.load(std::memory_order_acquire);
+  snapshot.latency_wake_total =
+      latency_wake_total_.load(std::memory_order_acquire);
   snapshot.queued_records = queue_.count();
   snapshot.high_water_records = queue_.highWaterRecords();
-  snapshot.urgent = urgent_records_.load(std::memory_order_acquire) != 0;
+  snapshot.latency_bounded =
+      latency_records_.load(std::memory_order_acquire) != 0;
   return snapshot;
 }
 
@@ -235,8 +247,8 @@ void WifiWorkerMailbox::endCall(uint32_t now_ms, uint32_t duration_us,
 }
 
 WifiWorkerCallSnapshot WifiWorkerMailbox::callSnapshot() const {
-  WifiWorkerCallSnapshot snapshot;
   for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    WifiWorkerCallSnapshot snapshot;
     const uint32_t before = call_revision_.load(std::memory_order_acquire);
     if ((before & 1u) != 0) continue;
     snapshot.phase = static_cast<WifiWorkerCallPhase>(
@@ -248,9 +260,15 @@ WifiWorkerCallSnapshot WifiWorkerMailbox::callSnapshot() const {
     snapshot.result = call_result_.load(std::memory_order_relaxed);
     snapshot.heartbeat_ms = call_heartbeat_ms_.load(std::memory_order_relaxed);
     const uint32_t after = call_revision_.load(std::memory_order_acquire);
-    if (before == after) return snapshot;
+    if (before == after) {
+      snapshot.coherent = true;
+      return snapshot;
+    }
   }
-  return snapshot;
+  // A racing phase transition is not evidence of a stalled call. Returning a
+  // value assembled across revisions previously produced an unsigned call-age
+  // underflow and false epoch isolation. The next facade service retries.
+  return WifiWorkerCallSnapshot{};
 }
 
 void WifiWorkerMailbox::publishState(const WifiWorkerStateSnapshot& state) {

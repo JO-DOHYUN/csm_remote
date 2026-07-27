@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 MANIFEST_SCHEMA = 1
-SOURCE_ROOTS = ("include", "lib", "src", "tools")
+SOURCE_ROOTS = ("include", "lib", "linker", "src", "tools")
 SOURCE_FILES = ("platformio.ini",)
 EXCLUDED_DIRS = frozenset((".pio", "artifacts", "__pycache__"))
 EXCLUDED_SUFFIXES = frozenset((".pyc", ".pyo"))

@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "gate": "CSM_INTERNAL_WIFI_PRODUCT_IDLE",
+  "pass": false,
+  "started_utc": "2026-07-27T04:11:54.990651+00:00",
+  "duration_seconds": 15.059,
+  "firmware": {
+    "environment": "portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi",
+    "source_manifest_sha256": "341f948e99256a0cb07fd6883f64575c9a76b4038c11bb238ba1350fb14eec2e",
+    "binary_sha256": "20A84878DEEF7541726F95494550B7F8F3B90E15041474E8A1C816E974507281",
+    "binary_bytes": 364312
+  },
+  "boot_session": "F7FF7412F4938758",
+  "core": {
+    "can_rx_delta": 945,
+    "can_drop_delta": 0,
+    "fifo_overflow_delta": 0,
+    "usb_overflow_delta": 0,
+    "bad_crc": 0,
+    "typed_gap": 0,
+    "segment_gap": 0,
+    "capture_gap": 0,
+    "main_loop_max_gap_us": 3311
+  },
+  "wifi": {
+    "host_received_bytes": 2954,
+    "host_capture_sha256": "390b3a92468365c3b3fa92e6d85e5efb015ac215f5265276d1236c3c18221de8",
+    "connect_delta": 1,
+    "disconnect_delta": 1,
+    "stall_close_delta": 1,
+    "overflow_delta": 0,
+    "would_block_delta": 469,
+    "close_reason": "TransmitNoProgress"
+  },
+  "usb_capture": {
+    "sha256": "a1b92a4eaf42f69d6f895b72a5cacfc49fbecd55d4af0730370e510bd45e3dc6"
+  },
+  "source_artifact": "C:/WORKS/VS/vsm_android_app/artifacts/csm_product_nonblocking_final_fresh_idle_20260727/summary.json",
+  "decision": "Core isolation passed; internal Portenta WHD/lwIP Wi-Fi remains a release blocker. The 2000 fps Wi-Fi row was skipped because idle failed."
+}

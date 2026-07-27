@@ -2,6 +2,40 @@
 
 Updated: 2026-07-27
 
+## 2026-07-27 CSM data-plane correction and final gate
+
+- Re-analysis of the retained 128-record run corrected the earlier
+  interpretation: during the first 20.732 s, accepted and socket rates differed
+  by only 55 B/s and the queue repeatedly drained. The failure began with a
+  distinct ~2.073 s lower-path zero-progress interval; the small 512-record
+  queue then filled to 27,472 B and requested QueuePressure. The whole-window
+  946.7 B/s "steady deficit" was an averaging artifact after the epoch close.
+- D-022/D-024 queue conclusions are superseded by D-025/D-026. The final
+  product boundary uses direct WHD AP service with the Portenta-validated
+  `ap_sta_concur=true` compatibility role, checked raw `TCPSocket` ownership,
+  byte-based 1,024 B batching, independent latency classes, one pre-full close,
+  and a 1,280-record/65,520-byte queue sized for 100 kbit/s x 5 s.
+- `CAN_RX_SEGMENT` schema 2 packs 23 lossless delta entries in a 511-byte typed
+  frame. At 2,000 fps it reduces CAN RX wire load from 65,762 to 44,437 B/s.
+  CSM, Android, Windows, and PC decoders retain legacy support and reject
+  unknown layouts visibly.
+- The Wi-Fi raw arena moved to guarded M7 DTCM (86,000/130,408 B). M4 D2 and M7
+  network D2 have paired non-overlapping linker ownership. Per-bus M7 CAN queues
+  are reduced from 4,096 to 512 entries, saving 229,376 B while retaining
+  256 ms coverage at 2,000 fps per bus.
+- The authoritative calculation and release table are in
+  `docs/quality/CSM_PRODUCT_ENVELOPE_KO.md` and
+  `firmware/csm/tools/product_envelope.py`.
+- Final uploaded M7 source identity is
+  `341f948e99256a0cb07fd6883f64575c9a76b4038c11bb238ba1350fb14eec2e`.
+  A fresh-boot 15.059 s idle gate failed: the PC received 2,954 bytes, then
+  WHD/lwIP returned 469 consecutive `WOULD_BLOCK` results and the isolated
+  worker closed the epoch after 5 seconds. In the same boot, CAN received 945
+  frames with zero CAN/FIFO/USB overflow and zero typed/segment/capture gap;
+  main-loop maximum gap was 3,311 us. The board/core isolation passed, but the
+  internal Wi-Fi product transport is not release-qualified. The 2,000 fps
+  Wi-Fi row was not repeated because its idle prerequisite failed.
+
 ## 2026-07-27 event-driven Wi-Fi data plane and bounded evidence
 
 - The Wi-Fi socket worker no longer polls every 1 ms. Producer transitions,

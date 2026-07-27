@@ -13,6 +13,7 @@ struct PublishedFrameView {
   uint64_t publish_seq = 0;
   csm::RecordType type = static_cast<csm::RecordType>(0);
   UplinkPriority priority = UplinkPriority::Normal;
+  UplinkDeliveryClass delivery = UplinkDeliveryClass::Batchable;
 };
 
 enum class SinkOfferResult : uint8_t {

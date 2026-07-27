@@ -59,18 +59,18 @@ uint16_t build_wifi_transport_diagnostic_payload(
                     snapshot.stall_close_total);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticQueuePressureCloseOffset,
                     snapshot.queue_pressure_close_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWakeTotalOffset,
-                    snapshot.wake_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWakeTxOffset,
-                    snapshot.wake_tx_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWakeSocketOffset,
-                    snapshot.wake_socket_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWakeFallbackOffset,
-                    snapshot.wake_fallback_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticSigioOffset,
-                    snapshot.sigio_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWorkerHeartbeatAgeMsOffset,
-                    snapshot.worker_heartbeat_age_ms);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticQueueHighWaterRecordsOffset,
+                    snapshot.queue_high_water_records);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticOfferReservedTotalOffset,
+                    snapshot.offer_reserved_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticOfferFullTotalOffset,
+                    snapshot.offer_full_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWriteAttemptTotalOffset,
+                    snapshot.write_attempt_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticPartialWriteTotalOffset,
+                    snapshot.partial_write_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticSendRequestBytesOffset,
+                    snapshot.send_request_bytes_total);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWorkerStackFreeOffset,
                     snapshot.worker_stack_free);
 #undef CSM_WIFI_DIAG_U32

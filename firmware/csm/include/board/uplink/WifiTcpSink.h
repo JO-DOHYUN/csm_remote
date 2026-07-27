@@ -9,7 +9,7 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 8
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 1280
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -55,6 +55,7 @@ struct WifiTcpSinkCounters {
   uint32_t bytes_sent_total = 0;
   uint32_t frame_sent_total = 0;
   uint32_t write_attempt_total = 0;
+  uint32_t send_request_bytes_total = 0;
   uint32_t partial_write_total = 0;
   uint32_t zero_write_total = 0;
   uint32_t would_block_total = 0;
@@ -88,7 +89,7 @@ struct WifiTcpSinkCounters {
   uint32_t wake_fallback_total = 0;
   uint32_t sigio_total = 0;
   uint32_t empty_to_nonempty_wake_total = 0;
-  uint32_t critical_wake_total = 0;
+  uint32_t latency_wake_total = 0;
   uint32_t positive_write_total = 0;
   uint32_t bytes_per_wake_max = 0;
   uint32_t writes_per_wake_max = 0;
@@ -100,6 +101,10 @@ struct WifiTcpSinkCounters {
 
 class WifiTcpSink final : public IFrameSink, public Stream {
  public:
+  using TxStorage = WifiWorkerMailbox::TxStorage;
+
+  explicit WifiTcpSink(TxStorage& storage) : mailbox_(storage) {}
+
   bool begin(const WifiTcpSinkConfig& config);
   bool enabled() const override;
   bool connected() const override;

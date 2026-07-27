@@ -164,8 +164,12 @@ int WifiTcpSink::peek() { return mailbox_.peekRx(); }
 uint32_t WifiTcpSink::workerHeartbeatAgeMs(uint32_t now_ms) const {
   if (!worker_state_.worker_started) return 0;
   const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
-  const uint32_t call_age = now_ms - call.heartbeat_ms;
-  const uint32_t state_age = now_ms - worker_state_.heartbeat_ms;
+  if (!call.coherent) {
+    return wifiObservedAgeMs(now_ms, worker_state_.heartbeat_ms);
+  }
+  const uint32_t call_age = wifiObservedAgeMs(now_ms, call.heartbeat_ms);
+  const uint32_t state_age =
+      wifiObservedAgeMs(now_ms, worker_state_.heartbeat_ms);
   return call_age < state_age ? call_age : state_age;
 }
 
@@ -197,12 +201,12 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
   snapshot.no_progress_max_ms = counters_.backpressure_max_duration_ms;
   snapshot.stall_close_total = counters_.stall_close_total;
   snapshot.queue_pressure_close_total = counters_.queue_pressure_close_total;
-  snapshot.wake_total = counters_.wake_total;
-  snapshot.wake_tx_total = counters_.wake_tx_data_total;
-  snapshot.wake_socket_total = counters_.wake_socket_state_total;
-  snapshot.wake_fallback_total = counters_.wake_fallback_total;
-  snapshot.sigio_total = counters_.sigio_total;
-  snapshot.worker_heartbeat_age_ms = workerHeartbeatAgeMs(now_ms);
+  snapshot.queue_high_water_records = queue.high_water_records;
+  snapshot.offer_reserved_total = counters_.offer_reserved_total;
+  snapshot.offer_full_total = counters_.offer_full_total;
+  snapshot.write_attempt_total = counters_.write_attempt_total;
+  snapshot.partial_write_total = counters_.partial_write_total;
+  snapshot.send_request_bytes_total = counters_.send_request_bytes_total;
   snapshot.worker_stack_free = worker_state_.stack_free_bytes;
   snapshot.close_reason =
       static_cast<uint8_t>(worker_state_.last_close_reason);
@@ -250,6 +254,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.bytes_sent_total = worker.bytes_sent_total;
   counters_.frame_sent_total = worker.frame_sent_total;
   counters_.write_attempt_total = worker.write_attempt_total;
+  counters_.send_request_bytes_total = worker.send_request_bytes_total;
   counters_.partial_write_total = worker.partial_write_total;
   counters_.zero_write_total = worker.zero_write_total;
   counters_.would_block_total = worker.would_block_total;
@@ -289,7 +294,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.queue_high_water_records = queued.high_water_records;
   counters_.empty_to_nonempty_wake_total =
       queued.empty_to_nonempty_wake_total;
-  counters_.critical_wake_total = queued.critical_wake_total;
+  counters_.latency_wake_total = queued.latency_wake_total;
 }
 
 void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
@@ -299,9 +304,11 @@ void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
   // vendor call already in progress or contain an MCU reset/power failure.
   // Startup phases remain visible through workerCallSnapshot(), but there is
   // no active TCP epoch to close until a client has connected.
-  if (!connected_ || !call.in_progress || config_.call_stall_timeout_ms == 0 ||
-      static_cast<uint32_t>(now_ms - call.started_ms) <
-          config_.call_stall_timeout_ms ||
+  const uint32_t call_age_ms =
+      wifiObservedAgeMs(now_ms, call.started_ms);
+  if (!connected_ || !call.coherent || !call.in_progress ||
+      config_.call_stall_timeout_ms == 0 ||
+      call_age_ms < config_.call_stall_timeout_ms ||
       call.sequence == isolated_call_sequence_) {
     return;
   }
@@ -317,7 +324,7 @@ void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
   mailbox_.requestDisconnect();
   mailbox_.discardRx();
   result.backpressure_event = true;
-  result.backpressure_duration_ms = now_ms - call.started_ms;
+  result.backpressure_duration_ms = call_age_ms;
   if (was_connected) {
     effective_connection_epoch_++;
     counters_.connection_epoch = effective_connection_epoch_;

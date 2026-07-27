@@ -21,6 +21,7 @@
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
 #include "board/feeder/FeederUartIngress.h"
+#include "board/uplink/CanRxQueueOrder.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/CanonicalPublisher.h"
 #include "board/uplink/UplinkPriorityPolicy.h"
@@ -235,7 +236,7 @@
 #endif
 
 #ifndef BOARD_CAN_QUEUE_SIZE
-#define BOARD_CAN_QUEUE_SIZE 4096
+#define BOARD_CAN_QUEUE_SIZE 512
 #endif
 
 #ifndef BOARD_SERIAL_TX_RING_SIZE
@@ -688,6 +689,9 @@ using csm::wr_u32_le;
 using csm::wr_u64_le;
 using csm::board::uplink::CanRxSegmentBuilder;
 using csm::board::uplink::CanRxSegmentItem;
+using csm::board::uplink::encode_can_rx_segment_payload;
+using csm::board::uplink::kNoReadyCanRxQueue;
+using csm::board::uplink::select_can_rx_queue_index;
 using csm::board::uplink::CanonicalPublisher;
 using csm::board::uplink::SessionAnnouncementReason;
 using csm::board::uplink::UplinkPriority;
@@ -866,7 +870,6 @@ static volatile uint32_t can_q_tail[2] = {0, 0};
 static BusRxRuntime can_bus_runtime[2] = {};
 
 static uint64_t can_capture_seq_next = 0;
-static uint8_t can_queue_pop_next_index = 0;
 static volatile uint32_t can_rx_count_total = 0;
 static volatile uint32_t can_rx_dropped_total = 0;
 static volatile uint32_t can_fifo_overflow_total = 0;
@@ -900,7 +903,11 @@ static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
               "diagnostic uplink queue must retain bounded low-value telemetry");
 static UsbCdcSink usb_cdc_sink;
 #if BOARD_ENABLE_WIFI_UPLINK
-static WifiTcpSink wifi_tcp_sink;
+static_assert(sizeof(WifiTcpSink::TxStorage) == 86000,
+              "product Wi-Fi DTCM queue storage contract changed");
+__attribute__((section(".wifi_tx_queue_dtcm"), aligned(32), used))
+static WifiTcpSink::TxStorage wifi_tx_storage;
+static WifiTcpSink wifi_tcp_sink(wifi_tx_storage);
 #endif
 static CanonicalPublisher canonical_publisher;
 static CanRxSegmentBuilder can_rx_segment_builder;
@@ -1462,7 +1469,7 @@ static void runtime_diagnostic_make_payload(
   payload[csm::kRuntimeDiagnosticWifiCallPhaseOffset] =
       static_cast<uint8_t>(wifi_call.phase);
   uint8_t wifi_flags = 0;
-  if (wifi_call.in_progress) {
+  if (wifi_call.coherent && wifi_call.in_progress) {
     wifi_flags |= csm::kRuntimeDiagnosticWifiCallFlagInProgress;
   }
   if (wifi_tcp_sink.connected()) {
@@ -2271,10 +2278,12 @@ static void service_boot_recovery() {
       wifi_tcp_sink.workerCallSnapshot();
   observation.wifi_present = true;
   observation.wifi_call_phase = static_cast<uint8_t>(wifi_call.phase);
-  observation.wifi_call_in_progress = wifi_call.in_progress;
+  observation.wifi_call_in_progress =
+      wifi_call.coherent && wifi_call.in_progress;
   observation.wifi_call_slow =
-      wifi_call.in_progress &&
-      static_cast<uint32_t>(now_ms - wifi_call.started_ms) >=
+      wifi_call.coherent && wifi_call.in_progress &&
+      csm::board::uplink::wifiObservedAgeMs(
+          now_ms, wifi_call.started_ms) >=
           BOARD_WIFI_CALL_STALL_TIMEOUT_MS;
   observation.wifi_call_sequence = wifi_call.sequence;
   observation.wifi_worker_heartbeat_age_ms =
@@ -2526,7 +2535,7 @@ static void emit_capability() {
 #else
   config.profile_major = 1;
 #endif
-  config.profile_minor = 0;
+  config.profile_minor = 1;
   config.can_queue_size = kCanQueueSize;
 #if BOARD_ENABLE_ENCODER_IO
   config.encoder_ppr = 2048;
@@ -2636,7 +2645,15 @@ static void emit_capability() {
 #endif
   config.safety_feature_flags = 0x0000000Fu;
   config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY ? 32 : 0;
-  config.capability_v3_flags = 0x0001;
+  config.capability_v3_flags =
+      csm::kCapabilityV3FlagCanonicalFanout |
+      csm::kCapabilityV3FlagCompactCanRxSegment;
+  config.can_rx_segment_schema = csm::kCanRxSegmentSchema;
+  config.can_rx_segment_header_len =
+      static_cast<uint8_t>(csm::kCanRxSegmentHeaderLen);
+  config.can_rx_segment_entry_len =
+      static_cast<uint8_t>(csm::kCanRxSegmentEntryLen);
+  config.can_rx_segment_max_frames = csm::kCanRxSegmentMaxFrames;
   config.include_v4 = true;
   config.include_v5 = true;
   config.include_v6 = true;
@@ -2921,22 +2938,26 @@ static bool can_queue_push(const CanRxItem& item) {
 }
 
 static bool can_queue_pop(CanRxItem& out) {
-  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
-    const uint8_t index = static_cast<uint8_t>((can_queue_pop_next_index + attempt) & 0x01u);
-    volatile uint32_t& head_ref = can_q_head[index];
-    volatile uint32_t& tail_ref = can_q_tail[index];
-    const uint32_t tail = tail_ref;
-    if (tail == head_ref) {
-      continue;
-    }
-    CanRxItem* queue = (index == 0) ? can_queue_bus0 : can_queue_bus1;
-    out = queue[tail];
-    tail_ref = (tail + 1) & kCanQueueMask;
-    can_queue_pop_next_index = static_cast<uint8_t>((index + 1u) & 0x01u);
-    note_can_queue_pop(out.bus);
-    return true;
+  const uint32_t tail0 = can_q_tail[0];
+  const uint32_t tail1 = can_q_tail[1];
+  const bool bus0_ready = tail0 != can_q_head[0];
+  const bool bus1_ready = tail1 != can_q_head[1];
+  const uint8_t index = select_can_rx_queue_index(
+      bus0_ready,
+      bus0_ready ? can_queue_bus0[tail0].capture_seq : 0,
+      bus1_ready,
+      bus1_ready ? can_queue_bus1[tail1].capture_seq : 0);
+  if (index == kNoReadyCanRxQueue) {
+    return false;
   }
-  return false;
+
+  volatile uint32_t& tail_ref = can_q_tail[index];
+  const uint32_t tail = tail_ref;
+  CanRxItem* queue = (index == 0) ? can_queue_bus0 : can_queue_bus1;
+  out = queue[tail];
+  tail_ref = (tail + 1) & kCanQueueMask;
+  note_can_queue_pop(out.bus);
+  return true;
 }
 
 #if BOARD_ENABLE_FEEDER_UART
@@ -3118,7 +3139,6 @@ static void discard_can_queue_for_session_quarantine() {
     can_bus_runtime[index].queued = 0;
     host_absent_rx_discard_total[index] += pending;
   }
-  can_queue_pop_next_index = 0;
 }
 
 static uint8_t read_ab_state() {
@@ -3271,28 +3291,16 @@ static bool emit_can_rx_segment_payload(const CanRxItem* items, uint8_t count, u
     count = kCanRxSegmentMaxFrames;
   }
 
-  uint8_t payload[kCanRxSegmentHeaderLen + kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames];
-  memset(payload, 0, sizeof(payload));
-  wr_u64_le(&payload[0], segment_seq);
-  wr_u64_le(&payload[8], items[0].capture_seq);
-  wr_u16_le(&payload[16], count);
-  payload[18] = kCanRxSegmentEntryLen;
-  payload[19] = 0x01;
-  wr_u32_le(&payload[20], can_rx_dropped_total);
-  wr_u32_le(&payload[24], can_fifo_overflow_total);
-
-  for (uint8_t index = 0; index < count; ++index) {
-    const CanRxItem& item = items[index];
-    uint8_t* entry = &payload[kCanRxSegmentHeaderLen + index * kCanRxSegmentEntryLen];
-    wr_u64_le(&entry[0], item.capture_seq);
-    wr_u64_le(&entry[8], item.mono_us);
-    wr_u32_le(&entry[16], item.can_id_flags);
-    entry[20] = item.dlc_flags;
-    entry[21] = item.bus;
-    memcpy(&entry[22], item.data, 8);
+  uint8_t payload[kCanRxSegmentHeaderLen +
+                  kCanRxSegmentEntryLen * kCanRxSegmentMaxFrames];
+  const uint16_t payload_len = encode_can_rx_segment_payload(
+      items, count, segment_seq, can_rx_dropped_total,
+      can_fifo_overflow_total, payload, sizeof(payload));
+  if (payload_len == 0) {
+    can_segment_enqueue_fail_total += count;
+    note_pending_can_segment_enqueue_fail(count);
+    return false;
   }
-
-  const uint16_t payload_len = static_cast<uint16_t>(kCanRxSegmentHeaderLen + count * kCanRxSegmentEntryLen);
   if (enqueue_typed_record(RecordType::CanRxSegment, payload, payload_len, UplinkPriority::CanTruth)) {
     return true;
   }
@@ -5779,7 +5787,8 @@ void setup() {
   wifi_sink_config.drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
   wifi_sink_config.max_writes_per_pump = BOARD_WIFI_TX_MAX_WRITES_PER_PUMP;
   wifi_sink_config.max_bytes_per_pump = BOARD_WIFI_TX_MAX_BYTES_PER_PUMP;
-  wifi_sink_config.startup_attempt_limit = 1;
+  wifi_sink_config.startup_attempt_limit = BOARD_WIFI_STARTUP_ATTEMPT_LIMIT;
+  wifi_sink_config.startup_retry_ms = BOARD_WIFI_STARTUP_RETRY_MS;
   wifi_sink_config.call_persistence.context = &wifi_call_latch;
   wifi_sink_config.call_persistence.enter = persist_wifi_call_enter;
   wifi_sink_config.call_persistence.leave = persist_wifi_call_leave;

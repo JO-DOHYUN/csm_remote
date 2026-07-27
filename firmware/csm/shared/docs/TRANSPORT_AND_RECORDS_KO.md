@@ -1,5 +1,46 @@
 # TRANSPORT_AND_RECORDS_KO
 
+## 2026-07-27 active wire contract
+
+This section supersedes older CAN_RX_SEGMENT and TRANSPORT_DIAGNOSTIC layouts
+below. The outer typed v1 frame and record type numbers are unchanged.
+
+`CAN_RX_SEGMENT` schema 2:
+
+- Common header fields remain: segment sequence `u64` at 0, first/base capture
+  sequence `u64` at 8, frame count `u16` at 16, entry size at 18, flags at 19,
+  dropped total `u32` at 20, FIFO overflow total `u32` at 24.
+- Byte 28 is schema `2`, byte 29 is header size `40`, bytes 30..31 are zero,
+  and bytes 32..39 hold base monotonic microseconds `u64`.
+- Flags bit0 means capture sequence valid; bit1 means compact delta entries.
+- Each 20-byte entry is: capture delta `u16` at 0, mono-us delta `u32` at 2,
+  CAN id/flags `u32` at 6, DLC/flags at 10, bus at 11, data[8] at 12.
+- Maximum frame count is 23. Maximum payload is 500 bytes and maximum full
+  typed frame is 511 bytes.
+- A delta that cannot fit causes a segment flush before that item; values are
+  never truncated. Producers merge bus queues by the smallest capture sequence.
+- Legacy schema 0 (32-byte header, 30-byte entry) remains decode-only for old
+  captures. Schema 2 is the only current publication. Unknown/inconsistent
+  schema, header, entry size, count, DLC, or length is a visible parser failure.
+- `CAPABILITY` profile minor is 1. Bytes 104..107 advertise segment
+  schema/header/entry/max; capability_v3_flags bit1 advertises compact segment
+  publication.
+
+`TRANSPORT_DIAGNOSTIC` schema 2 remains exactly 128 bytes:
+
+- Fields 0..83 and sequence fields 112..127 retain schema 1 meanings.
+- `84..87 queue_high_water_records u32`
+- `88..91 offer_reserved_total u32`
+- `92..95 offer_full_total u32`
+- `96..99 write_attempt_total u32`
+- `100..103 partial_write_total u32`
+- `104..107 send_request_bytes_total u32`
+- `108..111 worker_stack_free u32`
+- Schema 1 remains PC decode-only. A measurement window must not mix schemas.
+  Schema 2 permits direct calculation of requested bytes/write, positive
+  bytes/write, frames/write, queue high-water, and the exact first loss
+  boundary.
+
 ## 2026-04-22 canonical v1 addendum
 
 This ASCII addendum is the active contract for the current board/Qt work. Older

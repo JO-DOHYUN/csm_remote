@@ -20,7 +20,7 @@ $sources = @(
   (Join-Path $project "src\board\uplink\WifiWorkerMailbox.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
-$compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /I`"$include`" $quotedSources /Fe:`"$output`""
+$compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /DBOARD_WIFI_SINK_QUEUE_RECORDS=100 /DBOARD_WIFI_SINK_QUEUE_BYTES=1024 /DBOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS=4 /DBOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=16 /DBOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT=96 /I`"$include`" $quotedSources /Fe:`"$output`""
 
 cmd.exe /d /s /c $compile
 if ($LASTEXITCODE -ne 0) {

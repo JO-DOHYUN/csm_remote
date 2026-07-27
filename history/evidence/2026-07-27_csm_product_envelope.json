@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "source_contract": {
+    "can_rx_segment_schema": 2,
+    "can_rx_segment_header_bytes": 40,
+    "can_rx_segment_entry_bytes": 20,
+    "can_rx_segment_max_frames": 23,
+    "transport_diagnostic_schema": 2,
+    "transport_diagnostic_payload_bytes": 128,
+    "wifi_queue_records": 1280,
+    "wifi_queue_bytes": 65520,
+    "critical_reserve_records": 4,
+    "critical_reserve_bytes": 2112,
+    "stall_timeout_ms": 5000,
+    "isolate_high_water_percent": 96,
+    "batch_target_bytes": 1024,
+    "tx_chunk_bytes": 1024,
+    "drain_time_budget_us": 1000,
+    "call_stall_timeout_ms": 250,
+    "startup_attempt_limit": 0,
+    "startup_retry_ms": 2000,
+    "whd_ap_sta_concur": 1,
+    "can_queue_per_bus": 512
+  },
+  "throughput_bytes_per_second": {
+    "legacy_can_rx_2000fps": 65762,
+    "compact_can_rx_2000fps": 44437,
+    "fixed_product_records": 13298,
+    "legacy_product_total_2000fps": 79060,
+    "compact_product_total_2000fps": 57735,
+    "compact_product_total_4000fps": 102172,
+    "measured_raw_low": 65083,
+    "measured_raw_high": 69413,
+    "compact_margin_low_percent": 11.29,
+    "compact_margin_high_percent": 16.82
+  },
+  "stall_envelope": {
+    "target_rate_bytes_per_second": 12500.0,
+    "target_seconds": 5,
+    "required_bytes": 62500,
+    "normal_admission_bytes": 63408,
+    "byte_margin": 908,
+    "byte_coverage_seconds": 5.07264,
+    "normal_admission_records": 1276,
+    "high_water_bytes": 62900,
+    "high_water_seconds_at_target": 5.032
+  },
+  "memory_bytes": {
+    "wifi_descriptors": 20480,
+    "wifi_byte_arena": 65520,
+    "wifi_dtcm_storage": 86000,
+    "dtcm_usable": 130408,
+    "dtcm_alignment_pad_before_queue": 8,
+    "dtcm_max_remaining_after_queue": 44400,
+    "dtcm_linker_reserved_minimum": 32768,
+    "can_ingest_queues": 32768,
+    "can_ingest_saved_vs_4096": 229376
+  },
+  "timing": {
+    "can_queue_coverage_ms_at_2000fps_per_bus": 256.0,
+    "can_queue_coverage_ms_at_3400fps_per_bus": 150.59
+  },
+  "gates": {
+    "compact_2000fps_fits_measured_raw_low": true,
+    "compact_4000fps_fits_measured_raw_high": false,
+    "five_second_100kbps_queue_fits": true,
+    "pre_full_isolation_precedes_reserve": true,
+    "dtcm_safety_reserve_32k": true
+  }
+}

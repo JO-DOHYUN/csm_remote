@@ -3,7 +3,6 @@
 #if BOARD_ENABLE_WIFI_UPLINK
 
 #include <Arduino.h>
-#include <WiFi.h>
 #include <new>
 
 namespace csm::board::uplink {
@@ -23,7 +22,7 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   startup_complete_ = false;
   next_startup_attempt_ms_ = 0;
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode) ||
-      config_.startup_attempt_limit == 0 || config_.ap_ssid == nullptr ||
+      config_.startup_retry_ms == 0 || config_.ap_ssid == nullptr ||
       config_.ap_passphrase == nullptr ||
       (state_.tcp_enabled && config_.port == 0)) {
     state_.counters.worker_start_fail_total = 1;
@@ -72,12 +71,14 @@ void WifiSocketWorker::run() {
           static_cast<int32_t>(now_ms - next_startup_attempt_ms_) >= 0) {
         startup_complete_ = initializeNetwork();
         if (!startup_complete_) {
-          if (state_.counters.startup_attempt_total >=
-              config_.startup_attempt_limit) {
+          if (wifiStartupAttemptsExhausted(
+                  state_.counters.startup_attempt_total,
+                  config_.startup_attempt_limit)) {
             state_.startup_attempts_exhausted = true;
             state_.counters.startup_exhausted_total++;
           } else {
-            next_startup_attempt_ms_ = millis() + 1000u;
+            next_startup_attempt_ms_ =
+                millis() + config_.startup_retry_ms;
           }
         }
       }
@@ -162,25 +163,45 @@ void WifiSocketWorker::noteWake(uint32_t flags, bool fallback) {
 }
 
 bool WifiSocketWorker::initializeNetwork() {
+  rollbackNetwork();
   state_.counters.startup_attempt_total++;
   state_.ap_ready = false;
   state_.server_ready = false;
   state_.network_ready = false;
   state_.counters.ap_start_total++;
 
-  beginCall(WifiWorkerCallPhase::ConfigureIp);
-  WiFi.config(IPAddress(config_.ip[0], config_.ip[1], config_.ip[2], config_.ip[3]));
-  endCall(0);
-
-  beginCall(WifiWorkerCallPhase::BeginAccessPoint);
-  const int status = WiFi.beginAP(config_.ap_ssid, config_.ap_passphrase,
-                                  config_.channel);
-  endCall(status);
-  if (status != WL_AP_LISTENING && status != WL_AP_CONNECTED) {
+  ap_interface_ = WhdSoftAPInterface::get_default_instance();
+  if (ap_interface_ == nullptr) {
     state_.counters.ap_start_fail_total++;
-    state_.last_network_error = status;
+    state_.last_network_error = NSAPI_ERROR_NO_CONNECTION;
     return false;
   }
+
+  const uint8_t netmask_bytes[4] = {255, 255, 255, 0};
+  const SocketAddress ip_address(config_.ip, NSAPI_IPv4);
+  const SocketAddress netmask(netmask_bytes, NSAPI_IPv4);
+  const SocketAddress gateway(config_.ip, NSAPI_IPv4);
+  beginCall(WifiWorkerCallPhase::ConfigureIp);
+  const nsapi_error_t configure_result =
+      ap_interface_->set_network(ip_address, netmask, gateway);
+  endCall(configure_result);
+  if (configure_result != NSAPI_ERROR_OK) {
+    state_.counters.ap_start_fail_total++;
+    state_.last_network_error = configure_result;
+    return false;
+  }
+
+  beginCall(WifiWorkerCallPhase::BeginAccessPoint);
+  const nsapi_error_t ap_result = ap_interface_->start(
+      config_.ap_ssid, config_.ap_passphrase, NSAPI_SECURITY_WPA2,
+      config_.channel, true, nullptr, config_.ap_sta_concur);
+  endCall(ap_result);
+  if (ap_result != NSAPI_ERROR_OK) {
+    state_.counters.ap_start_fail_total++;
+    state_.last_network_error = ap_result;
+    return false;
+  }
+  ap_started_ = true;
   state_.ap_ready = true;
   state_.network_ready = true;
   state_.last_network_error = 0;
@@ -189,18 +210,60 @@ bool WifiSocketWorker::initializeNetwork() {
 
   state_.counters.server_start_total++;
   beginCall(WifiWorkerCallPhase::BeginServer);
-  server_.begin(config_.port);
-  const bool ready = static_cast<bool>(server_);
-  endCall(ready ? 0 : NSAPI_ERROR_NO_SOCKET);
-  if (!ready) {
+  nsapi_error_t server_result = server_.open(ap_interface_);
+  if (server_result == NSAPI_ERROR_OK) {
+    server_opened_ = true;
+    int reuse_address = 1;
+    server_result =
+        server_.setsockopt(NSAPI_SOCKET, NSAPI_REUSEADDR, &reuse_address,
+                           sizeof(reuse_address));
+  }
+  if (server_result == NSAPI_ERROR_OK) {
+    server_result = server_.bind(config_.port);
+  }
+  if (server_result == NSAPI_ERROR_OK) {
+    server_result = server_.listen(1);
+  }
+  if (server_result == NSAPI_ERROR_OK) {
+    server_.set_blocking(false);
+    server_.sigio(
+        mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
+  }
+  endCall(server_result);
+  if (server_result != NSAPI_ERROR_OK) {
     state_.counters.server_start_fail_total++;
-    state_.last_network_error = NSAPI_ERROR_NO_SOCKET;
+    state_.last_network_error = server_result;
+    rollbackNetwork();
+    state_.last_network_error = server_result;
     return false;
   }
 
   state_.server_ready = true;
   state_.last_network_error = 0;
   return true;
+}
+
+void WifiSocketWorker::rollbackNetwork() {
+  if (server_opened_) {
+    server_.sigio(nullptr);
+    beginCall(WifiWorkerCallPhase::StopServer);
+    const nsapi_error_t result = server_.close();
+    endCall(result);
+    server_opened_ = false;
+    if (result != NSAPI_ERROR_OK && result != NSAPI_ERROR_NO_SOCKET) {
+      noteSocketError(result);
+    }
+  }
+  if (ap_started_ && ap_interface_ != nullptr) {
+    beginCall(WifiWorkerCallPhase::StopAccessPoint);
+    const nsapi_error_t result = ap_interface_->stop();
+    endCall(result);
+    ap_started_ = false;
+    if (result != NSAPI_ERROR_OK) noteSocketError(result);
+  }
+  state_.ap_ready = false;
+  state_.server_ready = false;
+  state_.network_ready = false;
 }
 
 void WifiSocketWorker::serviceRequests() {
@@ -229,9 +292,11 @@ void WifiSocketWorker::serviceRequests() {
 
 void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   if (pending_consume_ && !applyPendingConsume()) return;
-  const WifiTransmitPumpResult transmitted = serviceTransmit(now_ms);
-  if (client_ == nullptr) return;
+  // Downlink is sampled before each nonblocking TX pump so Service/HIL control
+  // cannot be starved by a saturated telemetry stream.
   serviceReceive(now_ms);
+  if (client_ == nullptr) return;
+  const WifiTransmitPumpResult transmitted = serviceTransmit(millis());
   if (client_ != nullptr && transmitted.progressed() &&
       !transmitted.would_block && !transmitted.zero_write &&
       mailbox_.queueSnapshot().queued_records != 0) {
@@ -244,7 +309,7 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
 void WifiSocketWorker::serviceAccept(uint32_t) {
   nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
   beginCall(WifiWorkerCallPhase::AcceptClient);
-  TCPSocket* candidate = server_.acceptRaw(&error);
+  TCPSocket* candidate = server_.accept(&error);
   endCall(error);
   if (candidate == nullptr) {
     if (error != NSAPI_ERROR_WOULD_BLOCK) noteSocketError(error);
@@ -320,11 +385,14 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       initial_queue.queued_bytes, initial_queue.queued_records,
       BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
       config_.isolate_high_water_percent);
-  if (!initial_pressure && !initial_queue.urgent &&
-      initial_queue.queued_records < config_.batch_min_records &&
-      config_.batch_max_latency_ms > 0 &&
+  const uint32_t latency_limit_ms =
+      initial_queue.latency_bounded ? config_.latency_bound_max_ms
+                                    : config_.batch_max_latency_ms;
+  if (!initial_pressure && config_.batch_target_bytes > 0 &&
+      initial_queue.queued_bytes < config_.batch_target_bytes &&
+      latency_limit_ms > 0 &&
       static_cast<uint32_t>(now_ms - initial_queue.first_queued_ms) <
-          config_.batch_max_latency_ms) {
+          latency_limit_ms) {
     return result;
   }
 
@@ -344,9 +412,11 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
     if (!mailbox_.tryStageTx(tx_buffer_, write_capacity, lease)) break;
 
     state_.counters.write_attempt_total++;
+    state_.counters.send_request_bytes_total += lease.length;
     beginCall(WifiWorkerCallPhase::Send);
     const nsapi_size_or_error_t sent = client_->send(tx_buffer_, lease.length);
     const uint32_t duration_us = endCall(sent);
+    const uint32_t send_completed_ms = millis();
     if (duration_us > state_.counters.send_call_max_us) {
       state_.counters.send_call_max_us = duration_us;
     }
@@ -389,7 +459,8 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
         result.zero_write = true;
       }
       const WifiTxProgressObservation progress =
-          tx_progress_.observe(now_ms, false, config_.stall_timeout_ms);
+          tx_progress_.observe(send_completed_ms, false,
+                               config_.stall_timeout_ms);
       if (progress.started) state_.counters.backpressure_total++;
       state_.backpressure_active = true;
       state_.backpressure_duration_ms = progress.duration_ms;
@@ -416,7 +487,8 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
     if (!applyPendingConsume()) return result;
 
     const WifiTxProgressObservation progress =
-        tx_progress_.observe(now_ms, true, config_.stall_timeout_ms);
+        tx_progress_.observe(send_completed_ms, true,
+                             config_.stall_timeout_ms);
     if (progress.recovered) {
       if (progress.duration_ms > state_.counters.backpressure_max_duration_ms) {
         state_.counters.backpressure_max_duration_ms = progress.duration_ms;

@@ -1,5 +1,21 @@
 # CSM Uplink Transport 아키텍처
 
+## 2026-07-27 확정 구조
+
+현재 권위 구조는 `docs/quality/CSM_PRODUCT_ENVELOPE_KO.md`와 D-026을
+따른다. CanonicalPublisher는 record identity와 bytes를 한 번만 만들고,
+USB와 Wi-Fi가 독립 bounded sink로 소비한다. Wi-Fi는 외부에는 AP만
+제공하되 Portenta WHD 내부는 실측 검증된 `ap_sta_concur=true` 호환
+역할로 시작하며, direct WHD 단일 socket worker와 외부 DTCM byte queue를
+사용한다. admission priority와 delivery latency는 별도 계약이며, 96%
+high-water는 Reserved/Full 전에 한 번의 새 epoch를 요청한다. 5초 socket
+무진행은 별도 close 원인이다.
+
+CAN_RX_SEGMENT schema 2는 40-byte header + 20-byte entry로 23개 frame을
+lossless하게 담는다. 두 CAN source queue는 최소 capture sequence 순서로
+merge한다. 아래의 48 KiB/512 descriptor, critical 즉시 flush, high-water는
+close 조건이 아니라는 설명은 과거 설계이며 이 절과 충돌할 때 폐기한다.
+
 ## 목표
 
 USB CDC Windows VSM과 Wi-Fi TCP Android VSM이 동일한 typed evidence를 독립적으로 받되, 어느 sink의 장애도 RC·CAN ingest·publisher·다른 sink에 전파되지 않게 한다.

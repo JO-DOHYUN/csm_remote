@@ -25,6 +25,9 @@ worker_header = (ROOT / "include" / "board" / "uplink" / "WifiSocketWorker.h").r
 mailbox_header = (ROOT / "include" / "board" / "uplink" / "WifiWorkerMailbox.h").read_text(
     encoding="utf-8"
 )
+mailbox_source = (
+    ROOT / "src" / "board" / "uplink" / "WifiWorkerMailbox.cpp"
+).read_text(encoding="utf-8")
 platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 
 for token in (
@@ -40,12 +43,18 @@ for token in (
         fail(f"facade owns forbidden network operation {token!r}")
 
 for token in (
-    "WiFi.config(",
-    "WiFi.beginAP(",
-    "server_.begin(",
-    "server_.acceptRaw(",
+    "WhdSoftAPInterface::get_default_instance()",
+    "ap_interface_->set_network(",
+    "ap_interface_->start(",
+    "config_.channel, true, nullptr, config_.ap_sta_concur",
+    "server_.open(ap_interface_)",
+    "server_.setsockopt(",
+    "server_.bind(",
+    "server_.listen(1)",
+    "server_.accept(",
     "client_->send(",
     "client_->recv(",
+    "candidate->set_blocking(false)",
     "owned->close(",
     "osPriorityNormal",
     "BOARD_WIFI_ACCEPT_POLL_MS",
@@ -67,15 +76,15 @@ for token in ("sleep_for(", "BOARD_WIFI_WORKER_PERIOD_MS"):
         fail(f"periodic polling remains the primary Wi-Fi trigger: found {token!r}")
 
 if "#define BOARD_WIFI_TX_CHUNK_BYTES 1024" not in worker_header:
-    fail("Wi-Fi TX chunk must match the 1024-byte bounded pump budget")
+    fail("Wi-Fi TX chunk must match the 1024-byte nonblocking pump budget")
 
 if "FixedFrameByteQueue" not in mailbox_header or "FixedFrameQueue<" in mailbox_header:
     fail("Wi-Fi mailbox must use the bounded byte-pool queue")
 for token in (
-    "BOARD_WIFI_SINK_QUEUE_RECORDS=512",
-    "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
-    "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2048",
-    "BOARD_WIFI_STALL_TIMEOUT_MS=2500",
+    "BOARD_WIFI_SINK_QUEUE_RECORDS=1280",
+    "BOARD_WIFI_SINK_QUEUE_BYTES=65520",
+    "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
+    "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
     "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
 ):
     if token not in platformio:
@@ -84,12 +93,51 @@ for token in (
 if "WifiTxProgressTracker" not in contract:
     fail("TX progress tracker is missing from the Wi-Fi contract")
 for token in (
+    "BOARD_WIFI_STARTUP_ATTEMPT_LIMIT",
+    "BOARD_WIFI_STARTUP_RETRY_MS",
+    "wifiStartupAttemptsExhausted",
+    "wifiObservedAgeMs",
+    "bool coherent = false",
+):
+    if token not in contract:
+        fail(f"worker recovery/evidence contract is missing {token!r}")
+
+for token in (
+    "wifiStartupAttemptsExhausted(",
+    "config_.startup_retry_ms",
+):
+    if token not in worker:
+        fail(f"bounded AP startup recovery is missing {token!r}")
+
+for token in (
+    "snapshot.coherent = true",
+    "return WifiWorkerCallSnapshot{}",
+):
+    if token not in mailbox_source:
+        fail(f"coherent worker-call snapshot boundary is missing {token!r}")
+if "!call.coherent" not in sink:
+    fail("facade must reject incoherent worker-call snapshots")
+if sink.count("wifiObservedAgeMs(") < 3:
+    fail("facade cross-thread timestamps must use wrap-safe observed age")
+for token in (
     "tx_progress_",
     "progress.close_no_progress",
     "WifiCloseReason::TransmitNoProgress",
 ):
     if token not in worker:
         fail(f"socket worker is missing deterministic TX progress policy {token!r}")
+
+if "client_->set_timeout(" in worker:
+    fail("product worker send path must remain nonblocking")
+
+service_client = worker[
+    worker.index("void WifiSocketWorker::serviceClient(") :
+    worker.index("void WifiSocketWorker::serviceAccept(")
+]
+if service_client.index("serviceReceive(") > service_client.index(
+    "serviceTransmit("
+):
+    fail("worker must service downlink before the nonblocking TX pump")
 
 for token in (
     "BOARD_WIFI_QUEUE_PRESSURE_NO_PROGRESS_GRACE_MS",
@@ -99,9 +147,6 @@ for token in (
     if token in contract or token in worker:
         fail(f"legacy high-water timer close remains: found {token!r}")
 
-mailbox_source = (
-    ROOT / "src" / "board" / "uplink" / "WifiWorkerMailbox.cpp"
-).read_text(encoding="utf-8")
 for token in (
     "queued_bytes_",
     "queued_records_",
@@ -125,7 +170,8 @@ for token in (
     "WifiWorkerNotifier",
     "setNotifier",
     "empty_to_nonempty_wake_total",
-    "critical_wake_total",
+    "latency_wake_total",
+    "latency_records_",
     "notifyWorker(WifiWakeTxData)",
     "notifyWorker(WifiWakeControl)",
 ):
@@ -141,11 +187,12 @@ for token in (
         fail(f"worker QueuePressure close boundary is missing {token!r}")
 
 for token in (
-    "queued.queued_records >= normal_limit",
-    "queued.queued_records >= BOARD_WIFI",
+    "wifiQueuePressureReached(",
+    "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT",
+    "requestQueuePressureDisconnect();",
 ):
-    if token in worker:
-        fail(f"queue occupancy must not close a live client: found {token!r}")
+    if token not in mailbox_source:
+        fail(f"pre-full producer isolation boundary is missing {token!r}")
 
 for token in (
     "AcceptExtraClient",
@@ -162,12 +209,43 @@ for token in ("delete owned", "delete client_", "delete candidate"):
             f"found {token!r}"
         )
 
+for token in ("WiFi.beginAP(", "WiFi.config(", "WiFiServer", "acceptRaw("):
+    if token in worker + worker_header:
+        fail(f"Arduino STA+AP/server wrapper remains in product worker: {token!r}")
+
+for token in ("config_.ap_sta_concur", "BOARD_WIFI_AP_STA_CONCUR"):
+    if token not in worker + contract:
+        fail(f"validated WHD compatibility mode is missing {token!r}")
+
+for token in (
+    "UplinkDeliveryClass::LatencyBounded",
+    "batch_target_bytes",
+    "latency_bound_max_ms",
+):
+    if token not in mailbox_source + worker + contract:
+        fail(f"byte/latency batching contract is missing {token!r}")
+
+linker = (ROOT / "linker" / "portenta_h7_m7_product.ld").read_text(
+    encoding="utf-8"
+)
+main_source = (ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
+for token in (
+    ".wifi_tx_queue_dtcm (NOLOAD)",
+    "__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x14FF0",
+    "LENGTH(DTCMRAM) - 0x8000",
+):
+    if token not in linker:
+        fail(f"DTCM queue ownership guard is missing {token!r}")
+for token in ("WifiTcpSink::TxStorage wifi_tx_storage", "wifi_tcp_sink(wifi_tx_storage)"):
+    if token not in main_source:
+        fail(f"product Wi-Fi queue storage injection is missing {token!r}")
+
 for token in (
     "enum class WifiRuntimeMode",
     "Disabled = 0",
     "AccessPointOnly = 1",
     "FullTcp = 2",
-    "startup_attempt_limit = 1",
+    "startup_attempt_limit = BOARD_WIFI_STARTUP_ATTEMPT_LIMIT",
     "worker_started",
     "ap_ready",
     "server_ready",
@@ -193,7 +271,7 @@ if ap_only_gate not in worker or worker.index(ap_only_gate) > worker.index(serve
 
 for token in (
     "if (!state_.tcp_enabled)",
-    "state_.counters.startup_attempt_total >=",
+    "wifiStartupAttemptsExhausted(",
     "config_.startup_attempt_limit",
     "state_.startup_attempts_exhausted = true",
     "logical sink quarantine",

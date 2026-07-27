@@ -8,7 +8,7 @@
 
 #if BOARD_ENABLE_WIFI_UPLINK
 #include <TCPSocket.h>
-#include <WiFiServer.h>
+#include <WhdSoftAPInterface.h>
 #include <rtos/EventFlags.h>
 #include <rtos/Thread.h>
 #endif
@@ -26,26 +26,18 @@ namespace csm::board::uplink {
 #if BOARD_ENABLE_WIFI_UPLINK
 class WifiSocketWorker final {
  public:
-  explicit WifiSocketWorker(WifiWorkerMailbox& mailbox);
+ explicit WifiSocketWorker(WifiWorkerMailbox& mailbox);
   bool start(const WifiTcpSinkConfig& config);
 
  private:
-  class RawWifiServer final : public arduino::WiFiServer {
-   public:
-    TCPSocket* acceptRaw(nsapi_error_t* error) {
-      if (sock == nullptr) {
-        if (error != nullptr) *error = NSAPI_ERROR_NO_SOCKET;
-        return nullptr;
-      }
-      return sock->accept(error);
-    }
-  };
-
   WifiWorkerMailbox& mailbox_;
   WifiTcpSinkConfig config_;
   WifiWorkerStateSnapshot state_;
-  RawWifiServer server_;
+  WhdSoftAPInterface* ap_interface_ = nullptr;
+  TCPSocket server_;
   TCPSocket* client_ = nullptr;
+  bool ap_started_ = false;
+  bool server_opened_ = false;
   uint8_t tx_buffer_[BOARD_WIFI_TX_CHUNK_BYTES] = {};
   uint8_t rx_buffer_[256] = {};
   WifiMailboxTxLease pending_lease_;
@@ -76,6 +68,7 @@ class WifiSocketWorker final {
   uint32_t nextWaitTimeoutMs(uint32_t now_ms) const;
   void noteWake(uint32_t flags, bool fallback);
   bool initializeNetwork();
+  void rollbackNetwork();
   void serviceRequests();
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);

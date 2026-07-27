@@ -8,7 +8,7 @@
 #include "board/uplink/WifiWorkerContract.h"
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 8
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 1280
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -16,11 +16,11 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_BYTES
-#define BOARD_WIFI_SINK_QUEUE_BYTES 4096
+#define BOARD_WIFI_SINK_QUEUE_BYTES 65520
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES
-#define BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES 1024
+#define BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES 2112
 #endif
 
 #ifndef BOARD_WIFI_RX_MAILBOX_BYTES
@@ -42,10 +42,10 @@ struct WifiMailboxQueueSnapshot {
   uint32_t high_water_bytes = 0;
   uint32_t first_queued_ms = 0;
   uint32_t empty_to_nonempty_wake_total = 0;
-  uint32_t critical_wake_total = 0;
+  uint32_t latency_wake_total = 0;
   uint16_t queued_records = 0;
   uint16_t high_water_records = 0;
-  bool urgent = false;
+  bool latency_bounded = false;
 };
 
 struct WifiMailboxTxLease {
@@ -57,9 +57,10 @@ class WifiWorkerMailbox {
  public:
   using TxQueue = FixedFrameByteQueue<BOARD_WIFI_SINK_QUEUE_RECORDS,
                                       BOARD_WIFI_SINK_QUEUE_BYTES>;
+  using TxStorage = typename TxQueue::Storage;
   using TxConsumeResult = TxQueue::ConsumeResult;
 
-  WifiWorkerMailbox();
+  explicit WifiWorkerMailbox(TxStorage& storage);
 
   void setNotifier(const WifiWorkerNotifier& notifier);
   WifiMailboxOfferResult tryOffer(const PublishedFrameView& frame,
@@ -104,7 +105,7 @@ class WifiWorkerMailbox {
   std::atomic<bool> abort_in_progress_{false};
   std::atomic<uint32_t> queue_generation_{0};
   std::atomic<uint32_t> first_queued_ms_{0};
-  std::atomic<uint32_t> urgent_records_{0};
+  std::atomic<uint32_t> latency_records_{0};
   std::atomic<uint32_t> abort_request_sequence_{0};
   std::atomic<uint32_t> disconnect_request_sequence_{0};
   std::atomic<uint32_t> queue_pressure_disconnect_request_sequence_{0};
@@ -112,7 +113,7 @@ class WifiWorkerMailbox {
   std::atomic<bool> queue_pressure_disconnect_latched_{false};
   WifiWorkerNotifier notifier_;
   std::atomic<uint32_t> empty_to_nonempty_wake_total_{0};
-  std::atomic<uint32_t> critical_wake_total_{0};
+  std::atomic<uint32_t> latency_wake_total_{0};
 
   static_assert((BOARD_WIFI_RX_MAILBOX_BYTES & (BOARD_WIFI_RX_MAILBOX_BYTES - 1u)) == 0,
                 "Wi-Fi RX mailbox capacity must be a power of two");

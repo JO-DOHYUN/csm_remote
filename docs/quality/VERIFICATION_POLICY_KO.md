@@ -1,5 +1,26 @@
 # CSM 검증 정책
 
+## 2026-07-27 제품 gate
+
+하드웨어 시험 전에 `firmware/csm/tools/product_envelope.py`를 실행한다.
+그 다음 하나의 결과 table에서 idle, nominal, 2,000 fps, 선택적 4,000
+fps, blocked client, reconnect, RC+CAN+USB+Wi-Fi 동시 부하를 비교한다.
+
+필수 열은 source frame/byte, canonical accepted B/s, socket B/s,
+request/positive-write 평균, queue high-water, Reserved/Full, close
+reason/epoch, CRC/typed/segment/capture gap, source drop, main-loop 최대 gap,
+worker stack 최솟값이다. 처리량만 맞아서는 통과가 아니다. 요구 integrity
+counter가 모두 0이고 queue conservation과 firmware identity가 확인되어야
+한다. 4,000 fps는 기본 성공 주장이 아니라 hardware/transport capability
+gate다.
+
+2026-07-27 최종 nonblocking 후보는 fresh-boot idle gate에서 실패했다.
+WHD/lwIP socket이 2,954 byte 이후 무진행 상태가 되었고 5초 정책으로
+격리됐다. 같은 창의 CAN/USB/core 무결성은 통과했다. 따라서 내장 Wi-Fi는
+release blocker이며, idle이 통과하기 전 2,000/4,000 fps 성공을 주장하지
+않는다. 상세 수치는 `history/evidence/2026-07-27_csm_product_hil.json`이
+권위다.
+
 ## 증거 등급
 
 ### H0 Harness

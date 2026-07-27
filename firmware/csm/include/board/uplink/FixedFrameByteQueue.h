@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <new>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -25,10 +26,15 @@ class FixedFrameByteQueue {
     uint16_t offset = 0;
     uint16_t byte_end_low = 0;
     UplinkPriority priority = UplinkPriority::Normal;
+    UplinkDeliveryClass delivery = UplinkDeliveryClass::Batchable;
   };
 
   static_assert(sizeof(Descriptor) == 16,
                 "Wi-Fi frame descriptor RAM contract changed");
+
+  struct DescriptorSlot {
+    alignas(Descriptor) uint8_t bytes[sizeof(Descriptor)];
+  };
 
  public:
   static_assert(RecordCapacity > 0, "frame descriptor capacity must be non-zero");
@@ -40,12 +46,28 @@ class FixedFrameByteQueue {
   static constexpr size_t kDescriptorStorageBytes =
       sizeof(Descriptor) * RecordCapacity;
 
+  // This is deliberately raw storage: production places it in a NOLOAD DTCM
+  // section. Queue cursors and atomics remain in normally initialized D1 RAM.
+  struct Storage {
+    DescriptorSlot descriptors[RecordCapacity];
+    uint8_t bytes[ByteCapacity];
+  };
+
+  static constexpr size_t kStorageBytes = sizeof(Storage);
+
   struct ConsumeResult {
     uint32_t bytes = 0;
     uint32_t frames = 0;
     uint32_t critical_frames = 0;
+    uint32_t latency_frames = 0;
     uint64_t last_publish_seq = 0;
   };
+
+  explicit FixedFrameByteQueue(Storage& storage) : storage_(&storage) {}
+  FixedFrameByteQueue(const FixedFrameByteQueue&) = delete;
+  FixedFrameByteQueue& operator=(const FixedFrameByteQueue&) = delete;
+  FixedFrameByteQueue(FixedFrameByteQueue&&) = delete;
+  FixedFrameByteQueue& operator=(FixedFrameByteQueue&&) = delete;
 
   bool push(const PublishedFrameView& frame) {
     const uint32_t tail = descriptor_tail_.load(std::memory_order_relaxed);
@@ -57,13 +79,15 @@ class FixedFrameByteQueue {
         frame.length > ByteCapacity - (byte_tail - byte_head)) {
       return false;
     }
-    Descriptor& descriptor = descriptors_[tail % RecordCapacity];
+    Descriptor& descriptor = *new (
+        storage_->descriptors[tail % RecordCapacity].bytes) Descriptor();
     descriptor.publish_seq = frame.publish_seq;
     descriptor.length = frame.length;
     descriptor.offset = 0;
     descriptor.byte_end_low =
         static_cast<uint16_t>(byte_tail + frame.length);
     descriptor.priority = frame.priority;
+    descriptor.delivery = frame.delivery;
     copyIntoRing(frame.bytes, frame.length, producer_byte_tail_offset_);
     producer_byte_tail_offset_ =
         advanceRingOffset(producer_byte_tail_offset_, frame.length);
@@ -92,7 +116,7 @@ class FixedFrameByteQueue {
     if (destination == nullptr || capacity == 0 ||
         descriptor_head == descriptor_tail) return 0;
     const uint16_t committed_byte_tail =
-        descriptors_[(descriptor_tail - 1u) % RecordCapacity].byte_end_low;
+        descriptorAt(descriptor_tail - 1u).byte_end_low;
     const uint16_t consumer_byte_head = static_cast<uint16_t>(
         byte_head_.load(std::memory_order_relaxed));
     const uint32_t queued_bytes = static_cast<uint16_t>(
@@ -102,8 +126,10 @@ class FixedFrameByteQueue {
     const uint32_t ring_head = consumer_byte_head_offset_;
     const uint32_t first =
         requested < ByteCapacity - ring_head ? requested : ByteCapacity - ring_head;
-    memcpy(destination, &bytes_[ring_head], first);
-    if (requested > first) memcpy(&destination[first], bytes_, requested - first);
+    memcpy(destination, &storage_->bytes[ring_head], first);
+    if (requested > first) {
+      memcpy(&destination[first], storage_->bytes, requested - first);
+    }
     return static_cast<uint16_t>(requested);
   }
 
@@ -113,7 +139,7 @@ class FixedFrameByteQueue {
     uint32_t byte_head = byte_head_.load(std::memory_order_relaxed);
     const uint32_t tail = descriptor_tail_.load(std::memory_order_acquire);
     while (bytes > 0 && head != tail) {
-      Descriptor& descriptor = descriptors_[head % RecordCapacity];
+      Descriptor& descriptor = descriptorAt(head);
       const uint16_t remaining =
           static_cast<uint16_t>(descriptor.length - descriptor.offset);
       const uint16_t amount =
@@ -129,8 +155,11 @@ class FixedFrameByteQueue {
         if (descriptor.priority == UplinkPriority::Critical) {
           result.critical_frames++;
         }
+        if (descriptor.delivery == UplinkDeliveryClass::LatencyBounded) {
+          result.latency_frames++;
+        }
         result.last_publish_seq = descriptor.publish_seq;
-        descriptor = {};
+        descriptor.~Descriptor();
         head++;
         descriptor_head_.store(head, std::memory_order_release);
       }
@@ -146,14 +175,14 @@ class FixedFrameByteQueue {
     const bool had_descriptors = head != tail;
     const uint16_t committed_byte_tail =
         had_descriptors
-            ? descriptors_[(tail - 1u) % RecordCapacity].byte_end_low
+            ? descriptorAt(tail - 1u).byte_end_low
             : static_cast<uint16_t>(byte_head);
     const uint32_t aborted_bytes = had_descriptors
         ? static_cast<uint16_t>(
               committed_byte_tail - static_cast<uint16_t>(byte_head))
         : 0u;
     while (head != tail) {
-      descriptors_[head % RecordCapacity] = {};
+      descriptorAt(head).~Descriptor();
       head++;
     }
     consumer_byte_head_offset_ = advanceRingOffset(
@@ -185,8 +214,7 @@ class FixedFrameByteQueue {
   }
 
  private:
-  Descriptor descriptors_[RecordCapacity] = {};
-  uint8_t bytes_[ByteCapacity] = {};
+  Storage* storage_ = nullptr;
   std::atomic<uint32_t> descriptor_head_{0};
   std::atomic<uint32_t> descriptor_tail_{0};
   std::atomic<uint32_t> high_water_records_{0};
@@ -201,8 +229,20 @@ class FixedFrameByteQueue {
                     uint16_t ring_tail) {
     const uint32_t first =
         length < ByteCapacity - ring_tail ? length : ByteCapacity - ring_tail;
-    memcpy(&bytes_[ring_tail], source, first);
-    if (length > first) memcpy(bytes_, &source[first], length - first);
+    memcpy(&storage_->bytes[ring_tail], source, first);
+    if (length > first) {
+      memcpy(storage_->bytes, &source[first], length - first);
+    }
+  }
+
+  Descriptor& descriptorAt(uint32_t monotonic_index) {
+    return *reinterpret_cast<Descriptor*>(
+        storage_->descriptors[monotonic_index % RecordCapacity].bytes);
+  }
+
+  const Descriptor& descriptorAt(uint32_t monotonic_index) const {
+    return *reinterpret_cast<const Descriptor*>(
+        storage_->descriptors[monotonic_index % RecordCapacity].bytes);
   }
 
   static uint16_t advanceRingOffset(uint16_t offset, uint16_t amount) {

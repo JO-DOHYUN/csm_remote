@@ -1,0 +1,199 @@
+MEMORY
+{
+  /* Portenta H7 M7 product slot: 0x08040000..0x08100000. */
+  FLASH (rx) : ORIGIN = 0x08040000, LENGTH = 0x000C0000
+  DTCMRAM (rwx) : ORIGIN = 0x20000000 + (((166 * 4) + 7) & 0xFFFFFFF8), LENGTH = 128K - (((166 * 4) + 7) & 0xFFFFFFF8)
+  RAM (xrw) : ORIGIN = 0x24000000, LENGTH = 0x80000
+  RAM_D2 (xrw) : ORIGIN = 0x30000000, LENGTH = 288K
+  RAM_D3 (xrw) : ORIGIN = 0x38000000, LENGTH = 64K
+  ITCMRAM (xrw) : ORIGIN = 0x00000000, LENGTH = 64K
+}
+
+/*
+ * D2 is one physical SRAM seen at 0x30000000 by M7 and 0x10000000 by M4.
+ * The paired M4 linker stops at physical 0x30040000.  The final 32 KiB is
+ * therefore owned exclusively by the M7 network DMA/lwIP sections.
+ */
+__csm_m4_d2_physical_end__ = 0x30040000;
+__csm_m7_network_d2_start__ = 0x30040000;
+__csm_m7_network_d2_end__ = 0x30048000;
+
+__OPENAMP_region_start__ = 0x38000400;
+__OPENAMP_region_end__ = 0x38000400 + LENGTH(RAM_D3) - 1K;
+ENTRY(Reset_Handler)
+
+SECTIONS
+{
+    .text :
+    {
+        KEEP(*(.isr_vector))
+        *(.text*)
+        KEEP(*(.init))
+        KEEP(*(.fini))
+        *crtbegin.o(.ctors)
+        *crtbegin?.o(.ctors)
+        *(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+        *(SORT(.ctors.*))
+        *(.ctors)
+        *crtbegin.o(.dtors)
+        *crtbegin?.o(.dtors)
+        *(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+        *(SORT(.dtors.*))
+        *(.dtors)
+        *(.rodata*)
+        KEEP(*(.eh_frame*))
+        *ltrans0*.o(.rodata*)
+        *ltrans1*.o(.rodata*)
+        *ltrans2*.o(.rodata*)
+        *ltrans3*.o(.rodata*)
+        *ltrans4*.o(.rodata*)
+        *lib*.o(.rodata*)
+    } > FLASH
+
+    .ARM.extab :
+    {
+        *(.ARM.extab* .gnu.linkonce.armextab.*)
+    } > FLASH
+    __exidx_start = .;
+    .ARM.exidx :
+    {
+        *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+    } > FLASH
+    __exidx_end = .;
+    __etext = .;
+    _sidata = .;
+
+    .data : AT (__etext)
+    {
+        __data_start__ = .;
+        _sdata = .;
+        *(vtable)
+        *(.data*)
+        . = ALIGN(8);
+        PROVIDE_HIDDEN (__preinit_array_start = .);
+        KEEP(*(.preinit_array))
+        PROVIDE_HIDDEN (__preinit_array_end = .);
+        . = ALIGN(8);
+        PROVIDE_HIDDEN (__init_array_start = .);
+        KEEP(*(SORT(.init_array.*)))
+        KEEP(*(.init_array))
+        PROVIDE_HIDDEN (__init_array_end = .);
+        . = ALIGN(8);
+        PROVIDE_HIDDEN (__fini_array_start = .);
+        KEEP(*(SORT(.fini_array.*)))
+        KEEP(*(.fini_array))
+        PROVIDE_HIDDEN (__fini_array_end = .);
+        KEEP(*(.jcr*))
+        . = ALIGN(8);
+        __data_end__ = .;
+        _edata = .;
+    } > RAM
+
+    .uninitialized (NOLOAD):
+    {
+        . = ALIGN(32);
+        __uninitialized_start = .;
+        *(.uninitialized)
+        KEEP(*(.keep.uninitialized))
+        . = ALIGN(32);
+        __uninitialized_end = .;
+    } > RAM
+
+    .bss :
+    {
+        . = ALIGN(8);
+        __bss_start__ = .;
+        _sbss = .;
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(8);
+        __bss_end__ = .;
+        _ebss = .;
+    } > RAM
+
+    .pdm_section 0x3800FC00 (NOLOAD):
+    {
+        *(.pdm_buffer)
+    } > RAM_D3
+
+    _dtcm_lma = __etext + SIZEOF(.data);
+    .dtcm : AT(_dtcm_lma)
+    {
+        _sdtcm = .;
+        *(.dtcm*)
+        _edtcm = .;
+    } > DTCMRAM
+
+    /*
+     * Raw CPU-only Wi-Fi queue arena. Queue cursors/atomics remain in D1;
+     * NOLOAD bytes are never read before a producer commits a descriptor.
+     */
+    .wifi_tx_queue_dtcm (NOLOAD):
+    {
+        . = ALIGN(32);
+        __wifi_tx_queue_start__ = .;
+        KEEP(*(.wifi_tx_queue_dtcm))
+        . = ALIGN(16);
+        __wifi_tx_queue_end__ = .;
+    } > DTCMRAM
+
+    /*
+     * Other explicitly initialized CPU-only arenas belong here. Startup code
+     * does not zero this NOLOAD section. DMA and M4-shared objects are
+     * forbidden here.
+     */
+    .csm_dtcm_bss (NOLOAD):
+    {
+        . = ALIGN(32);
+        __csm_dtcm_bss_start__ = .;
+        KEEP(*(.csm_dtcm_bss))
+        KEEP(*(.csm_dtcm_bss.*))
+        . = ALIGN(32);
+        __csm_dtcm_bss_end__ = .;
+    } > DTCMRAM
+
+    .heap (COPY):
+    {
+        __end__ = .;
+        PROVIDE(end = .);
+        *(.heap*)
+        . = ORIGIN(RAM) + LENGTH(RAM) - 0x400;
+        __HeapLimit = .;
+    } > RAM
+
+    .stack_dummy (COPY):
+    {
+        *(.stack*)
+    } > RAM
+    __StackTop = ORIGIN(RAM) + LENGTH(RAM);
+    _estack = __StackTop;
+    __StackLimit = __StackTop - 0x400;
+    PROVIDE(__stack = __StackTop);
+    ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed with stack")
+
+    .lwip_sec (NOLOAD):
+    {
+        . = ABSOLUTE(0x30040000);
+        __csm_lwip_actual_start__ = .;
+        *(.RxDecripSection)
+        . = ABSOLUTE(0x30040100);
+        *(.TxDecripSection)
+        . = ABSOLUTE(0x30040400);
+        *(.RxArraySection)
+        . = ABSOLUTE(0x30044000);
+        *(.ethusbram)
+        __csm_lwip_actual_end__ = .;
+    } > RAM_D2 AT> FLASH
+
+    ASSERT(__csm_dtcm_bss_end__ <= ORIGIN(DTCMRAM) + LENGTH(DTCMRAM),
+           "CSM DTCM arena overflow")
+    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x14FF0,
+           "Wi-Fi queue storage size drift")
+    ASSERT(__wifi_tx_queue_end__ <=
+               ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - 0x8000,
+           "Wi-Fi queue consumed DTCM safety reserve")
+    ASSERT(__csm_lwip_actual_start__ >= __csm_m7_network_d2_start__,
+           "M7 network section overlaps M4-owned D2")
+    ASSERT(__csm_lwip_actual_end__ <= __csm_m7_network_d2_end__,
+           "M7 network section exceeds reserved D2 window")
+}

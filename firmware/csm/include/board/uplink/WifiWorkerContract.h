@@ -14,8 +14,12 @@
 #define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 75
 #endif
 
-#ifndef BOARD_WIFI_TX_BATCH_MIN_RECORDS
-#define BOARD_WIFI_TX_BATCH_MIN_RECORDS 2
+#ifndef BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS
+#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 10
+#endif
+
+#ifndef BOARD_WIFI_TX_BATCH_TARGET_BYTES
+#define BOARD_WIFI_TX_BATCH_TARGET_BYTES 1024
 #endif
 
 #ifndef BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US
@@ -42,6 +46,20 @@
 #define BOARD_WIFI_ACCEPT_POLL_MS 25
 #endif
 
+#ifndef BOARD_WIFI_AP_STA_CONCUR
+#define BOARD_WIFI_AP_STA_CONCUR 1
+#endif
+
+#ifndef BOARD_WIFI_STARTUP_ATTEMPT_LIMIT
+// Zero means continuous bounded retries. Diagnostic profiles may override this
+// with a finite attempt count.
+#define BOARD_WIFI_STARTUP_ATTEMPT_LIMIT 0
+#endif
+
+#ifndef BOARD_WIFI_STARTUP_RETRY_MS
+#define BOARD_WIFI_STARTUP_RETRY_MS 2000
+#endif
+
 static_assert(BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US > 0,
               "Wi-Fi worker drain time budget must be non-zero");
 static_assert(BOARD_WIFI_TX_MAX_WRITES_PER_PUMP > 0,
@@ -52,9 +70,14 @@ static_assert(BOARD_WIFI_CONNECTED_FALLBACK_MS > 0,
               "Wi-Fi connected fallback must be non-zero");
 static_assert(BOARD_WIFI_STATE_PUBLISH_PERIOD_MS > 0,
               "Wi-Fi state publication period must be non-zero");
+static_assert(BOARD_WIFI_AP_STA_CONCUR == 0 ||
+                  BOARD_WIFI_AP_STA_CONCUR == 1,
+              "Wi-Fi WHD compatibility mode must be boolean");
+static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
+              "Wi-Fi startup retry interval must be non-zero");
 
 #ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
-#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 75
+#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 96
 #endif
 
 static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
@@ -92,6 +115,20 @@ constexpr bool wifiRuntimeModeEnablesTcp(WifiRuntimeMode mode) {
   return mode == WifiRuntimeMode::FullTcp;
 }
 
+constexpr bool wifiStartupAttemptsExhausted(uint32_t attempts,
+                                            uint8_t attempt_limit) {
+  return attempt_limit != 0 && attempts >= attempt_limit;
+}
+
+// A facade may sample now_ms just before the worker publishes a newer
+// timestamp. Treat that small future observation as age zero; unsigned
+// subtraction would otherwise look like a multi-week stall. Signed modular
+// comparison remains wrap-safe for the bounded intervals used here.
+constexpr uint32_t wifiObservedAgeMs(uint32_t now_ms, uint32_t observed_ms) {
+  const int32_t delta = static_cast<int32_t>(now_ms - observed_ms);
+  return delta < 0 ? 0u : static_cast<uint32_t>(delta);
+}
+
 // Optional synchronous crash boundary owned by the Wi-Fi worker. The enter
 // callback runs after the mailbox phase is published and before the vendor API
 // is invoked; leave runs immediately after the API returns. Implementations
@@ -111,17 +148,20 @@ struct WifiTcpSinkConfig {
   uint16_t port = 3333;
   uint8_t channel = 6;
   uint8_t ip[4] = {192, 168, 4, 1};
-  uint32_t drain_time_budget_us = 0;
+  bool ap_sta_concur = BOARD_WIFI_AP_STA_CONCUR != 0;
+  uint32_t drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
   uint32_t max_writes_per_pump = 0;
   uint32_t max_bytes_per_pump = 0;
   uint32_t stall_timeout_ms = BOARD_WIFI_STALL_TIMEOUT_MS;
   uint32_t call_stall_timeout_ms = BOARD_WIFI_CALL_STALL_TIMEOUT_MS;
   uint32_t batch_max_latency_ms = BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS;
-  uint8_t batch_min_records = BOARD_WIFI_TX_BATCH_MIN_RECORDS;
+  uint32_t latency_bound_max_ms = BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS;
+  uint16_t batch_target_bytes = BOARD_WIFI_TX_BATCH_TARGET_BYTES;
   uint8_t isolate_high_water_percent = BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT;
-  // Diagnostic profiles make one observable startup attempt by default. A
-  // larger value permits only that many bounded retries; zero is invalid.
-  uint8_t startup_attempt_limit = 1;
+  // Zero continuously retries at a bounded interval. Diagnostic profiles may
+  // select a finite non-zero attempt count.
+  uint8_t startup_attempt_limit = BOARD_WIFI_STARTUP_ATTEMPT_LIMIT;
+  uint32_t startup_retry_ms = BOARD_WIFI_STARTUP_RETRY_MS;
   WifiWorkerCallPersistence call_persistence{};
 };
 
@@ -142,6 +182,8 @@ enum class WifiWorkerCallPhase : uint8_t {
   CloseExtraClient = 11,
   // Reserved with DeleteClient for historical retained evidence decoding.
   DeleteExtraClient = 12,
+  StopServer = 13,
+  StopAccessPoint = 14,
 };
 
 enum class WifiCloseReason : uint8_t {
@@ -235,11 +277,10 @@ constexpr bool wifiQueuePressureReached(uint32_t queued_bytes,
   return byte_pressure || record_pressure;
 }
 
-// Queue high-water accelerates draining but is not a close condition. Socket
-// no-progress is closed only by this independent timeout. If a progressing
-// client is still too slow and admission reaches Reserved/Full, the producer
-// records the miss and atomically requests one QueuePressure epoch close; it
-// never waits for the worker.
+// Socket no-progress is closed by an independent timeout. Queue high-water is
+// a second, earlier loss boundary: the producer atomically requests one
+// QueuePressure epoch close before Reserved/Full, and never waits for the
+// worker.
 class WifiTxProgressTracker {
  public:
   WifiTxProgressObservation observe(uint32_t now_ms, bool progressed,
@@ -278,6 +319,7 @@ class WifiTxProgressTracker {
 
 struct WifiWorkerCallSnapshot {
   WifiWorkerCallPhase phase = WifiWorkerCallPhase::Idle;
+  bool coherent = false;
   bool in_progress = false;
   uint32_t sequence = 0;
   uint32_t started_ms = 0;
@@ -298,6 +340,7 @@ struct WifiWorkerCounters {
   uint32_t bytes_sent_total = 0;
   uint32_t frame_sent_total = 0;
   uint32_t write_attempt_total = 0;
+  uint32_t send_request_bytes_total = 0;
   uint32_t partial_write_total = 0;
   uint32_t zero_write_total = 0;
   uint32_t would_block_total = 0;

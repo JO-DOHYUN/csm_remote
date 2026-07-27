@@ -354,3 +354,94 @@
   socket/stall errors. D-023 is confirmed for the product path: do not enlarge
   queues or rewrite the worker again. The next approved work is the bounded
   Mbed/lwIP/SoftAP profile/transport decision.
+
+## D-025 Correct the Wi-Fi failure model and freeze the product data plane
+
+- Date: 2026-07-27
+- Status: Architecture and cross-host wire contract approved; physical final
+  gates are evidence-dependent.
+- Correction: D-022 and the final paragraph of D-024 treated the aggregate
+  capture window as a steady 946.7 B/s producer/socket deficit. In the valid
+  pre-close interval (20.732466 s), accepted was 224,960 B and socket progress
+  was 223,819 B: only 55 B/s difference, with repeated queue drain to zero.
+  A later ~2.073 s zero-progress interval filled exactly 512 descriptors and
+  27,472 B, causing QueuePressure. Post-close zero/zero time distorted the
+  aggregate rate. The retained evidence therefore proves a lower-path stall
+  plus an undersized descriptor/byte envelope, not a continuous application
+  deficit.
+- Decision: supersede D-022's "do not enlarge" conclusion. Keep the single
+  canonical publisher and independent nonblocking sinks, but freeze the final
+  Wi-Fi path as: direct WHD AP-only (`ap_sta_concur=false`), one checked raw
+  `TCPSocket` server/worker, 1,024-byte batching, separate admission priority
+  and latency class, 1,280 descriptors, 65,520 byte arena, 2,112 byte critical
+  reserve, 96% pre-full isolation, and 5 second zero-progress close.
+- Wire decision: publish one lossless `CAN_RX_SEGMENT` schema 2 using a 40-byte
+  header and 20-byte delta entries, maximum 23 frames/511 typed bytes. Merge
+  CAN source queues by global capture sequence. Do not dual-publish legacy and
+  compact records; update official Android/Windows/PC consumers together while
+  retaining legacy capture decode.
+- Memory decision: place only raw Wi-Fi queue storage in M7 DTCM NOLOAD;
+  cursors/atomics/socket/DMA state remain normally initialized. Cap each M7 CAN
+  source queue at 512. Pair M4/M7 linker ownership so M4 D2 ends at physical
+  `0x30040000` and M7 network D2 owns the final 32 KiB.
+- Rejected: the 32,768-byte lwIP heap candidate still overflows D2 and is not a
+  product artifact. Re-enabling M7 D-cache is forbidden without a complete
+  MPU/cache-maintenance platform fork because the Portenta WHD SDIO path uses
+  synchronous DMA buffers.
+- Gate: source-backed calculation must pass first. Then build/link-map, AP-only
+  raw/product throughput, queue conservation, 2,000 fps, optional 4,000 fps,
+  blocked-client/reconnect, simultaneous RC+CAN+USB+Wi-Fi, and soak are recorded
+  in one table. A build or calculation is never reported as a physical pass.
+
+## D-026 Keep the external AP-only product, restore the validated WHD compatibility role
+
+- Date: 2026-07-27
+- Status: Approved; supersedes only D-025's `ap_sta_concur=false` choice.
+- Evidence: after a clean boot, the direct WHD `ap_sta_concur=false` product
+  accepted a Windows TCP consumer but advanced only 536 bytes before permanent
+  `WOULD_BLOCK`; the bounded policy closed it after 5 seconds. Feeder and CSM
+  simultaneously preserved 40,000 injected CAN frames with zero CAN/USB drop,
+  so this was isolated to the Wi-Fi lower path. Earlier same-board
+  `ap_sta_concur=true` raw runs sustained 65,083--69,413 B/s.
+- Decision: keep `WhdSoftAPInterface` and checked raw `TCPSocket` ownership,
+  but start WHD with `ap_sta_concur=true`. The product still advertises and
+  uses only its local AP; the STA role is an internal Portenta compatibility
+  requirement, not a second product transport.
+- Gate: rebuild/upload the paired artifacts and repeat idle, 2,000 fps,
+  blocked-client, reconnect, and soak measurements. Do not infer a pass from
+  the prior raw result.
+
+## D-027 Reject synthetic throughput as product evidence and hold the Wi-Fi release
+
+- Date: 2026-07-27
+- Status: Core architecture accepted; internal Wi-Fi release gate failed.
+- Artifact: M7 source manifest
+  `341f948e99256a0cb07fd6883f64575c9a76b4038c11bb238ba1350fb14eec2e`,
+  firmware SHA-256
+  `20A84878DEEF7541726F95494550B7F8F3B90E15041474E8A1C816E974507281`.
+- Evidence: after a clean upload and AP reconnect, a 15.059 s idle product
+  capture accepted a PC client and delivered 2,954 bytes. It then recorded 469
+  `WOULD_BLOCK` sends, zero additional socket progress, and one deterministic
+  5 second `TransmitNoProgress` close. The gate failed before a high-load
+  condition.
+- Isolation result: the same boot received 945 CAN frames, with CAN drop,
+  FIFO overflow, USB overflow, bad CRC, typed gap, segment gap, and capture gap
+  all zero. Maximum main-loop gap was 3,311 us. Thus the canonical producer,
+  feeder/CAN ingest, USB truth path, and RTOS worker isolation remain valid;
+  the failing boundary is below `TCPSocket::send` in the WHD/lwIP path.
+- Decision: retain compact schema 2, bounded queues, independent sink epochs,
+  coherent diagnostics, continuous bounded AP startup retry, and the
+  nonblocking worker as an instrumented candidate. Do not label the internal
+  Wi-Fi transport release-ready and do not spend more RAM on its queue.
+- Review blockers retained for the next implementation turn: queue-pressure
+  completion must not clear producer isolation from a stale connected
+  snapshot; partial WHD startup must always roll back before retry;
+  `TRANSPORT_DIAGNOSTIC` needs one coherent snapshot revision; latency-bound
+  records need a real queue-delay contract rather than only an early pump.
+- Rejected: promoting the 65--69 kB/s synthetic raw benchmark, hiding the loss
+  with a larger queue, or running the 2,000 fps Wi-Fi gate after the idle
+  prerequisite failed.
+- Next gate: either reproduce and pin a framework source build that fits the
+  measured D2 linker budget and passes idle/nominal/2,000 fps, or qualify an
+  external transport. A framework experiment is not promoted unless its
+  binary/source identity and the full product stream are recorded together.

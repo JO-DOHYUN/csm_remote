@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "board/uplink/UplinkPriorityPolicy.h"
 #include "protocol/TypedRecords.h"
 
 namespace csm::board::uplink {
@@ -98,6 +99,7 @@ PublishServiceResult CanonicalPublisher::publish(csm::RecordType type,
   frame.publish_seq = publish_seq_next_;
   frame.type = type;
   frame.priority = priority;
+  frame.delivery = default_delivery_for_record(type);
   for (uint8_t i = 0; i < kMaxSinks; ++i) {
     if (sinks_[i] == nullptr || !sinks_[i]->enabled()) continue;
     if (sinks_[i]->connected()) {

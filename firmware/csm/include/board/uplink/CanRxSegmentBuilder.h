@@ -18,6 +18,14 @@ struct CanRxSegmentItem {
 using CanRxSegmentEmitFn = bool (*)(void* context, const CanRxSegmentItem* items,
                                     uint8_t count, uint64_t segment_seq);
 
+uint16_t encode_can_rx_segment_payload(const CanRxSegmentItem* items,
+                                       uint8_t count,
+                                       uint64_t segment_seq,
+                                       uint32_t dropped_total,
+                                       uint32_t fifo_overflow_total,
+                                       uint8_t* payload,
+                                       uint16_t capacity);
+
 class CanRxSegmentBuilder {
  public:
   void begin(CanRxSegmentEmitFn emit_fn, void* context, uint32_t flush_us);
@@ -41,6 +49,7 @@ class CanRxSegmentBuilder {
   void* context_ = nullptr;
 
   bool ageDue(uint32_t now_us) const;
+  bool compactDeltasFit(const CanRxSegmentItem& item) const;
 };
 
 }  // namespace csm::board::uplink

@@ -25,6 +25,18 @@ namespace {
 
 int failures = 0;
 
+struct TestWifiMailboxStorage {
+  csm::board::uplink::WifiWorkerMailbox::TxStorage storage;
+};
+
+class TestWifiWorkerMailbox final
+    : private TestWifiMailboxStorage,
+      public csm::board::uplink::WifiWorkerMailbox {
+ public:
+  TestWifiWorkerMailbox()
+      : csm::board::uplink::WifiWorkerMailbox(storage) {}
+};
+
 #define CHECK(condition)                                                       \
   do {                                                                         \
     if (!(condition)) {                                                        \
@@ -202,7 +214,9 @@ void fixed_queue_batches_without_losing_frame_boundaries() {
 
 void byte_queue_wraps_without_losing_frame_boundaries() {
   using namespace csm::board::uplink;
-  FixedFrameByteQueue<4, 523> queue;
+  FixedFrameByteQueue<4, 523>::Storage storage;
+  std::memset(&storage, 0xA5, sizeof(storage));
+  FixedFrameByteQueue<4, 523> queue(storage);
   uint8_t first[400] = {};
   uint8_t second[100] = {};
   uint8_t third[200] = {};
@@ -234,7 +248,8 @@ void byte_queue_wraps_without_losing_frame_boundaries() {
 
 void byte_queue_distinguishes_exact_byte_full_from_empty() {
   using namespace csm::board::uplink;
-  FixedFrameByteQueue<4, 523> queue;
+  FixedFrameByteQueue<4, 523>::Storage storage;
+  FixedFrameByteQueue<4, 523> queue(storage);
   uint8_t payload[523] = {};
   for (uint16_t index = 0; index < sizeof(payload); ++index) {
     payload[index] = static_cast<uint8_t>(index);
@@ -266,7 +281,8 @@ void byte_queue_uses_compact_descriptors_at_product_capacity() {
   static_assert(ProductDescriptorQueue::kDescriptorSizeBytes == 16);
   static_assert(ProductDescriptorQueue::kDescriptorStorageBytes == 8192);
 
-  ProductDescriptorQueue queue;
+  ProductDescriptorQueue::Storage storage;
+  ProductDescriptorQueue queue(storage);
   uint8_t byte = 0xA5;
   for (uint16_t index = 0; index < 512; ++index) {
     PublishedFrameView frame{&byte, 1, index, RecordType::CanTxRaw,
@@ -300,7 +316,8 @@ void byte_queue_uses_compact_descriptors_at_product_capacity() {
 
 void byte_queue_clear_releases_partial_frame_and_reuses_wrapped_ring() {
   using namespace csm::board::uplink;
-  FixedFrameByteQueue<8, 523> queue;
+  FixedFrameByteQueue<8, 523>::Storage storage;
+  FixedFrameByteQueue<8, 523> queue(storage);
   uint8_t first[300] = {};
   uint8_t second[200] = {};
   std::memset(first, 0x11, sizeof(first));
@@ -339,7 +356,8 @@ void byte_queue_spsc_preserves_order_without_shared_lock() {
   using namespace csm::board::uplink;
   constexpr uint32_t kFrames = 10000;
   constexpr uint16_t kFrameBytes = 16;
-  FixedFrameByteQueue<32, 2048> queue;
+  FixedFrameByteQueue<32, 2048>::Storage storage;
+  FixedFrameByteQueue<32, 2048> queue(storage);
   std::atomic<bool> producer_done{false};
   std::atomic<bool> consumer_error{false};
   std::vector<uint8_t> received;
@@ -390,14 +408,15 @@ void byte_queue_spsc_preserves_order_without_shared_lock() {
   CHECK(queue.empty());
 }
 
-void wifi_mailbox_critical_urgency_tracks_consumer_completion() {
+void wifi_mailbox_latency_class_tracks_consumer_completion() {
   using namespace csm::board::uplink;
-  WifiWorkerMailbox mailbox;
+  TestWifiWorkerMailbox mailbox;
   uint8_t bytes[16] = {};
   PublishedFrameView frame{bytes, sizeof(bytes), 1, RecordType::StreamSession,
-                           UplinkPriority::Critical};
+                           UplinkPriority::Critical,
+                           UplinkDeliveryClass::LatencyBounded};
   CHECK(mailbox.tryOffer(frame, 10) == WifiMailboxOfferResult::Accepted);
-  CHECK(mailbox.queueSnapshot().urgent);
+  CHECK(mailbox.queueSnapshot().latency_bounded);
   uint8_t staged[32] = {};
   WifiMailboxTxLease lease;
   CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
@@ -407,12 +426,13 @@ void wifi_mailbox_critical_urgency_tracks_consumer_completion() {
   CHECK(!stale);
   CHECK(consumed.frames == 1);
   CHECK(consumed.critical_frames == 1);
-  CHECK(!mailbox.queueSnapshot().urgent);
+  CHECK(consumed.latency_frames == 1);
+  CHECK(!mailbox.queueSnapshot().latency_bounded);
 }
 
 void wifi_mailbox_abort_invalidates_staged_generation() {
   using namespace csm::board::uplink;
-  WifiWorkerMailbox mailbox;
+  TestWifiWorkerMailbox mailbox;
   uint8_t bytes[16] = {};
   PublishedFrameView frame{bytes, sizeof(bytes), 7, RecordType::BoardEvent,
                            UplinkPriority::Normal};
@@ -452,7 +472,7 @@ void captureWifiWake(void* context, uint32_t bits) {
 
 void wifi_mailbox_wakes_only_on_actionable_transitions() {
   using namespace csm::board::uplink;
-  WifiWorkerMailbox mailbox;
+  TestWifiWorkerMailbox mailbox;
   WifiWakeCapture capture;
   mailbox.setNotifier({&capture, captureWifiWake});
 
@@ -461,7 +481,8 @@ void wifi_mailbox_wakes_only_on_actionable_transitions() {
                             UplinkPriority::Normal};
   PublishedFrameView critical{bytes, sizeof(bytes), 2,
                               RecordType::StreamSession,
-                              UplinkPriority::Critical};
+                              UplinkPriority::Critical,
+                              UplinkDeliveryClass::LatencyBounded};
   CHECK(mailbox.tryOffer(normal, 10) == WifiMailboxOfferResult::Accepted);
   CHECK(capture.calls == 1);
   CHECK((capture.bits & WifiWakeTxData) != 0);
@@ -471,7 +492,7 @@ void wifi_mailbox_wakes_only_on_actionable_transitions() {
   CHECK(capture.calls == 2);
   const auto queued = mailbox.queueSnapshot();
   CHECK(queued.empty_to_nonempty_wake_total == 1);
-  CHECK(queued.critical_wake_total == 1);
+  CHECK(queued.latency_wake_total == 1);
 
   mailbox.requestAbort();
   CHECK(capture.calls == 3);
@@ -503,7 +524,8 @@ void transport_diagnostic_is_single_bounded_wire_record() {
   snapshot.accepted_bytes_total = 12345;
   snapshot.queue_bytes = 512;
   snapshot.socket_bytes_total = 12000;
-  snapshot.wake_total = 77;
+  snapshot.queue_high_water_records = 77;
+  snapshot.send_request_bytes_total = 14000;
   snapshot.last_accepted_publish_seq = 899;
   snapshot.last_sent_publish_seq = 897;
   uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
@@ -593,7 +615,7 @@ int main() {
   byte_queue_uses_compact_descriptors_at_product_capacity();
   byte_queue_clear_releases_partial_frame_and_reuses_wrapped_ring();
   byte_queue_spsc_preserves_order_without_shared_lock();
-  wifi_mailbox_critical_urgency_tracks_consumer_completion();
+  wifi_mailbox_latency_class_tracks_consumer_completion();
   wifi_mailbox_abort_invalidates_staged_generation();
   wifi_mailbox_wakes_only_on_actionable_transitions();
   runtime_diagnostic_layout_is_fixed_and_bounded();

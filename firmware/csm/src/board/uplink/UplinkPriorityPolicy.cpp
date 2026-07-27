@@ -57,4 +57,15 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
   }
 }
 
+UplinkDeliveryClass default_delivery_for_record(csm::RecordType type) {
+  switch (type) {
+    case csm::RecordType::ControlAck:
+    case csm::RecordType::StreamSession:
+    case csm::RecordType::BoardEvent:
+      return UplinkDeliveryClass::LatencyBounded;
+    default:
+      return UplinkDeliveryClass::Batchable;
+  }
+}
+
 }  // namespace csm::board::uplink

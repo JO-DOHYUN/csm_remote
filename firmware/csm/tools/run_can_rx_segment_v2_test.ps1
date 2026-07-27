@@ -13,27 +13,23 @@ $vsDevCmd = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
 
 $outputDir = Join-Path $project ".pio\contract-test"
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$output = Join-Path $outputDir "uplink_contract_test.exe"
+$output = Join-Path $outputDir "can_rx_segment_v2_test.exe"
 $include = Join-Path $project "include"
 $sources = @(
-  (Join-Path $project "test\uplink_contract_test.cpp"),
+  (Join-Path $project "test\can_rx_segment_v2_test.cpp"),
   (Join-Path $project "src\protocol\TypedFrame.cpp"),
-  (Join-Path $project "src\board\uplink\CanonicalPublisher.cpp"),
-  (Join-Path $project "src\board\uplink\CanRxSegmentBuilder.cpp"),
-  (Join-Path $project "src\board\uplink\RecordAdmission.cpp")
-  (Join-Path $project "src\board\uplink\UplinkPriorityPolicy.cpp")
-  (Join-Path $project "src\board\uplink\WifiWorkerMailbox.cpp"),
-  (Join-Path $project "src\board\uplink\WifiTransportDiagnostic.cpp")
+  (Join-Path $project "src\board\CapabilityPublisher.cpp"),
+  (Join-Path $project "src\board\uplink\CanRxSegmentBuilder.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
-$compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /DBOARD_WIFI_SINK_QUEUE_RECORDS=100 /DBOARD_WIFI_SINK_QUEUE_BYTES=1024 /DBOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS=4 /DBOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=16 /DBOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT=96 /I`"$include`" $quotedSources /Fe:`"$output`""
+$compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /I`"$include`" $quotedSources /Fe:`"$output`""
 
 cmd.exe /d /s /c $compile
 if ($LASTEXITCODE -ne 0) {
-  throw "uplink contract test compilation failed"
+  throw "CAN_RX_SEGMENT v2 contract test compilation failed"
 }
 
 & $output
 if ($LASTEXITCODE -ne 0) {
-  throw "uplink contract test failed"
+  throw "CAN_RX_SEGMENT v2 contract test failed"
 }

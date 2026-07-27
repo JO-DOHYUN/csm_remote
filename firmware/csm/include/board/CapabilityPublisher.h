@@ -47,6 +47,10 @@ struct CapabilityPayloadConfig {
   uint32_t firmware_build_id = 0;
   uint16_t host_tx_queue_size = 0;
   uint16_t capability_v3_flags = 0;
+  uint8_t can_rx_segment_schema = 0;
+  uint8_t can_rx_segment_header_len = 0;
+  uint8_t can_rx_segment_entry_len = 0;
+  uint8_t can_rx_segment_max_frames = 0;
   uint8_t firmware_identity_version = 0;
   bool firmware_dirty = true;
   uint8_t firmware_irq_mode = 0;
