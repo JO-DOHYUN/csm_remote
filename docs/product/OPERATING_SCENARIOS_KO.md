@@ -37,8 +37,9 @@ USB CDC가 닫히거나 host가 읽지 않아도 Wi-Fi와 RC는 계속 동작한
 boot/session identity가 바뀐다. 두 VSM은 이전 session과 새 session을 이어 붙이지
 않고 reset evidence로 분리한다. 단순 `seq` wrap과 reboot를 혼동하지 않는다.
 CSM은 이전 boot의 stable 여부, 마지막 progress, early-reset 누계를 backup SRAM에서
-복구한다. 같은 source/experiment selector가 30초 전에 연속 2회 종료되면 다음 boot의 Wi-Fi를
-quarantine해 USB와 retained evidence를 우선 살린다.
+복구한다. 이 값은 reset 진단 evidence이며 Wi-Fi startup을 차단하지 않는다.
+Wi-Fi 장애는 해당 sink의 bounded close/reconnect로 격리하고 RC·CAN·USB는 계속
+독립 동작한다.
 
 application이 보는 RCC raw flag는 bootloader가 이미 clear했을 수 있다. 따라서
 raw unknown, reset 간격, LED만으로 watchdog이나 power fault를 확정하지 않는다.

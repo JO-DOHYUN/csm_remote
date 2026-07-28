@@ -351,16 +351,15 @@ bool BootRecovery::beginBoot(const BootStartInfo& info) {
     source_changed_ = previous_state_.source_id != info.firmware.source_id;
   }
 
-  bool quarantine_just_activated = false;
-  bool retry_failed_on_recovery = false;
-  const bool previous_retry_active =
-      (state_.flags & kFlagWifiRetryActive) != 0;
+  // Retain reset/call evidence, but never turn an inferred association into a
+  // product transport shutdown. Older firmware may have persisted quarantine
+  // or retry bits; retire them on the first boot of this policy.
+  state_.flags &= ~(kFlagWifiQuarantined | kFlagWifiRetryToken |
+                    kFlagWifiRetryActive);
   if (source_changed_) {
     // A new source/config contract gets one clean trial. An artifact-only rebuild
-    // does not erase the established boot-loop safety decision.
+    // does not erase reset evidence.
     state_.consecutive_early_resets = 0;
-    state_.flags &= ~(kFlagWifiQuarantined | kFlagWifiRetryToken |
-                      kFlagWifiRetryActive);
   } else if (previous_boot_valid_) {
     if ((state_.flags & kFlagBootStarted) != 0 &&
         (state_.flags & kFlagBootStable) == 0) {
@@ -371,19 +370,6 @@ bool BootRecovery::beginBoot(const BootStartInfo& info) {
       state_.consecutive_early_resets = 0;
     }
 
-    if (previous_retry_active) {
-      state_.wifi_retry_failures = nextSequence(state_.wifi_retry_failures);
-      state_.flags &= ~(kFlagWifiRetryActive | kFlagWifiRetryToken);
-      state_.flags |= kFlagWifiQuarantined;
-      retry_failed_on_recovery = true;
-    }
-    if (state_.consecutive_early_resets >= config_.early_reset_limit &&
-        (state_.flags & kFlagWifiQuarantined) == 0) {
-      state_.flags |= kFlagWifiQuarantined;
-      state_.wifi_quarantine_total =
-          nextSequence(state_.wifi_quarantine_total);
-      quarantine_just_activated = true;
-    }
   }
 
   state_.build_id = info.firmware.build_id;
@@ -412,11 +398,6 @@ bool BootRecovery::beginBoot(const BootStartInfo& info) {
                 static_cast<uint32_t>(previous_state_.source_id),
                 info.uptime_ms);
   }
-  if (quarantine_just_activated || retry_failed_on_recovery) {
-    appendEvent(BootRecoveryEventType::WifiQuarantined,
-                retry_failed_on_recovery ? 2u : 1u,
-                state_.consecutive_early_resets, info.uptime_ms);
-  }
   return true;
 }
 
@@ -444,57 +425,6 @@ bool BootRecovery::markStable(uint32_t uptime_ms) {
                      state_.last_progress_id, uptime_ms);
 }
 
-bool BootRecovery::grantWifiRetryToken(uint32_t uptime_ms, uint32_t reason) {
-  if (!ready_ || (state_.flags & kFlagWifiQuarantined) == 0 ||
-      (state_.flags & (kFlagWifiRetryToken | kFlagWifiRetryActive)) != 0) {
-    return false;
-  }
-  state_.flags |= kFlagWifiRetryToken;
-  state_.wifi_retry_grants = nextSequence(state_.wifi_retry_grants);
-  return appendEvent(BootRecoveryEventType::WifiRetryGranted,
-                     static_cast<uint16_t>(reason), reason, uptime_ms);
-}
-
-bool BootRecovery::consumeWifiRetryToken(uint32_t uptime_ms) {
-  if (!ready_ || (state_.flags & kFlagWifiQuarantined) == 0 ||
-      (state_.flags & kFlagWifiRetryToken) == 0 ||
-      (state_.flags & kFlagWifiRetryActive) != 0) {
-    return false;
-  }
-  state_.flags &= ~kFlagWifiRetryToken;
-  state_.flags |= kFlagWifiRetryActive;
-  state_.wifi_retry_attempts = nextSequence(state_.wifi_retry_attempts);
-  return appendEvent(BootRecoveryEventType::WifiRetryConsumed, 0,
-                     state_.wifi_retry_attempts, uptime_ms);
-}
-
-bool BootRecovery::completeWifiRetry(bool succeeded, uint32_t uptime_ms,
-                                     uint32_t detail) {
-  if (!ready_ || (state_.flags & kFlagWifiRetryActive) == 0) return false;
-  state_.flags &= ~(kFlagWifiRetryActive | kFlagWifiRetryToken);
-  if (succeeded) {
-    state_.flags &= ~kFlagWifiQuarantined;
-    state_.consecutive_early_resets = 0;
-    state_.wifi_retry_successes = nextSequence(state_.wifi_retry_successes);
-    return appendEvent(BootRecoveryEventType::WifiRetrySucceeded,
-                       static_cast<uint16_t>(detail), detail, uptime_ms);
-  }
-  state_.flags |= kFlagWifiQuarantined;
-  state_.wifi_retry_failures = nextSequence(state_.wifi_retry_failures);
-  return appendEvent(BootRecoveryEventType::WifiRetryFailed,
-                     static_cast<uint16_t>(detail), detail, uptime_ms);
-}
-
-bool BootRecovery::shouldStartWifi() const {
-  if (!ready_) return false;
-  return (state_.flags & kFlagWifiQuarantined) == 0 ||
-         (state_.flags & kFlagWifiRetryActive) != 0;
-}
-
-bool BootRecovery::wifiQuarantined() const {
-  return ready_ && (state_.flags & kFlagWifiQuarantined) != 0;
-}
-
 ProductRecoverySnapshot BootRecovery::snapshot() const {
   ProductRecoverySnapshot result{};
   result.ready = ready_;
@@ -506,11 +436,10 @@ ProductRecoverySnapshot BootRecovery::snapshot() const {
   result.firmware_build_changed = build_changed_;
   result.firmware_source_changed = source_changed_;
   result.current_boot_stable = (state_.flags & kFlagBootStable) != 0;
-  result.wifi_quarantined = (state_.flags & kFlagWifiQuarantined) != 0;
-  result.wifi_retry_token_available =
-      (state_.flags & kFlagWifiRetryToken) != 0;
-  result.wifi_retry_active = (state_.flags & kFlagWifiRetryActive) != 0;
-  result.wifi_start_allowed = shouldStartWifi();
+  result.wifi_quarantined = false;
+  result.wifi_retry_token_available = false;
+  result.wifi_retry_active = false;
+  result.wifi_start_allowed = ready_;
   result.firmware_build_id = state_.build_id;
   result.firmware_source_id = state_.source_id;
   result.previous_firmware_build_id = previous_state_.build_id;

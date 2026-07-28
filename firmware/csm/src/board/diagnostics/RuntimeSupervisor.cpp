@@ -25,9 +25,6 @@ RuntimeSupervisorDecision RuntimeSupervisor::begin(
       effective.watchdog_compiled && kResetExperimentProfile.watchdog_enabled;
   decision_.requested_wifi_mode = kResetExperimentProfile.wifi_runtime_mode;
   decision_.effective_wifi_mode = decision_.requested_wifi_mode;
-  if (decision_.recovery_ready && !recovery_.shouldStartWifi()) {
-    decision_.effective_wifi_mode = ResetExperimentWifiRuntimeMode::Off;
-  }
   last_progress_ms_ = effective.uptime_ms;
   last_wifi_call_sequence_ = 0;
   stable_reported_ = false;

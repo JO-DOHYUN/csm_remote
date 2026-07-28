@@ -141,17 +141,6 @@ class BootRecovery {
                       uint32_t uptime_ms);
   bool markStable(uint32_t uptime_ms);
 
-  // Retry is deliberately two-step. An explicit operator/service action grants
-  // one token; consuming it is committed before Wi-Fi is touched. If the board
-  // resets with retry_active set, the next boot returns to quarantine and the
-  // token is not restored.
-  bool grantWifiRetryToken(uint32_t uptime_ms, uint32_t reason = 0);
-  bool consumeWifiRetryToken(uint32_t uptime_ms);
-  bool completeWifiRetry(bool succeeded, uint32_t uptime_ms,
-                         uint32_t detail = 0);
-
-  bool shouldStartWifi() const;
-  bool wifiQuarantined() const;
   ProductRecoverySnapshot snapshot() const;
 
   // Returns the newest available events in chronological order. Invalid/torn

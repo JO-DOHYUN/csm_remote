@@ -80,9 +80,11 @@ void verifyRuntimeContractIsolation() {
     CHECK(snapshot.consecutive_early_resets == 1u);
   }
   {
-    RuntimeSupervisor quarantined = makeSupervisor(storage);
-    quarantined.begin(boot(3u, kSource, kContractOne));
-    CHECK(quarantined.recoverySnapshot().wifi_quarantined);
+    RuntimeSupervisor repeated_reset = makeSupervisor(storage);
+    const RuntimeSupervisorDecision decision =
+        repeated_reset.begin(boot(3u, kSource, kContractOne));
+    CHECK(!repeated_reset.recoverySnapshot().wifi_quarantined);
+    CHECK(decision.effective_wifi_mode == decision.requested_wifi_mode);
   }
   {
     // A material resolved-runtime change gets a clean trial even when the
@@ -109,7 +111,7 @@ void verifyRuntimeContractIsolation() {
   }
 }
 
-void verifyEarlyResetQuarantine() {
+void verifyEarlyResetEvidenceDoesNotDisableWifi() {
   Storage storage{};
   {
     RuntimeSupervisor first = makeSupervisor(storage);
@@ -125,9 +127,10 @@ void verifyEarlyResetQuarantine() {
   {
     RuntimeSupervisor third = makeSupervisor(storage);
     const RuntimeSupervisorDecision decision = third.begin(boot(3u, 22u));
-    CHECK(decision.effective_wifi_mode == ResetExperimentWifiRuntimeMode::Off);
+    CHECK(decision.effective_wifi_mode == decision.requested_wifi_mode);
     CHECK(third.recoverySnapshot().consecutive_early_resets == 2u);
-    CHECK(third.recoverySnapshot().wifi_quarantined);
+    CHECK(!third.recoverySnapshot().wifi_quarantined);
+    CHECK(third.recoverySnapshot().wifi_start_allowed);
 
     RuntimeSupervisorObservation observation;
     observation.now_ms = 30000u;
@@ -145,7 +148,7 @@ void verifyEarlyResetQuarantine() {
     const RuntimeSupervisorDecision decision =
         stable_followup.begin(boot(4u, 22u));
     CHECK(stable_followup.recoverySnapshot().consecutive_early_resets == 0u);
-    CHECK(decision.effective_wifi_mode == ResetExperimentWifiRuntimeMode::Off);
+    CHECK(decision.effective_wifi_mode == decision.requested_wifi_mode);
   }
   {
     // A configuration/source change gets exactly one clean trial.
@@ -160,7 +163,7 @@ void verifyEarlyResetQuarantine() {
 
 int main() {
   verifySelectedProfile();
-  verifyEarlyResetQuarantine();
+  verifyEarlyResetEvidenceDoesNotDisableWifi();
   verifyRuntimeContractIsolation();
   if (failures != 0) return 1;
   std::cout << "Runtime supervisor contract PASS profile="

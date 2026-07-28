@@ -100,8 +100,8 @@
 ## D-011 crash-first self-debug와 boot-loop 복구
 
 - 날짜: 2026-07-21
-- 상태: Active. 2026-07-22 host contract/build와 REF/A/B/C 각 180초 실보드
-  1차 gate 완료; 반복·장시간 HIL 대기.
+- 상태: Retained evidence 경계는 Active. Wi-Fi startup quarantine 결정은
+  D-029로 폐기.
 - 결정: `RuntimeSupervisor`를 위험 driver보다 먼저 시작하고 platform-independent
   `BootRecovery`가 retained metadata, compact event ring, early-reset 분류와
   Wi-Fi startup decision을 소유한다. main은 board adapter와 driver 적용만 한다.
@@ -479,3 +479,21 @@
   native contracts plus Wi-Fi/RC/control guards and the product envelope pass.
   Hardware upload, AP throughput, Android ACK/replay, simultaneous
   RC+dual-CAN+USB+Wi-Fi and soak were not run in this decision.
+
+## D-029 Retain reset evidence without disabling product Wi-Fi
+
+- Date: 2026-07-28
+- Status: Approved; supersedes D-011's automatic Wi-Fi startup quarantine and
+  one-shot retry policy. Retained boot/reset/call evidence remains active.
+- Evidence correction: the observed incomplete Wi-Fi call belonged to the
+  approximately 1.18 second intermediate boot between paired M4 and M7 DFU
+  uploads. It does not prove a spontaneous reset, watchdog expiry, or Wi-Fi
+  causal fault. The policy could not distinguish upload/user resets because
+  the application reset cause was unknown.
+- Decision: early-reset counts and retained call latches are diagnostic-only.
+  They never force the product Wi-Fi mode Off. Slow/blocked clients and socket
+  failures remain isolated at the bounded Wi-Fi sink epoch; RC, CAN ingest,
+  USB, and other sinks continue independently.
+- Compatibility: retained layout, historical counters, event IDs, and
+  BOARD_HEALTH offsets remain stable. Legacy persisted quarantine/retry bits
+  are cleared at boot and reported inactive.

@@ -126,19 +126,17 @@ truth다. progress ID는 source line이 아니라 소유 경계를 뜻하므로 
 main이 bounded snapshot을 읽어 기록한다. 진단 record overflow도 counter로
 드러내며 제어·CAN truth reserve를 침범하지 않는다.
 
-## early-reset Wi-Fi quarantine
+## early-reset evidence와 Wi-Fi 지속 운용
 
-같은 firmware source/experiment-selector identity에서 30초 안정 마커 전에 종료된 boot가
-연속 2회 복구되면 다음 boot의 effective Wi-Fi mode를 `Off`로 내린다. 새
-artifact build만으로는 이 이력을 지우지 않는다. source manifest 또는 REF/A/B/C
-selector가 바뀌면 새 구성에 한 번의 clean trial을 준다.
+30초 안정 마커 전 종료, 마지막 progress, Wi-Fi call latch는 retained evidence로
+계속 보존한다. 그러나 reset source가 확정되지 않은 상관관계만으로 product Wi-Fi를
+차단하지 않는다. 업로드·DFU·사용자 reset도 driver call 중단처럼 보일 수 있기
+때문이다.
 
-quarantine의 목적은 원인을 Wi-Fi로 확정하는 것이 아니라 USB·RC frontend·CAN
-관측과 retained evidence를 살려 현장 복구 가능성을 높이는 것이다. 현재 진단
-profile은 별도로 application-data CAN TX를 compile-time 차단한다. CAN controller의
-ACK/error signaling까지 물리적으로 차단한다는 뜻은 아니다. one-shot Wi-Fi retry의
-token/consume/success/failure 저장 계약과 host test는 존재하지만, operator-facing
-승인 command는 아직 제품 경로에 연결하지 않는다.
+Wi-Fi client 정체와 전송 실패는 해당 sink epoch의 bounded close/reconnect로
+격리한다. RC, CAN ingest, USB와 다른 sink는 계속 독립 동작한다. 반복 reset의
+정확한 원인은 watchdog/reset-source 또는 외부 power evidence로 판정하며,
+early-reset 누계는 진단값일 뿐 startup permission이 아니다.
 
 ## reset 실험 profile
 

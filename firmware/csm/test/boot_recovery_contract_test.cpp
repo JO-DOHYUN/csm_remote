@@ -149,7 +149,7 @@ void testStorageContractAndStableBoot() {
   CHECK(!undersized.beginBoot(boot(1, 1)));
 }
 
-void testEarlyResetQuarantineAndOneShotRetry() {
+void testEarlyResetsRemainDiagnosticOnly() {
   Storage storage{};
   BootRecoveryConfig config;
   config.stable_after_ms = 1000;
@@ -162,51 +162,27 @@ void testEarlyResetQuarantineAndOneShotRetry() {
     BootRecovery recovery(storage.data(), storage.size(), config);
     CHECK(recovery.beginBoot(boot(1, 10)));
     CHECK(recovery.snapshot().consecutive_early_resets == 1);
-    CHECK(recovery.shouldStartWifi());
+    CHECK(recovery.snapshot().wifi_start_allowed);
   }
   {
     BootRecovery recovery(storage.data(), storage.size(), config);
     CHECK(recovery.beginBoot(boot(1, 10)));
     auto snap = recovery.snapshot();
     CHECK(snap.consecutive_early_resets == 2);
-    CHECK(snap.wifi_quarantined);
-    CHECK(!snap.wifi_start_allowed);
-    CHECK(recovery.grantWifiRetryToken(100, 0x44));
-    CHECK(!recovery.grantWifiRetryToken(101));
-    CHECK(recovery.consumeWifiRetryToken(102));
-    CHECK(!recovery.consumeWifiRetryToken(103));
-    snap = recovery.snapshot();
-    CHECK(snap.wifi_retry_active);
+    CHECK(!snap.wifi_quarantined);
     CHECK(!snap.wifi_retry_token_available);
     CHECK(snap.wifi_start_allowed);
-    // Deliberately reset without completing the attempt.
+    CHECK(recovery.markStable(1010));
   }
   {
     BootRecovery recovery(storage.data(), storage.size(), config);
     CHECK(recovery.beginBoot(boot(1, 10)));
-    auto snap = recovery.snapshot();
-    CHECK(snap.wifi_quarantined);
+    const auto snap = recovery.snapshot();
+    CHECK(snap.consecutive_early_resets == 0);
+    CHECK(!snap.wifi_quarantined);
     CHECK(!snap.wifi_retry_active);
     CHECK(!snap.wifi_retry_token_available);
-    CHECK(!snap.wifi_start_allowed);
-    CHECK(snap.wifi_retry_attempts == 1);
-    CHECK(snap.wifi_retry_failures == 1);
-
-    CHECK(recovery.grantWifiRetryToken(200));
-    CHECK(recovery.consumeWifiRetryToken(201));
-    CHECK(recovery.completeWifiRetry(false, 202, 9));
-    CHECK(recovery.wifiQuarantined());
-    CHECK(!recovery.shouldStartWifi());
-    CHECK(recovery.snapshot().wifi_retry_failures == 2);
-
-    CHECK(recovery.grantWifiRetryToken(300));
-    CHECK(recovery.consumeWifiRetryToken(301));
-    CHECK(recovery.completeWifiRetry(true, 302));
-    snap = recovery.snapshot();
-    CHECK(!snap.wifi_quarantined);
     CHECK(snap.wifi_start_allowed);
-    CHECK(snap.wifi_retry_successes == 1);
-    CHECK(snap.consecutive_early_resets == 0);
   }
 }
 
@@ -336,7 +312,7 @@ void testEventRingIsBoundedAndOrdered() {
 
 int main() {
   testStorageContractAndStableBoot();
-  testEarlyResetQuarantineAndOneShotRetry();
+  testEarlyResetsRemainDiagnosticOnly();
   testFirmwareBuildAndSourceIdentityPolicy();
   testTornMetadataFallsBack();
   testTornRingEntryIsSkipped();

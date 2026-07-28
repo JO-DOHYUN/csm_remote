@@ -86,7 +86,7 @@ class RuntimeSupervisor {
                                std::size_t capacity) const {
     return recovery_.readRecentEvents(output, capacity);
   }
-  bool wifiQuarantined() const { return recovery_.wifiQuarantined(); }
+  bool wifiQuarantined() const { return false; }
 
  private:
   BootRecovery recovery_;
