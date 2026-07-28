@@ -1,0 +1,49 @@
+{
+  "macros": [
+    "CSM_PRODUCT_MBED_PROFILE=1"
+  ],
+  "target_overrides": {
+    "*": {
+      "target.printf_lib": "std",
+      "platform.stdio-buffered-serial": false,
+      "platform.stdio-baud-rate": 115200,
+      "platform.default-serial-baud-rate": 115200,
+      "platform.callback-nontrivial": true,
+      "platform.all-stats-enabled": false,
+      "platform.memory-tracing-enabled": false,
+      "rtos.main-thread-stack-size": 32768,
+      "cordio.max-connections": 5,
+      "cellular.debug-at": false,
+      "cellular.offload-dns-queries": true,
+      "cellular.at-handler-buffer-size": 512,
+      "mbed-trace.enable": false,
+      "target.mbed_app_start": "0x8040000",
+      "nsapi.dns-response-wait-time": 5000,
+      "nsapi.dns-total-attempts": 3,
+      "lwip.raw-socket-enabled": true,
+      "lwip.ipv4-enabled": true,
+      "lwip.ipv6-enabled": false,
+      "lwip.tcp-mss": 1460,
+      "lwip.tcp-snd-buf": "(8 * TCP_MSS)",
+      "lwip.tcp-wnd": "(4 * TCP_MSS)",
+      "lwip.memp-num-tcp-seg": 40,
+      "lwip.mem-size": 40960,
+      "lwip.pbuf-pool-size": 5,
+      "lwip.tcpip-thread-stacksize": 4096,
+      "lwip.socket-max": 4,
+      "lwip.tcp-socket-max": 4,
+      "lwip.tcp-server-max": 4,
+      "target.macros_add": [
+        "BT_UART_NO_3M_SUPPORT",
+        "USB_DYNAMIC_CONFIGURATION",
+        "METAL_INTERNAL",
+        "VIRTIO_DRIVER_ONLY",
+        "NO_ATOMIC_64_SUPPORT",
+        "METAL_MAX_DEVICE_REGIONS=2",
+        "RPMSG_BUFFER_SIZE=512",
+        "LSE_STARTUP_TIMEOUT=200",
+        "CSM_PRODUCT_MBED_PROFILE=1"
+      ]
+    }
+  }
+}

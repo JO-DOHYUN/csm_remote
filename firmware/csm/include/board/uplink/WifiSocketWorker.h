@@ -14,7 +14,7 @@
 #endif
 
 #ifndef BOARD_WIFI_TX_CHUNK_BYTES
-#define BOARD_WIFI_TX_CHUNK_BYTES 1024
+#define BOARD_WIFI_TX_CHUNK_BYTES 2920
 #endif
 
 #ifndef BOARD_WIFI_SOCKET_WORKER_STACK_BYTES
@@ -68,7 +68,8 @@ class WifiSocketWorker final {
   uint32_t nextWaitTimeoutMs(uint32_t now_ms) const;
   void noteWake(uint32_t flags, bool fallback);
   bool initializeNetwork();
-  void rollbackNetwork();
+  bool rollbackNetwork();
+  void quarantineStartupFailure(nsapi_error_t error);
   void serviceRequests();
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);

@@ -1,0 +1,17 @@
+diff --git a/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/CMakeLists.txt b/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/CMakeLists.txt
+--- a/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/CMakeLists.txt
++++ b/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/CMakeLists.txt
+@@ -25,9 +25,10 @@ target_include_directories(mbed-portenta-whd
+ 
+ target_sources(mbed-portenta-whd
+     INTERFACE
+-        port/cyhal.c
+-        port/cyhalgpio.cpp
+-        port/cyhalsdio.c
++        port/cy_hal.c
++        port/cyhal_gpio.cpp
++        port/cyhal_sdio.c
++        port/cyhal_spi.c
+         port/wiced_filesystem.cpp 
+         interface/cyabs_rtos_rtxv5.c
+ )

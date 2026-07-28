@@ -662,7 +662,7 @@ void drivePayloadMatchesVehicleBenchGoldenFrames() {
   control::VehicleCommandProfile profile;
   profile.configured = true;
   profile.output_enabled = true;
-  profile.mapping = control::VehicleCommandMapping::VehicleBench0x005And0x007;
+  profile.mapping = control::VehicleCommandMapping::Vehicle0x005And0x007;
   profile.bus = 1;
   profile.policy_id = 0x5243;
   profile.throttle_limit_permille = 1000;

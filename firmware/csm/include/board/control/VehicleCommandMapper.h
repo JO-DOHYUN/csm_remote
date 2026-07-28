@@ -27,7 +27,9 @@ static constexpr uint8_t kRemoteAuxiliaryPositive = 0x80;
 
 enum class VehicleCommandMapping : uint8_t {
   None = 0,
-  VehicleBench0x005And0x007 = 1,
+  Vehicle0x005And0x007 = 1,
+  // Wire-compatible legacy spelling retained for qualified bench artifacts.
+  VehicleBench0x005And0x007 = Vehicle0x005And0x007,
 };
 
 struct VehicleCommandProfile {

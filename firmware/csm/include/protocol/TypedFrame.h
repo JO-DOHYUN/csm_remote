@@ -35,6 +35,12 @@ enum class RecordType : uint8_t {
   RemoteControlState = 18,
   RuntimeDiagnostic = 19,
   TransportDiagnostic = 20,
+  // Required Product HMI Link cumulative durable receive ACK. This transport
+  // control-plane record is valid in observer products and grants no motion
+  // authority.
+  AppRxCommitAck = 21,
+  // Release-retained conservation evidence for the Required Product HMI Link.
+  LinkReliabilityDiagnostic = 22,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);
@@ -45,6 +51,7 @@ void wr_i64_le(uint8_t* p, int64_t v);
 
 uint16_t rd_u16_le(const uint8_t* p);
 uint32_t rd_u32_le(const uint8_t* p);
+uint64_t rd_u64_le(const uint8_t* p);
 
 uint16_t crc16_ccitt(const uint8_t* data, size_t len);
 uint64_t mono64_us();

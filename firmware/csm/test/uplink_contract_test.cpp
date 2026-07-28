@@ -34,7 +34,10 @@ class TestWifiWorkerMailbox final
       public csm::board::uplink::WifiWorkerMailbox {
  public:
   TestWifiWorkerMailbox()
-      : csm::board::uplink::WifiWorkerMailbox(storage) {}
+      : csm::board::uplink::WifiWorkerMailbox(storage) {
+    configureReliableSession(1);
+    activateReliableSession();
+  }
 };
 
 #define CHECK(condition)                                                       \
@@ -452,6 +455,7 @@ void wifi_mailbox_abort_invalidates_staged_generation() {
   CHECK(mailbox.queueSnapshot().queued_bytes == 0);
   CHECK(mailbox.queueSnapshot().queued_records == 0);
 
+  mailbox.activateReliableSession();
   CHECK(mailbox.tryOffer(frame, 20) == WifiMailboxOfferResult::Accepted);
   CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
   CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));

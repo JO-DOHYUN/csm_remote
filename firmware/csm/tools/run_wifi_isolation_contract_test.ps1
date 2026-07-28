@@ -17,6 +17,8 @@ $output = Join-Path $outputDir "wifi_isolation_contract_test.exe"
 $include = Join-Path $project "include"
 $sources = @(
   (Join-Path $project "test\wifi_isolation_contract_test.cpp"),
+  (Join-Path $project "src\protocol\TypedFrame.cpp"),
+  (Join-Path $project "src\board\uplink\ProductDownlinkRouter.cpp"),
   (Join-Path $project "src\board\uplink\WifiWorkerMailbox.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '

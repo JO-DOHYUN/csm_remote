@@ -102,7 +102,7 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   gateway.build_profile_allows_local_tx = config.local_can_tx_enabled;
   gateway.bus = config.bus;
   gateway.policy_id = config.policy_id;
-  if (config.mapping == VehicleCommandMapping::VehicleBench0x005And0x007) {
+  if (config.mapping == VehicleCommandMapping::Vehicle0x005And0x007) {
     gateway.allowlist_count = 2;
     gateway.allowlist_ids[0] = kRemoteDriveCanId;
     gateway.allowlist_ids[1] = kRemoteSteeringCanId;

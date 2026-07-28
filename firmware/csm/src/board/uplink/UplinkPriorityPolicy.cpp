@@ -19,6 +19,7 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
       return UplinkPriority::Normal;
     case csm::RecordType::RuntimeDiagnostic:
     case csm::RecordType::TransportDiagnostic:
+    case csm::RecordType::LinkReliabilityDiagnostic:
       return UplinkPriority::Diagnostic;
     default:
       return UplinkPriority::Normal;
@@ -47,6 +48,7 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
     case 49:  // FEEDER_TRANSPORT_ERROR
     case 50:  // FEEDER_SOURCE_FAULT
     case 51:  // FEEDER_LINK_STALE
+    case 52:  // DATA_LINK_INTEGRITY_FAULT
       return UplinkPriority::Critical;
     case 24:  // SERIAL_TX_BACKPRESSURE
     case 9:   // MCP2515_ERROR

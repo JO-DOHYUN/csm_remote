@@ -445,3 +445,37 @@
   measured D2 linker budget and passes idle/nominal/2,000 fps, or qualify an
   external transport. A framework experiment is not promoted unless its
   binary/source identity and the full product stream are recorded together.
+
+## D-028 Promote a bounded retained journal and pinned D3 network profile
+
+- Date: 2026-07-28
+- Status: Architecture, code, offline builds and contracts passed; physical
+  upload/HIL gates remain open.
+- Decision: preserve one canonical publication and independent USB/Wi-Fi
+  sinks, but replace Wi-Fi send-and-discard storage with a 1,024-descriptor,
+  65,520-byte retained SPSC journal. Socket progress advances only the send
+  cursor. Record `21 APP_RX_COMMIT_ACK`, issued only after Android durable
+  ordered capture, advances the reclaim cursor. Disconnect rewinds unacked
+  records.
+- Failure boundary: the journal never overwrites. First admission failure
+  fixes `first_not_admitted_publish_seq`, latches integrity loss, emits
+  `BOARD_EVENT 52`, and isolates the epoch. Record `22
+  LINK_RELIABILITY_DIAGNOSTIC` makes the offered/admitted/sent/reclaimed/
+  retained conservation equation and ACK/replay state visible.
+- Network profile: pin ArduinoCore-mbed `6816d442...`, Mbed OS
+  `17dc3dc2...`, and deterministic archive SHA-256
+  `032494298FC6CAFAAD23277B8CBEB01F1BA75CA7F72CCD90383A850EE561FD70`.
+  Use MSS 1460, send buffer 11,680 B, receive window 5,840 B, 40 TCP segments,
+  40,960 B lwIP heap, 4,096 B TCP/IP stack, and WHD TX `PBUF_RAM`.
+- Memory decision: move only the pinned lwIP heap to a link-checked D3
+  envelope and install a non-cacheable/shareable MPU override before Wi-Fi.
+  Keep network DMA sections in the M7-only D2 tail and the journal in DTCM.
+  Limit this linker/archive overlay to the feeder product environment so
+  legacy/diagnostic builds retain their standard memory map.
+- Calculation: 2,000 fps product load is 57,735 B/s. The 63,408 B normal
+  journal covers the approved 1.02 s outage (58,890 B). 4,000 fps remains an
+  explicit transport gate at 102,172 B/s.
+- Evidence: product M7, legacy MCP M7, M4 and RP2040 feeder builds pass; 11
+  native contracts plus Wi-Fi/RC/control guards and the product envelope pass.
+  Hardware upload, AP throughput, Android ACK/replay, simultaneous
+  RC+dual-CAN+USB+Wi-Fi and soak were not run in this decision.

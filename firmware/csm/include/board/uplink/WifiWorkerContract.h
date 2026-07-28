@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #ifndef BOARD_WIFI_STALL_TIMEOUT_MS
-#define BOARD_WIFI_STALL_TIMEOUT_MS 5000
+#define BOARD_WIFI_STALL_TIMEOUT_MS 500
 #endif
 
 #ifndef BOARD_WIFI_CALL_STALL_TIMEOUT_MS
@@ -11,19 +11,19 @@
 #endif
 
 #ifndef BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS
-#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 75
+#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 20
 #endif
 
 #ifndef BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS
-#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 10
+#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 2
 #endif
 
 #ifndef BOARD_WIFI_TX_BATCH_TARGET_BYTES
-#define BOARD_WIFI_TX_BATCH_TARGET_BYTES 1024
+#define BOARD_WIFI_TX_BATCH_TARGET_BYTES 1460
 #endif
 
 #ifndef BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US
-#define BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US 1000
+#define BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US 2000
 #endif
 
 #ifndef BOARD_WIFI_TX_MAX_WRITES_PER_PUMP
@@ -31,11 +31,11 @@
 #endif
 
 #ifndef BOARD_WIFI_TX_MAX_BYTES_PER_PUMP
-#define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 4096
+#define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 11680
 #endif
 
 #ifndef BOARD_WIFI_CONNECTED_FALLBACK_MS
-#define BOARD_WIFI_CONNECTED_FALLBACK_MS 10
+#define BOARD_WIFI_CONNECTED_FALLBACK_MS 5
 #endif
 
 #ifndef BOARD_WIFI_STATE_PUBLISH_PERIOD_MS
@@ -120,6 +120,23 @@ constexpr bool wifiStartupAttemptsExhausted(uint32_t attempts,
   return attempt_limit != 0 && attempts >= attempt_limit;
 }
 
+enum class WifiStartupFailureBoundary : uint8_t {
+  BeforeApStart = 0,
+  OpaqueApStart = 1,
+  AfterApStarted = 2,
+};
+
+// WhdSoftAPInterface::start() does not expose which internal resources were
+// acquired before an error and its stop() is not safe at every partial stage.
+// Retry is therefore permitted only before that opaque call, or after a
+// successful start when reverse-order cleanup was positively confirmed.
+constexpr bool wifiStartupRetryAllowed(
+    WifiStartupFailureBoundary boundary, bool cleanup_confirmed) {
+  return boundary == WifiStartupFailureBoundary::BeforeApStart ||
+      (boundary == WifiStartupFailureBoundary::AfterApStarted &&
+       cleanup_confirmed);
+}
+
 // A facade may sample now_ms just before the worker publishes a newer
 // timestamp. Treat that small future observation as age zero; unsigned
 // subtraction would otherwise look like a multi-week stall. Signed modular
@@ -148,6 +165,7 @@ struct WifiTcpSinkConfig {
   uint16_t port = 3333;
   uint8_t channel = 6;
   uint8_t ip[4] = {192, 168, 4, 1};
+  uint64_t boot_session_id = 0;
   bool ap_sta_concur = BOARD_WIFI_AP_STA_CONCUR != 0;
   uint32_t drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
   uint32_t max_writes_per_pump = 0;
@@ -338,6 +356,7 @@ struct WifiWorkerCounters {
   uint32_t server_start_total = 0;
   uint32_t server_start_fail_total = 0;
   uint32_t bytes_sent_total = 0;
+  uint64_t socket_sent_bytes_total = 0;
   uint32_t frame_sent_total = 0;
   uint32_t write_attempt_total = 0;
   uint32_t send_request_bytes_total = 0;
@@ -373,6 +392,11 @@ struct WifiWorkerCounters {
   uint32_t bytes_per_wake_max = 0;
   uint32_t writes_per_wake_max = 0;
   uint64_t last_sent_publish_seq = 0;
+  uint64_t last_acked_publish_seq = 0;
+  uint64_t ack_reclaimed_bytes_total = 0;
+  uint32_t app_ack_accepted_total = 0;
+  uint32_t app_ack_rejected_total = 0;
+  uint32_t replay_rewind_total = 0;
 };
 
 struct WifiWorkerStateSnapshot {
@@ -386,6 +410,10 @@ struct WifiWorkerStateSnapshot {
   bool network_ready = false;
   bool connected = false;
   bool backpressure_active = false;
+  bool reliable_session_active = false;
+  bool reliable_ack_valid = false;
+  bool reliable_integrity_fault = false;
+  bool reliable_replay_active = false;
   uint32_t backpressure_duration_ms = 0;
   uint32_t stall_event_sequence = 0;
   uint32_t stall_event_duration_ms = 0;
@@ -393,6 +421,13 @@ struct WifiWorkerStateSnapshot {
   uint32_t stack_free_bytes = 0;
   uint32_t stack_max_used_bytes = 0;
   int32_t last_network_error = 0;
+  uint32_t journal_retained_bytes = 0;
+  uint32_t journal_unsent_bytes = 0;
+  uint32_t journal_high_water_bytes = 0;
+  uint32_t journal_retained_records = 0;
+  uint32_t journal_unsent_records = 0;
+  uint32_t journal_high_water_records = 0;
+  uint64_t boot_session_id = 0;
   WifiCloseReason last_close_reason = WifiCloseReason::None;
   WifiWorkerCounters counters;
 };

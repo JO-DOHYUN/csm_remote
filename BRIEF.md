@@ -1,6 +1,39 @@
 # BRIEF
 
-Updated: 2026-07-27
+Updated: 2026-07-28
+
+## 2026-07-28 retained Wi-Fi product candidate
+
+- The product Wi-Fi sink is now a nonblocking retained journal rather than a
+  send-and-discard queue. `CanonicalPublisher` still encodes once; USB consumes
+  independently, while Wi-Fi keeps 1,024 descriptors plus 65,520 encoded bytes
+  until Android confirms a durable contiguous commit.
+- Downlink record `21 APP_RX_COMMIT_ACK` carries
+  `{boot_session_id u64, last_contiguous_publish_seq u64}`. A positive socket
+  send advances only the send cursor. Only a valid application ACK reclaims
+  storage; disconnect rewinds every unacknowledged record for replay.
+- Uplink record `22 LINK_RELIABILITY_DIAGNOSTIC` exposes offered, admitted,
+  socket-sent, ACK-reclaimed, retained/unsent/high-water, first-not-admitted,
+  ACK reject, rewind, epoch, and close evidence. The first admission failure
+  latches integrity loss, emits `BOARD_EVENT 52`, and isolates the epoch; the
+  journal never overwrites old truth.
+- The reproducible product Mbed archive is pinned to ArduinoCore-mbed
+  `6816d442...` and Mbed OS `17dc3dc2...`, SHA-256
+  `032494298FC6CAFAAD23277B8CBEB01F1BA75CA7F72CCD90383A850EE561FD70`.
+  lwIP uses MSS 1460, send buffer 11,680 B, window 5,840 B, 40 segments,
+  40,960 B heap, and a 4,096 B TCP/IP stack. WHD TX uses `PBUF_RAM`.
+- The lwIP heap is link-checked in the dedicated D3 range
+  `0x38000400..0x3800A7FF`; M7 installs a non-cacheable/shareable MPU override
+  before Wi-Fi starts. Product-only linker checks do not affect legacy/bench
+  builds.
+- Calculated 2,000 fps load is 57,735 B/s. A 1.02 s outage requires 58,890 B,
+  within the 63,408 B normal journal envelope. The 4,000 fps row remains a
+  transport gate at 102,172 B/s.
+- Offline closure passed: product M7 and legacy MCP builds, M4 remote frontend,
+  RP2040 feeder, all 11 native contracts, architecture/control guards, and the
+  product envelope. Current product M7 is 169,632 B D1 RAM and 364,856 B flash;
+  Wi-Fi journal storage is 90,096 B DTCM. Hardware upload and AP/Android/HIL
+  gates were intentionally not run while the owner disconnected components.
 
 ## 2026-07-27 CSM data-plane correction and final gate
 

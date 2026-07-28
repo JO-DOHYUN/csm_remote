@@ -1,0 +1,20 @@
+diff --git a/connectivity/lwipstack/lwip-sys/arch/lwip_sys_arch.c b/connectivity/lwipstack/lwip-sys/arch/lwip_sys_arch.c
+--- a/connectivity/lwipstack/lwip-sys/arch/lwip_sys_arch.c
++++ b/connectivity/lwipstack/lwip-sys/arch/lwip_sys_arch.c
+@@ -68,7 +68,15 @@ struct mem {
+ #if defined (__ICCARM__)
+ #pragma location = ".ethusbram"
+ #endif
+-LWIP_DECLARE_MEMORY_ALIGNED(lwip_ram_heap, MEM_SIZE_ALIGNED + (2U*SIZEOF_STRUCT_MEM)) ETHMEM_SECTION;
++#if defined(CSM_PRODUCT_MBED_PROFILE) && defined(__GNUC__)
++#define CSM_LWIP_HEAP_SECTION \
++    __attribute__((section(".csm_lwip_heap_d3")))
++#else
++#define CSM_LWIP_HEAP_SECTION ETHMEM_SECTION
++#endif
++LWIP_DECLARE_MEMORY_ALIGNED(lwip_ram_heap,
++                            MEM_SIZE_ALIGNED + (2U*SIZEOF_STRUCT_MEM))
++    CSM_LWIP_HEAP_SECTION;
+ 
+  #if NO_SYS==1
+ #include "cmsis.h"

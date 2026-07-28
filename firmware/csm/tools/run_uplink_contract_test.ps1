@@ -22,6 +22,7 @@ $sources = @(
   (Join-Path $project "src\board\uplink\CanRxSegmentBuilder.cpp"),
   (Join-Path $project "src\board\uplink\RecordAdmission.cpp")
   (Join-Path $project "src\board\uplink\UplinkPriorityPolicy.cpp")
+  (Join-Path $project "src\board\uplink\ProductDownlinkRouter.cpp"),
   (Join-Path $project "src\board\uplink\WifiWorkerMailbox.cpp"),
   (Join-Path $project "src\board\uplink\WifiTransportDiagnostic.cpp")
 )

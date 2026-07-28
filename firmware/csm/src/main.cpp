@@ -21,6 +21,7 @@
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
 #include "board/feeder/FeederUartIngress.h"
+#include "board/memory/ProductMemoryProfile.h"
 #include "board/uplink/CanRxQueueOrder.h"
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/CanonicalPublisher.h"
@@ -398,6 +399,10 @@
 #define BOARD_ENABLE_MDPS_BENCH_MAPPING 0
 #endif
 
+#ifndef BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING
+#define BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING 0
+#endif
+
 #ifndef BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH
 #define BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH 0
 #endif
@@ -406,7 +411,9 @@
 // Product/local CAN TX is advertised only when an explicit vehicle mapping is
 // selected and the diagnostic safety interlock has not suppressed output.
 #define BOARD_REMOTE_LOCAL_CAN_TX_ENABLED \
-  (BOARD_ENABLE_REMOTE_CONTROL && BOARD_ENABLE_MDPS_BENCH_MAPPING && \
+  (BOARD_ENABLE_REMOTE_CONTROL && \
+   (BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
+    BOARD_ENABLE_MDPS_BENCH_MAPPING) && \
    !BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX)
 
 #ifndef BOARD_RUNTIME_DIAGNOSTIC_PERIOD_MS
@@ -415,6 +422,10 @@
 
 #ifndef BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS
 #define BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS 1000
+#endif
+
+#ifndef BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
+#define BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS 0
 #endif
 
 #ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
@@ -496,6 +507,7 @@
 #if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
     (!BOARD_CSM_PROFILE_REMOTE_PRODUCT || !BOARD_ENABLE_REMOTE_CONTROL || \
      !BOARD_ENABLE_REMOTE_AUTHORITY || !BOARD_ENABLE_MDPS_BENCH_MAPPING || \
+     BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
      (!BOARD_ENABLE_FEEDER_UART && \
       (!BOARD_ENABLE_MCP2515 || !BOARD_ENABLE_MCP2515_INIT)) || \
      (BOARD_ENABLE_MCP2515 && BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT) || \
@@ -507,6 +519,18 @@
 
 #ifndef BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
 #define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#endif
+
+#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING && \
+    (!BOARD_CSM_PROFILE_REMOTE_PRODUCT || BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || \
+     !BOARD_ENABLE_REMOTE_CONTROL || !BOARD_ENABLE_REMOTE_AUTHORITY || \
+     !BOARD_HW_PROFILE_MID_FEEDER_UART || !BOARD_ENABLE_FEEDER_UART || \
+     BOARD_ENABLE_MDPS_BENCH_MAPPING || BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS || \
+     BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_HOST_DOWNLINK || \
+     BOARD_ENABLE_MCP2515 || BOARD_ENABLE_MCP2515_INIT || \
+     !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED)
+#error "Product vehicle command mapping violates the feeder/J4 RC contract"
 #endif
 
 #ifndef BOARD_ENABLE_VOLTAGE_ADC
@@ -759,6 +783,8 @@ enum BoardEventCode : uint16_t {
   EventFeederTransportError = csm::kBoardEventFeederTransportErrorCode,
   EventFeederSourceFault = csm::kBoardEventFeederSourceFaultCode,
   EventFeederLinkStale = csm::kBoardEventFeederLinkStaleCode,
+  EventDataLinkIntegrityFault =
+      csm::kBoardEventDataLinkIntegrityFaultCode,
 };
 
 enum RuntimeBreadcrumbStage : uint8_t {
@@ -903,7 +929,7 @@ static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
               "diagnostic uplink queue must retain bounded low-value telemetry");
 static UsbCdcSink usb_cdc_sink;
 #if BOARD_ENABLE_WIFI_UPLINK
-static_assert(sizeof(WifiTcpSink::TxStorage) == 86000,
+static_assert(sizeof(WifiTcpSink::TxStorage) == 90096,
               "product Wi-Fi DTCM queue storage contract changed");
 __attribute__((section(".wifi_tx_queue_dtcm"), aligned(32), used))
 static WifiTcpSink::TxStorage wifi_tx_storage;
@@ -1693,6 +1719,7 @@ static bool pending_wifi_close_event = false;
 static uint8_t pending_wifi_close_reason = 0;
 static uint32_t pending_wifi_disconnect_total = 0;
 static uint32_t observed_wifi_disconnect_total = 0;
+static uint32_t observed_wifi_journal_full_total = 0;
 static void emit_capability();
 
 static void request_connection_session(bool usb_epoch_changed) {
@@ -1790,6 +1817,16 @@ static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_
   if (wifi_result.queue_pressure_event) {
     emit_board_event(EventWifiQueuePressureIsolated, 0,
                      wifi_tcp_sink.counters().queue_pressure_close_total);
+  }
+  const auto& wifi_counters = wifi_tcp_sink.counters();
+  if (wifi_counters.journal_full_total !=
+      observed_wifi_journal_full_total) {
+    observed_wifi_journal_full_total = wifi_counters.journal_full_total;
+    emit_board_event(
+        EventDataLinkIntegrityFault,
+        static_cast<uint16_t>(
+            wifi_counters.first_not_admitted_publish_seq & 0xFFFFu),
+        wifi_counters.journal_full_total);
   }
   const uint32_t wifi_disconnect_total =
       wifi_tcp_sink.counters().disconnect_total;
@@ -1896,7 +1933,8 @@ static bool should_suppress_low_value_record(RecordType type, UplinkPriority pri
     return false;
   }
 #if BOARD_ENABLE_WIFI_UPLINK
-  if (type == RecordType::TransportDiagnostic) {
+  if (type == RecordType::TransportDiagnostic ||
+      type == RecordType::LinkReliabilityDiagnostic) {
     // This 1 Hz record is the evidence that distinguishes producer, queue,
     // socket, and peer loss. Keep it subject to the bounded diagnostic
     // admission lane, but do not hide it merely because a sink has backlog.
@@ -1928,6 +1966,18 @@ static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
 
 #if BOARD_ENABLE_WIFI_UPLINK
 static void emit_wifi_transport_diagnostic(uint32_t now_ms) {
+  uint8_t reliability_payload[csm::kLinkReliabilityDiagnosticPayloadLen] = {};
+  const auto reliability =
+      wifi_tcp_sink.reliabilityDiagnosticSnapshot(mono64_us());
+  const uint16_t reliability_length =
+      csm::board::uplink::build_link_reliability_diagnostic_payload(
+          reliability, reliability_payload, sizeof(reliability_payload));
+  if (reliability_length == sizeof(reliability_payload)) {
+    emit_record(RecordType::LinkReliabilityDiagnostic,
+                reliability_payload, reliability_length,
+                UplinkPriority::Diagnostic);
+  }
+#if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
   uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
   const auto snapshot =
       wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
@@ -1938,6 +1988,9 @@ static void emit_wifi_transport_diagnostic(uint32_t now_ms) {
     emit_record(RecordType::TransportDiagnostic, payload, length,
                 UplinkPriority::Diagnostic);
   }
+#else
+  (void)now_ms;
+#endif
 }
 #endif
 
@@ -2617,7 +2670,12 @@ static void emit_capability() {
 #endif
 #if BOARD_ENABLE_WIFI_UPLINK
   config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(
+          RecordType::LinkReliabilityDiagnostic));
+#if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
+  config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::TransportDiagnostic));
+#endif
 #endif
 #if BOARD_ENABLE_ENCODER_IO
   config.supported_uplink_records |=
@@ -2642,6 +2700,10 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::HostClearFaultLockout));
 #else
   config.supported_downlink_records = 0;
+#endif
+#if BOARD_ENABLE_WIFI_UPLINK
+  config.supported_downlink_records |=
+      (1u << static_cast<uint8_t>(RecordType::AppRxCommitAck));
 #endif
   config.safety_feature_flags = 0x0000000Fu;
   config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY ? 32 : 0;
@@ -4258,7 +4320,14 @@ static void service_remote_control() {
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
       (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
   inputs.host_service_active = safety_supervisor.leaseAlive(now_ms);
-#if BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING
+  // This product profile owns the feeder/J4 RC path and intentionally has no
+  // upstream autonomy runtime. The compile-time profile contract is the
+  // positive evidence that releases the otherwise fail-closed authority input.
+  inputs.local_tx_inhibit_latched = false;
+  inputs.autonomy_state =
+      csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
+#elif BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
   // This isolated bench has no upstream autonomy runtime. Only its explicit
   // build profile may positively release the otherwise fail-closed boundary.
   inputs.local_tx_inhibit_latched = false;
@@ -5697,6 +5766,8 @@ static void service_encoder() {
 }
 
 void setup() {
+  const bool product_memory_profile_ok =
+      csm::board::memory::configureProductMemoryProfile();
   // Capture what the current Arduino/bootloader layer still exposes before
   // any risky peripheral starts. Exact reset-latch preservation below the
   // bootloader remains a separate hardware/boot-chain gate.
@@ -5773,17 +5844,26 @@ void setup() {
   usb_sink_config.max_bytes_per_pump = BOARD_SERIAL_TX_MAX_BYTES_PER_PUMP;
   usb_cdc_sink.begin(usb_sink_config);
   record_boot_progress(csm::board::diagnostics::BootProgress::UsbSinkReady);
+  const uint64_t boot_session_id =
+      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 33) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 2) ^
+      static_cast<uint64_t>(static_cast<uint32_t>(random(4)));
 #if BOARD_ENABLE_WIFI_UPLINK
   csm::board::uplink::WifiTcpSinkConfig wifi_sink_config;
   requested_wifi_runtime_mode =
       to_wifi_runtime_mode(runtime_decision.requested_wifi_mode);
   effective_wifi_runtime_mode =
       to_wifi_runtime_mode(runtime_decision.effective_wifi_mode);
+  if (!product_memory_profile_ok) {
+    effective_wifi_runtime_mode =
+        csm::board::uplink::WifiRuntimeMode::Disabled;
+  }
   wifi_sink_config.runtime_mode = effective_wifi_runtime_mode;
   wifi_sink_config.ap_ssid = BOARD_WIFI_AP_SSID;
   wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
   wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
   wifi_sink_config.channel = BOARD_WIFI_AP_CHANNEL;
+  wifi_sink_config.boot_session_id = boot_session_id;
   wifi_sink_config.drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
   wifi_sink_config.max_writes_per_pump = BOARD_WIFI_TX_MAX_WRITES_PER_PUMP;
   wifi_sink_config.max_bytes_per_pump = BOARD_WIFI_TX_MAX_BYTES_PER_PUMP;
@@ -5807,10 +5887,6 @@ void setup() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootWifiReady);
 #endif
-  const uint64_t boot_session_id =
-      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 33) ^
-      (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 2) ^
-      static_cast<uint64_t>(static_cast<uint32_t>(random(4)));
 #if BOARD_ENABLE_WIFI_UPLINK
   canonical_publisher.begin(boot_session_id, &usb_cdc_sink, &wifi_tcp_sink);
 #else
@@ -5818,6 +5894,9 @@ void setup() {
 #endif
   record_boot_progress(
       csm::board::diagnostics::BootProgress::CanonicalPublisherReady);
+  if (!product_memory_profile_ok) {
+    emit_board_event(EventDataLinkIntegrityFault, 0x4D50u, 1u);
+  }
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootPublisherReady);
 #endif
@@ -5926,10 +6005,9 @@ void setup() {
   csm::board::control::RemoteControlRuntimeConfig remote_config;
   remote_config.configured = true;
   remote_config.local_can_tx_enabled =
-      (BOARD_ENABLE_MDPS_BENCH_MAPPING != 0) &&
-      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
-  remote_config.mapping = BOARD_ENABLE_MDPS_BENCH_MAPPING
-      ? csm::board::control::VehicleCommandMapping::VehicleBench0x005And0x007
+      BOARD_REMOTE_LOCAL_CAN_TX_ENABLED != 0;
+  remote_config.mapping = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
+      ? csm::board::control::VehicleCommandMapping::Vehicle0x005And0x007
       : csm::board::control::VehicleCommandMapping::None;
   remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
   remote_config.policy_id = 0x5243u;

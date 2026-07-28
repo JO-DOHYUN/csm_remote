@@ -18,8 +18,13 @@ __csm_m4_d2_physical_end__ = 0x30040000;
 __csm_m7_network_d2_start__ = 0x30040000;
 __csm_m7_network_d2_end__ = 0x30048000;
 
-__OPENAMP_region_start__ = 0x38000400;
-__OPENAMP_region_end__ = 0x38000400 + LENGTH(RAM_D3) - 1K;
+/*
+ * Product M7 excludes RPC/OpenAMP. Keep the framework compatibility symbols
+ * as an empty range after the dedicated lwIP heap; map guards reject any
+ * OpenAMP allocation.
+ */
+__OPENAMP_region_start__ = 0x3800A800;
+__OPENAMP_region_end__ = 0x3800A800;
 ENTRY(Reset_Handler)
 
 SECTIONS
@@ -111,6 +116,20 @@ SECTIONS
         _ebss = .;
     } > RAM
 
+    /*
+     * Pinned lwIP heap. The patched Mbed archive places lwip_ram_heap in the
+     * dedicated input section instead of D2 .ethusbram. The fixed envelope
+     * makes a profile/config drift fail at link time.
+     */
+    .csm_lwip_heap_d3 0x38000400 (NOLOAD):
+    {
+        __csm_lwip_heap_start__ = .;
+        KEEP(*(.csm_lwip_heap_d3))
+        __csm_lwip_heap_object_end__ = .;
+        . = ABSOLUTE(0x3800A800);
+        __csm_lwip_heap_end__ = .;
+    } > RAM_D3
+
     .pdm_section 0x3800FC00 (NOLOAD):
     {
         *(.pdm_buffer)
@@ -187,8 +206,8 @@ SECTIONS
 
     ASSERT(__csm_dtcm_bss_end__ <= ORIGIN(DTCMRAM) + LENGTH(DTCMRAM),
            "CSM DTCM arena overflow")
-    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x14FF0,
-           "Wi-Fi queue storage size drift")
+    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x15FF0,
+           "Wi-Fi reliable journal storage size drift")
     ASSERT(__wifi_tx_queue_end__ <=
                ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - 0x8000,
            "Wi-Fi queue consumed DTCM safety reserve")
@@ -196,4 +215,12 @@ SECTIONS
            "M7 network section overlaps M4-owned D2")
     ASSERT(__csm_lwip_actual_end__ <= __csm_m7_network_d2_end__,
            "M7 network section exceeds reserved D2 window")
+    ASSERT(__csm_lwip_heap_object_end__ <= __csm_lwip_heap_end__,
+           "lwIP heap exceeds fixed D3 envelope")
+    ASSERT(__csm_lwip_heap_object_end__ - __csm_lwip_heap_start__ == 0xA013,
+           "pinned lwIP heap object missing or wrong size")
+    ASSERT(SIZEOF(.csm_lwip_heap_d3) == 0xA400,
+           "lwIP D3 heap envelope size drift")
+    ASSERT(__OPENAMP_region_start__ == __OPENAMP_region_end__,
+           "OpenAMP must remain excluded from the M7 product image")
 }

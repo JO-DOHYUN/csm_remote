@@ -73,32 +73,32 @@ def calculate() -> dict:
     ap_sta_concur = macro(worker, "BOARD_WIFI_AP_STA_CONCUR")
     can_queue = macro(main, "BOARD_CAN_QUEUE_SIZE")
 
-    require(queue_records == 1280, "product Wi-Fi descriptor envelope drift")
+    require(queue_records == 1024, "product Wi-Fi descriptor envelope drift")
     require(queue_bytes == 65520, "product Wi-Fi byte envelope drift")
     require(reserve_records == 4, "critical descriptor reserve drift")
     require(reserve_bytes == 2112, "critical byte reserve drift")
-    require(stall_ms == 5000, "no-progress timeout drift")
+    require(stall_ms == 500, "no-progress timeout drift")
     require(high_water_percent == 96, "pre-full isolation threshold drift")
-    require(batch_bytes == 1024, "TCP batch target drift")
-    require(tx_chunk_bytes == 1024, "TCP write chunk drift")
-    require(drain_budget_us == 1000, "nonblocking worker pump budget drift")
+    require(batch_bytes == 1460, "TCP batch target drift")
+    require(tx_chunk_bytes == 2920, "TCP write chunk drift")
+    require(drain_budget_us == 2000, "nonblocking worker pump budget drift")
     require(call_stall_ms == 250, "socket call-stall boundary drift")
     require(startup_attempt_limit == 0, "product AP retry policy drift")
     require(startup_retry_ms == 2000, "product AP retry interval drift")
     require(ap_sta_concur == 1, "validated WHD compatibility mode drift")
     require(can_queue == 512, "per-bus CAN ingest envelope drift")
     for token in (
-        "BOARD_WIFI_SINK_QUEUE_RECORDS=1280",
+        "BOARD_WIFI_SINK_QUEUE_RECORDS=1024",
         "BOARD_WIFI_SINK_QUEUE_BYTES=65520",
         "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-        "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
+        "BOARD_WIFI_STALL_TIMEOUT_MS=500",
         "BOARD_WIFI_AP_STA_CONCUR=1",
     ):
         require(token in platformio, f"product environment missing {token}")
     for token in (
         ".wifi_tx_queue_dtcm (NOLOAD)",
         ".csm_dtcm_bss (NOLOAD)",
-        "0x14FF0",
+        "0x15FF0",
         "LENGTH(DTCMRAM) - 0x8000",
     ):
         require(token in linker, f"linker ownership guard missing {token}")
@@ -152,11 +152,11 @@ def calculate() -> dict:
     measured_raw_high = 69413
     normal_bytes = queue_bytes - reserve_bytes
     normal_records = queue_records - reserve_records
-    target_rate = 100_000 / 8
-    target_stall_seconds = 5
-    target_stall_bytes = int(target_rate * target_stall_seconds)
+    target_rate = compact_total
+    target_stall_seconds = 1.02
+    target_stall_bytes = math.ceil(target_rate * target_stall_seconds)
     high_water_bytes = math.ceil(queue_bytes * high_water_percent / 100)
-    descriptor_bytes = queue_records * 16
+    descriptor_bytes = queue_records * 24
     dtcm_storage = descriptor_bytes + queue_bytes
     dtcm_usable = 130408
     dtcm_alignment = 32
@@ -170,8 +170,11 @@ def calculate() -> dict:
     require(legacy_rx == 65762, "legacy wire calculation regression")
     require(compact_rx == 44437, "compact wire calculation regression")
     require(compact_total == 57735, "product wire calculation regression")
-    require(dtcm_storage == 86000, "DTCM queue calculation regression")
-    require(normal_bytes >= target_stall_bytes, "5-second byte envelope fails")
+    require(dtcm_storage == 90096, "DTCM journal calculation regression")
+    require(
+        normal_bytes >= target_stall_bytes,
+        "1.02-second product retention envelope fails",
+    )
     require(high_water_bytes < normal_bytes, "high-water no longer precedes reserve")
     require(dtcm_max_remaining >= 32768, "DTCM safety reserve violated")
 
@@ -250,7 +253,7 @@ def calculate() -> dict:
             < measured_raw_low,
             "compact_4000fps_fits_measured_raw_high": compact_total_4000
             < measured_raw_high,
-            "five_second_100kbps_queue_fits": normal_bytes
+            "product_1_02_second_journal_fits": normal_bytes
             >= target_stall_bytes,
             "pre_full_isolation_precedes_reserve": high_water_bytes
             < normal_bytes,
@@ -284,10 +287,10 @@ def markdown(report: dict) -> str:
             "PASS" if gates["compact_4000fps_fits_measured_raw_high"] else "GATE",
         ),
         (
-            "100kbps x 5s / normal queue",
+            "57,735 B/s x 1.02s / normal journal",
             f"{stall['required_bytes']:,} / "
             f"{stall['normal_admission_bytes']:,} B",
-            "PASS" if gates["five_second_100kbps_queue_fits"] else "FAIL",
+            "PASS" if gates["product_1_02_second_journal_fits"] else "FAIL",
         ),
         (
             "Wi-Fi DTCM / usable",

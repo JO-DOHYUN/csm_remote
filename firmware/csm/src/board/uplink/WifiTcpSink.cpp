@@ -49,12 +49,18 @@ bool WifiTcpSink::enabled() const { return enabled_; }
 
 bool WifiTcpSink::connected() const {
   return enabled_ && wifiRuntimeModeEnablesTcp(config_.runtime_mode) &&
+         mailbox_.reliableSessionActive();
+}
+
+bool WifiTcpSink::socketConnected() const {
+  return enabled_ && wifiRuntimeModeEnablesTcp(config_.runtime_mode) &&
          connected_;
 }
 
 SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
   counters_.offer_total++;
   counters_.offer_bytes_total += frame.length;
+  counters_.offer_bytes_total64 += frame.length;
   if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode)) {
     return SinkOfferResult::Disabled;
   }
@@ -74,10 +80,20 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
     case WifiMailboxOfferResult::Reserved:
       counters_.offer_reserved_total++;
       counters_.offer_overflow_total++;
+      if (!counters_.first_not_admitted_valid) {
+        counters_.first_not_admitted_valid = true;
+        counters_.first_not_admitted_publish_seq = frame.publish_seq;
+        counters_.journal_full_total++;
+      }
       return SinkOfferResult::Overflow;
     case WifiMailboxOfferResult::Full:
       counters_.offer_full_total++;
       counters_.offer_overflow_total++;
+      if (!counters_.first_not_admitted_valid) {
+        counters_.first_not_admitted_valid = true;
+        counters_.first_not_admitted_publish_seq = frame.publish_seq;
+        counters_.journal_full_total++;
+      }
       return SinkOfferResult::Overflow;
     case WifiMailboxOfferResult::Invalid:
       counters_.offer_invalid_total++;
@@ -85,6 +101,7 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
   }
   counters_.offer_accept_total++;
   counters_.offer_accept_bytes_total += frame.length;
+  counters_.offer_accept_bytes_total64 += frame.length;
   if (frame.type == csm::RecordType::StreamSession) {
     session_anchor_queued_ = true;
   }
@@ -148,7 +165,9 @@ SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
 
 void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
-Stream* WifiTcpSink::downlinkStream() { return connected() ? this : nullptr; }
+Stream* WifiTcpSink::downlinkStream() {
+  return socketConnected() ? this : nullptr;
+}
 
 int WifiTcpSink::available() {
   const uint32_t available = mailbox_.rxAvailable();
@@ -222,6 +241,55 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
   return snapshot;
 }
 
+LinkReliabilityDiagnosticSnapshot
+WifiTcpSink::reliabilityDiagnosticSnapshot(uint64_t mono_us) const {
+  const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
+  LinkReliabilityDiagnosticSnapshot snapshot;
+  snapshot.mono_us = mono_us;
+  snapshot.boot_session_id = worker_state_.boot_session_id;
+  snapshot.last_accepted_publish_seq =
+      counters_.first_accepted_valid ? counters_.last_accepted_publish_seq : 0;
+  snapshot.highest_sent_publish_seq = counters_.last_sent_publish_seq;
+  snapshot.last_acked_publish_seq = counters_.last_acked_publish_seq;
+  snapshot.first_not_admitted_publish_seq =
+      counters_.first_not_admitted_valid
+          ? counters_.first_not_admitted_publish_seq
+          : 0;
+  snapshot.offered_bytes_total = counters_.offer_bytes_total64;
+  snapshot.admitted_bytes_total = counters_.offer_accept_bytes_total64;
+  snapshot.socket_sent_bytes_total = counters_.socket_sent_bytes_total;
+  snapshot.reclaimed_bytes_total = counters_.reclaimed_bytes_total;
+  snapshot.retained_bytes = queue.queued_bytes;
+  snapshot.unsent_bytes = queue.unsent_bytes;
+  snapshot.high_water_bytes = queue.high_water_bytes;
+  snapshot.retained_records = queue.queued_records;
+  snapshot.unsent_records = queue.unsent_records;
+  snapshot.high_water_records = queue.high_water_records;
+  snapshot.ack_accepted_total = counters_.app_ack_accepted_total;
+  snapshot.ack_rejected_total = counters_.app_ack_rejected_total;
+  snapshot.rewind_total = counters_.replay_rewind_total;
+  snapshot.journal_full_total = counters_.journal_full_total;
+  snapshot.connection_epoch = counters_.connection_epoch;
+  snapshot.close_reason =
+      static_cast<uint8_t>(worker_state_.last_close_reason);
+  if (worker_state_.reliable_session_active) {
+    snapshot.flags |= csm::kLinkReliabilityFlagSessionActive;
+  }
+  if (socketConnected()) {
+    snapshot.flags |= csm::kLinkReliabilityFlagSocketConnected;
+  }
+  if (worker_state_.reliable_ack_valid) {
+    snapshot.flags |= csm::kLinkReliabilityFlagAckValid;
+  }
+  if (worker_state_.reliable_integrity_fault) {
+    snapshot.flags |= csm::kLinkReliabilityFlagIntegrityFault;
+  }
+  if (worker_state_.reliable_replay_active) {
+    snapshot.flags |= csm::kLinkReliabilityFlagBacklogReplay;
+  }
+  return snapshot;
+}
+
 void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
                                   SinkServiceResult& result) {
   const uint32_t worker_epoch_delta =
@@ -252,6 +320,7 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.server_start_total = worker.server_start_total;
   counters_.server_start_fail_total = worker.server_start_fail_total;
   counters_.bytes_sent_total = worker.bytes_sent_total;
+  counters_.socket_sent_bytes_total = worker.socket_sent_bytes_total;
   counters_.frame_sent_total = worker.frame_sent_total;
   counters_.write_attempt_total = worker.write_attempt_total;
   counters_.send_request_bytes_total = worker.send_request_bytes_total;
@@ -289,6 +358,11 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.bytes_per_wake_max = worker.bytes_per_wake_max;
   counters_.writes_per_wake_max = worker.writes_per_wake_max;
   counters_.last_sent_publish_seq = worker.last_sent_publish_seq;
+  counters_.last_acked_publish_seq = worker.last_acked_publish_seq;
+  counters_.reclaimed_bytes_total = worker.ack_reclaimed_bytes_total;
+  counters_.app_ack_accepted_total = worker.app_ack_accepted_total;
+  counters_.app_ack_rejected_total = worker.app_ack_rejected_total;
+  counters_.replay_rewind_total = worker.replay_rewind_total;
   const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
   counters_.queue_high_water_bytes = queued.high_water_bytes;
   counters_.queue_high_water_records = queued.high_water_records;

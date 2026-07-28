@@ -15,6 +15,7 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
     return false;
   }
   config_ = config;
+  mailbox_.configureReliableSession(config_.boot_session_id);
   state_ = {};
   state_.runtime_mode = config_.runtime_mode;
   state_.tcp_enabled = wifiRuntimeModeEnablesTcp(config_.runtime_mode);
@@ -70,7 +71,7 @@ void WifiSocketWorker::run() {
       if (!state_.startup_attempts_exhausted &&
           static_cast<int32_t>(now_ms - next_startup_attempt_ms_) >= 0) {
         startup_complete_ = initializeNetwork();
-        if (!startup_complete_) {
+        if (!startup_complete_ && !state_.startup_attempts_exhausted) {
           if (wifiStartupAttemptsExhausted(
                   state_.counters.startup_attempt_total,
                   config_.startup_attempt_limit)) {
@@ -163,7 +164,10 @@ void WifiSocketWorker::noteWake(uint32_t flags, bool fallback) {
 }
 
 bool WifiSocketWorker::initializeNetwork() {
-  rollbackNetwork();
+  if (!rollbackNetwork()) {
+    quarantineStartupFailure(state_.last_network_error);
+    return false;
+  }
   state_.counters.startup_attempt_total++;
   state_.ap_ready = false;
   state_.server_ready = false;
@@ -198,7 +202,14 @@ bool WifiSocketWorker::initializeNetwork() {
   endCall(ap_result);
   if (ap_result != NSAPI_ERROR_OK) {
     state_.counters.ap_start_fail_total++;
-    state_.last_network_error = ap_result;
+    // start() is an opaque multi-stage framework transaction. A failed call
+    // cannot be safely paired with stop() at every internal partial state, so
+    // repeated attempts would accumulate radio/DHCP resources. Quarantine this
+    // boot; a transactional framework implementation may later relax it.
+    if (!wifiStartupRetryAllowed(
+            WifiStartupFailureBoundary::OpaqueApStart, false)) {
+      quarantineStartupFailure(ap_result);
+    }
     return false;
   }
   ap_started_ = true;
@@ -233,8 +244,14 @@ bool WifiSocketWorker::initializeNetwork() {
   if (server_result != NSAPI_ERROR_OK) {
     state_.counters.server_start_fail_total++;
     state_.last_network_error = server_result;
-    rollbackNetwork();
-    state_.last_network_error = server_result;
+    const bool cleanup_confirmed = rollbackNetwork();
+    if (!wifiStartupRetryAllowed(
+            WifiStartupFailureBoundary::AfterApStarted,
+            cleanup_confirmed)) {
+      quarantineStartupFailure(state_.last_network_error);
+    } else {
+      state_.last_network_error = server_result;
+    }
     return false;
   }
 
@@ -243,27 +260,48 @@ bool WifiSocketWorker::initializeNetwork() {
   return true;
 }
 
-void WifiSocketWorker::rollbackNetwork() {
+bool WifiSocketWorker::rollbackNetwork() {
+  bool cleanup_confirmed = true;
   if (server_opened_) {
     server_.sigio(nullptr);
     beginCall(WifiWorkerCallPhase::StopServer);
     const nsapi_error_t result = server_.close();
     endCall(result);
-    server_opened_ = false;
-    if (result != NSAPI_ERROR_OK && result != NSAPI_ERROR_NO_SOCKET) {
+    if (result == NSAPI_ERROR_OK || result == NSAPI_ERROR_NO_SOCKET) {
+      server_opened_ = false;
+    } else {
       noteSocketError(result);
+      cleanup_confirmed = false;
     }
   }
-  if (ap_started_ && ap_interface_ != nullptr) {
+  // Do not tear down the parent AP when its child server could not be closed.
+  // The worker is quarantined instead of retrying into an unknown ownership
+  // state.
+  if (ap_started_ && !server_opened_ && ap_interface_ != nullptr) {
     beginCall(WifiWorkerCallPhase::StopAccessPoint);
     const nsapi_error_t result = ap_interface_->stop();
     endCall(result);
-    ap_started_ = false;
-    if (result != NSAPI_ERROR_OK) noteSocketError(result);
+    if (result == NSAPI_ERROR_OK) {
+      ap_started_ = false;
+    } else {
+      noteSocketError(result);
+      cleanup_confirmed = false;
+    }
+  } else if (ap_started_ && ap_interface_ == nullptr) {
+    cleanup_confirmed = false;
   }
-  state_.ap_ready = false;
-  state_.server_ready = false;
+  state_.ap_ready = ap_started_;
+  state_.server_ready = server_opened_;
   state_.network_ready = false;
+  return cleanup_confirmed && !server_opened_ && !ap_started_;
+}
+
+void WifiSocketWorker::quarantineStartupFailure(nsapi_error_t error) {
+  state_.last_network_error = error;
+  if (!state_.startup_attempts_exhausted) {
+    state_.startup_attempts_exhausted = true;
+    state_.counters.startup_exhausted_total++;
+  }
 }
 
 void WifiSocketWorker::serviceRequests() {
@@ -299,7 +337,7 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   const WifiTransmitPumpResult transmitted = serviceTransmit(millis());
   if (client_ != nullptr && transmitted.progressed() &&
       !transmitted.would_block && !transmitted.zero_write &&
-      mailbox_.queueSnapshot().queued_records != 0) {
+      mailbox_.queueSnapshot().unsent_records != 0) {
     // Yield after each bounded pump, then resume without waiting for the
     // fallback timer while the socket continues to make positive progress.
     signalWake(WifiWakeTxData);
@@ -320,7 +358,6 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
     closeSocket(candidate, WifiWorkerCallPhase::CloseClient);
-    applyAbortRequest();
     return;
   }
 
@@ -330,11 +367,8 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
       mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
   endCall(0);
 
-  uint32_t aborted_bytes = 0;
-  while (!mailbox_.tryApplyAbort(aborted_bytes)) rtos::ThisThread::yield();
-  if (aborted_bytes > 0) {
-    state_.counters.queue_abort_total++;
-    state_.counters.queue_aborted_bytes_total += aborted_bytes;
+  if (!mailbox_.reliableSessionActive()) {
+    mailbox_.activateReliableSession();
   }
   mailbox_.discardRx();
   client_ = candidate;
@@ -359,7 +393,6 @@ void WifiSocketWorker::serviceReceive(uint32_t) {
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
     closeClient(WifiCloseReason::IsolationRequest);
-    applyAbortRequest();
     return;
   }
   if (received > 0) {
@@ -380,7 +413,7 @@ void WifiSocketWorker::serviceReceive(uint32_t) {
 WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
   WifiTransmitPumpResult result;
   const WifiMailboxQueueSnapshot initial_queue = mailbox_.queueSnapshot();
-  if (initial_queue.queued_records == 0) return result;
+  if (initial_queue.unsent_records == 0) return result;
   const bool initial_pressure = wifiQueuePressureReached(
       initial_queue.queued_bytes, initial_queue.queued_records,
       BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
@@ -389,7 +422,7 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       initial_queue.latency_bounded ? config_.latency_bound_max_ms
                                     : config_.batch_max_latency_ms;
   if (!initial_pressure && config_.batch_target_bytes > 0 &&
-      initial_queue.queued_bytes < config_.batch_target_bytes &&
+      initial_queue.unsent_bytes < config_.batch_target_bytes &&
       latency_limit_ms > 0 &&
       static_cast<uint32_t>(now_ms - initial_queue.first_queued_ms) <
           latency_limit_ms) {
@@ -439,7 +472,6 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       handled_disconnect_sequence_ = disconnect_sequence;
       state_.counters.late_send_result_total++;
       closeClient(WifiCloseReason::IsolationRequest);
-      applyAbortRequest();
       notePumpResult(result);
       return result;
     }
@@ -525,6 +557,7 @@ bool WifiSocketWorker::applyPendingConsume() {
     return true;
   }
   state_.counters.bytes_sent_total += pending_consumed_bytes_;
+  state_.counters.socket_sent_bytes_total += pending_consumed_bytes_;
   state_.counters.frame_sent_total += consumed.frames;
   if (consumed.frames > 0) {
     state_.counters.last_sent_publish_seq = consumed.last_publish_seq;
@@ -544,12 +577,7 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   state_.backpressure_duration_ms = 0;
   pending_consume_ = false;
   mailbox_.discardRx();
-  uint32_t aborted_bytes = 0;
-  while (!mailbox_.tryApplyAbort(aborted_bytes)) rtos::ThisThread::yield();
-  if (aborted_bytes > 0) {
-    state_.counters.queue_abort_total++;
-    state_.counters.queue_aborted_bytes_total += aborted_bytes;
-  }
+  if (mailbox_.reliableSessionActive()) mailbox_.rewindUnacked();
   if (was_connected) {
     state_.counters.connection_epoch++;
     state_.counters.disconnect_total++;
@@ -642,6 +670,31 @@ void WifiSocketWorker::publishState(uint32_t now_ms, bool force) {
   }
   last_state_publish_ms_ = now_ms == 0 ? 1 : now_ms;
   sampleStack(now_ms);
+  const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
+  const WifiMailboxReliabilitySnapshot reliability =
+      mailbox_.workerReliabilitySnapshot();
+  state_.journal_retained_bytes = queue.queued_bytes;
+  state_.journal_unsent_bytes = queue.unsent_bytes;
+  state_.journal_high_water_bytes = queue.high_water_bytes;
+  state_.journal_retained_records = queue.queued_records;
+  state_.journal_unsent_records = queue.unsent_records;
+  state_.journal_high_water_records = queue.high_water_records;
+  state_.boot_session_id = reliability.boot_session_id;
+  state_.reliable_session_active = reliability.session_active;
+  state_.reliable_ack_valid = reliability.ack_valid;
+  state_.reliable_integrity_fault = reliability.integrity_fault;
+  state_.reliable_replay_active = reliability.replay_active;
+  state_.counters.last_sent_publish_seq =
+      reliability.highest_sent_publish_seq;
+  state_.counters.last_acked_publish_seq =
+      reliability.last_acked_publish_seq;
+  state_.counters.ack_reclaimed_bytes_total =
+      reliability.reclaimed_bytes_total;
+  state_.counters.app_ack_accepted_total =
+      reliability.ack_accepted_total;
+  state_.counters.app_ack_rejected_total =
+      reliability.ack_rejected_total;
+  state_.counters.replay_rewind_total = reliability.rewind_total;
   state_.heartbeat_ms = now_ms;
   mailbox_.publishState(state_);
 }

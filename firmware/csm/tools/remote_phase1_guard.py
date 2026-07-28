@@ -4,7 +4,8 @@ import sys
 
 
 M4_ENV = "env:portenta_h7_m4_remote_frontend"
-M7_ENV = "env:portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi"
+M7_ENV = "env:portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi"
+M7_BASE_ENV = "env:portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi"
 
 
 def read(path):
@@ -78,18 +79,25 @@ def main():
     if not parser.has_section(M7_ENV):
         errors.append(f"missing {M7_ENV}")
     else:
-        m7_sources = "\n".join(lines(parser, M7_ENV, "build_src_filter"))
+        m7_sources = "\n".join(
+            lines(parser, M7_BASE_ENV, "build_src_filter")
+            + lines(parser, M7_ENV, "build_src_filter")
+        )
         m7_flags = "\n".join(lines(parser, M7_ENV, "build_flags"))
-        m7_ignored = "\n".join(lines(parser, M7_ENV, "lib_ignore"))
+        m7_ignored = "\n".join(lines(parser, M7_BASE_ENV, "lib_ignore"))
         require_patterns(errors, M7_ENV, m7_sources, [
             "+<board/remote/RemoteSharedMemory.cpp>",
             "+<board/uplink/WifiTcpSink.cpp>",
+            "+<board/feeder/FeederUartIngress.cpp>",
         ])
         require_patterns(errors, M7_ENV, m7_flags, [
             "BOARD_CSM_PROFILE_REMOTE_PRODUCT=1",
             "BOARD_ENABLE_REMOTE_CONTROL=1",
             "BOARD_ENABLE_REMOTE_AUTHORITY=1",
+            "BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING=1",
             "BOARD_ENABLE_MDPS_BENCH_MAPPING=0",
+            "BOARD_HW_PROFILE_MID_FEEDER_UART=1",
+            "BOARD_ENABLE_FEEDER_UART=1",
             "BOARD_ENABLE_MCP2515=0",
             "BOARD_ENABLE_MCP2515_INIT=0",
             "BOARD_ENABLE_HOST_CAN_TX=0",
@@ -151,7 +159,7 @@ def main():
         "kRemoteSteeringCanId", "kRemoteSteeringCenter",
         "kRemoteAuxiliaryNegative", "kRemoteAuxiliaryPositive",
         "steering_overlay_permille", "momentary_overlay_permille",
-        "VehicleCommandMapping::MdpsBench0x007",
+        "VehicleCommandMapping::Vehicle0x005And0x007",
         "kDetailNoVehicleMapping", "result.mapped = true",
     ])
     gateway = read(root / "src/board/control/CanTxGateway.cpp")
@@ -165,7 +173,9 @@ def main():
         "emit_remote_control_state", "emit_can_tx_raw",
         "required_can_lanes_ok()",
         "Remote Product keeps app/host control compiled out",
+        "BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING",
         "BOARD_REMOTE_LOCAL_CAN_TX_ENABLED",
+        "VehicleCommandMapping::Vehicle0x005And0x007",
         "VehicleCommandMapping::None",
     ])
 

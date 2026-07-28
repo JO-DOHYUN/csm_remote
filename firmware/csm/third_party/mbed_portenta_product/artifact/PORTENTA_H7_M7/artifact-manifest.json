@@ -1,0 +1,26 @@
+{
+    "schema":  1,
+    "generated_utc":  "2026-07-28T10:19:30.6506499Z",
+    "base":  {
+                 "libmbed_sha256":  "411F46E0A6498B647BA9DC7CCEBCBBD0D45305D9C96FAD5A2DF64F9C995885CF",
+                 "mbed_config_sha256":  "1F0EF173CACB2F278A1550E75665E50BDCCF2F9FCD57F7B7021289653C6F083B"
+             },
+    "source":  {
+                   "arduino_core_commit":  "6816d442fd00bc17f83c73396d3d8d90285a6a8a",
+                   "mbed_os_commit":  "17dc3dc2e6e2817a8bd3df62f38583319f0e4fed"
+               },
+    "replacement":  {
+                        "object_count":  66,
+                        "debug_sections_stripped":  true,
+                        "removed_application_owned_members":  [
+                                                                  "mstd_mutex.o"
+                                                              ],
+                        "member_list_sha256":  "BD799CB1CA027FA5D59A480C5C5B3E5D25BEB42B4E33C7FB3331C648C0D0FE2A",
+                        "lwip_heap_object_bytes":  40979
+                    },
+    "output":  {
+                   "libmbed_sha256":  "032494298FC6CAFAAD23277B8CBEB01F1BA75CA7F72CCD90383A850EE561FD70",
+                   "mbed_config_sha256":  "93A7A239322463D76189B01E2F9D00C06B0CA6E52F92241FD71FE100C184F4D3",
+                   "app_overrides_sha256":  "8BAF1BD07FCA195E90328901B66FA66ED7690D3FE6C0C4D46BD8276A67E362B6"
+               }
+}

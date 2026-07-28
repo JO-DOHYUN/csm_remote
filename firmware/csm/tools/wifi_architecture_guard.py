@@ -75,16 +75,16 @@ for token in ("sleep_for(", "BOARD_WIFI_WORKER_PERIOD_MS"):
     if token in worker or token in contract:
         fail(f"periodic polling remains the primary Wi-Fi trigger: found {token!r}")
 
-if "#define BOARD_WIFI_TX_CHUNK_BYTES 1024" not in worker_header:
-    fail("Wi-Fi TX chunk must match the 1024-byte nonblocking pump budget")
+if "#define BOARD_WIFI_TX_CHUNK_BYTES 2920" not in worker_header:
+    fail("Wi-Fi TX chunk must match the measured 2920-byte MSS envelope")
 
-if "FixedFrameByteQueue" not in mailbox_header or "FixedFrameQueue<" in mailbox_header:
-    fail("Wi-Fi mailbox must use the bounded byte-pool queue")
+if "ReliableFrameJournal<" not in mailbox_header:
+    fail("Wi-Fi mailbox must own the bounded retained frame journal")
 for token in (
-    "BOARD_WIFI_SINK_QUEUE_RECORDS=1280",
+    "BOARD_WIFI_SINK_QUEUE_RECORDS=1024",
     "BOARD_WIFI_SINK_QUEUE_BYTES=65520",
     "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-    "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
+    "BOARD_WIFI_STALL_TIMEOUT_MS=500",
     "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
 ):
     if token not in platformio:
@@ -96,8 +96,17 @@ for token in (
     "BOARD_WIFI_STARTUP_ATTEMPT_LIMIT",
     "BOARD_WIFI_STARTUP_RETRY_MS",
     "wifiStartupAttemptsExhausted",
+    "WifiStartupFailureBoundary",
+    "wifiStartupRetryAllowed",
     "wifiObservedAgeMs",
     "bool coherent = false",
+    "#define BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US 2000",
+    "#define BOARD_WIFI_TX_MAX_WRITES_PER_PUMP 4",
+    "#define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 11680",
+    "#define BOARD_WIFI_TX_BATCH_TARGET_BYTES 1460",
+    "#define BOARD_WIFI_CONNECTED_FALLBACK_MS 5",
+    "#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 20",
+    "#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 2",
 ):
     if token not in contract:
         fail(f"worker recovery/evidence contract is missing {token!r}")
@@ -105,9 +114,26 @@ for token in (
 for token in (
     "wifiStartupAttemptsExhausted(",
     "config_.startup_retry_ms",
+    "WifiStartupFailureBoundary::OpaqueApStart",
+    "WifiStartupFailureBoundary::AfterApStarted",
+    "quarantineStartupFailure(",
+    "bool WifiSocketWorker::rollbackNetwork()",
+    "if (!startup_complete_ && !state_.startup_attempts_exhausted)",
+    "return cleanup_confirmed && !server_opened_ && !ap_started_;",
 ):
     if token not in worker:
         fail(f"bounded AP startup recovery is missing {token!r}")
+
+for token in (
+    "state_revision_",
+    "state_words_",
+    "before == after && (after & 1u) == 0u",
+):
+    if token not in mailbox_header + mailbox_source:
+        fail(f"coherent worker-state seqlock is missing {token!r}")
+for token in ("state_lock_", "atomic_flag"):
+    if token in mailbox_header + mailbox_source:
+        fail(f"worker state publication may silently drop a write: found {token!r}")
 
 for token in (
     "snapshot.coherent = true",
@@ -171,7 +197,6 @@ for token in (
     "setNotifier",
     "empty_to_nonempty_wake_total",
     "latency_wake_total",
-    "latency_records_",
     "notifyWorker(WifiWakeTxData)",
     "notifyWorker(WifiWakeControl)",
 ):
@@ -187,12 +212,16 @@ for token in (
         fail(f"worker QueuePressure close boundary is missing {token!r}")
 
 for token in (
-    "wifiQueuePressureReached(",
-    "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT",
     "requestQueuePressureDisconnect();",
 ):
     if token not in mailbox_source:
-        fail(f"pre-full producer isolation boundary is missing {token!r}")
+        fail(f"journal-full producer isolation boundary is missing {token!r}")
+for token in (
+    "wifiQueuePressureReached(",
+    "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT",
+):
+    if token not in worker + contract:
+        fail(f"worker batching pressure policy is missing {token!r}")
 
 for token in (
     "AcceptExtraClient",
@@ -231,7 +260,7 @@ linker = (ROOT / "linker" / "portenta_h7_m7_product.ld").read_text(
 main_source = (ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
 for token in (
     ".wifi_tx_queue_dtcm (NOLOAD)",
-    "__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x14FF0",
+    "__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x15FF0",
     "LENGTH(DTCMRAM) - 0x8000",
 ):
     if token not in linker:
@@ -259,6 +288,10 @@ worker_construction = "static WifiSocketWorker socket_worker(mailbox_);"
 if disabled_guard not in sink or sink.index(disabled_guard) > sink.index(worker_construction):
     fail("Disabled mode is not rejected before worker construction/start")
 
+if "mailbox_.reliableSessionActive()" not in sink:
+    fail("logical reliable session is not retained across TCP reconnects")
+if "return socketConnected() ? this : nullptr;" not in sink:
+    fail("downlink must remain bound to the physical socket epoch")
 if "return enabled_ && wifiRuntimeModeEnablesTcp(config_.runtime_mode)" not in sink:
     fail("AccessPointOnly mode could be advertised as a connected TCP sink")
 if "if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode))" not in sink:
@@ -310,18 +343,36 @@ typed_records = (ROOT / "include" / "protocol" / "TypedRecords.h").read_text(
 priority_policy = (
     ROOT / "src" / "board" / "uplink" / "UplinkPriorityPolicy.cpp"
 ).read_text(encoding="utf-8")
-transport_diagnostic = (
-    ROOT / "src" / "board" / "uplink" / "WifiTransportDiagnostic.cpp"
+reliability_diagnostic = (
+    ROOT / "src" / "board" / "uplink" / "LinkReliabilityDiagnostic.cpp"
 ).read_text(encoding="utf-8")
 for token, corpus in (
-    ("TransportDiagnostic = 20", typed_frame),
-    ("kTransportDiagnosticPayloadLen = 128", typed_records),
-    ("RecordType::TransportDiagnostic", priority_policy),
+    ("AppRxCommitAck = 21", typed_frame),
+    ("LinkReliabilityDiagnostic = 22", typed_frame),
+    ("kLinkReliabilityDiagnosticPayloadLen = 128", typed_records),
+    ("RecordType::LinkReliabilityDiagnostic", priority_policy),
     ("BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS 1000", main),
-    ("build_wifi_transport_diagnostic_payload", main + transport_diagnostic),
-    ("if (type == RecordType::TransportDiagnostic)", main),
+    ("build_link_reliability_diagnostic_payload", main + reliability_diagnostic),
+    ("type == RecordType::LinkReliabilityDiagnostic", main),
 ):
     if token not in corpus:
-        fail(f"bounded canonical transport evidence is missing {token!r}")
+        fail(f"required product link evidence is missing {token!r}")
+
+for token in (
+    "configureReliableSession(config_.boot_session_id)",
+    "activateReliableSession()",
+    "rewindUnacked()",
+    "initial_queue.unsent_records",
+    "socket_sent_bytes_total",
+):
+    if token not in worker:
+        fail(f"ACK-retained worker path is missing {token!r}")
+
+close_client = worker[
+    worker.index("void WifiSocketWorker::closeClient(") :
+    worker.index("void WifiSocketWorker::closeSocket(")
+]
+if "tryApplyAbort" in close_client:
+    fail("normal TCP close still destroys ACK-retained journal data")
 
 print("Wi-Fi architecture guard PASS")

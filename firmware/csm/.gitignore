@@ -58,6 +58,7 @@ CTestTestfile.cmake
 *.o
 *.obj
 *.a
+!third_party/mbed_portenta_product/artifact/PORTENTA_H7_M7/libmbed.a
 
 *.log
 *.tmp

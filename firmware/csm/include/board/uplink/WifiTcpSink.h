@@ -9,7 +9,7 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 1280
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 1024
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -18,6 +18,7 @@
 
 #include "board/uplink/WifiWorkerContract.h"
 #include "board/uplink/WifiWorkerMailbox.h"
+#include "board/uplink/LinkReliabilityDiagnostic.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 
 static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS < BOARD_WIFI_SINK_QUEUE_RECORDS,
@@ -44,8 +45,10 @@ struct WifiTcpSinkCounters {
   uint32_t server_start_fail_total = 0;
   uint32_t offer_total = 0;
   uint32_t offer_bytes_total = 0;
+  uint64_t offer_bytes_total64 = 0;
   uint32_t offer_accept_total = 0;
   uint32_t offer_accept_bytes_total = 0;
+  uint64_t offer_accept_bytes_total64 = 0;
   uint32_t offer_disconnected_total = 0;
   uint32_t offer_overflow_total = 0;
   uint32_t offer_busy_total = 0;
@@ -53,6 +56,7 @@ struct WifiTcpSinkCounters {
   uint32_t offer_full_total = 0;
   uint32_t offer_invalid_total = 0;
   uint32_t bytes_sent_total = 0;
+  uint64_t socket_sent_bytes_total = 0;
   uint32_t frame_sent_total = 0;
   uint32_t write_attempt_total = 0;
   uint32_t send_request_bytes_total = 0;
@@ -96,7 +100,15 @@ struct WifiTcpSinkCounters {
   uint64_t first_accepted_publish_seq = 0;
   uint64_t last_accepted_publish_seq = 0;
   uint64_t last_sent_publish_seq = 0;
+  uint64_t last_acked_publish_seq = 0;
+  uint64_t reclaimed_bytes_total = 0;
+  uint64_t first_not_admitted_publish_seq = 0;
+  uint32_t app_ack_accepted_total = 0;
+  uint32_t app_ack_rejected_total = 0;
+  uint32_t replay_rewind_total = 0;
+  uint32_t journal_full_total = 0;
   bool first_accepted_valid = false;
+  bool first_not_admitted_valid = false;
 };
 
 class WifiTcpSink final : public IFrameSink, public Stream {
@@ -108,6 +120,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   bool begin(const WifiTcpSinkConfig& config);
   bool enabled() const override;
   bool connected() const override;
+  bool socketConnected() const;
   SinkOfferResult offer(const PublishedFrameView& frame) override;
   SinkServiceResult service(uint32_t byte_budget, uint32_t now_ms,
                             uint32_t now_us);
@@ -122,7 +135,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   size_t write(const uint8_t*, size_t) override { return 0; }
 
   bool hasPendingFrames() const {
-    return mailbox_.queueSnapshot().queued_records != 0;
+    return mailbox_.queueSnapshot().unsent_records != 0;
   }
   bool sessionAnchorQueued() const { return session_anchor_queued_; }
   bool backpressureActive() const { return backpressure_active_; }
@@ -138,6 +151,8 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t workerHeartbeatAgeMs(uint32_t now_ms) const;
   WifiTransportDiagnosticSnapshot diagnosticSnapshot(
       uint64_t mono_us, uint32_t now_ms) const;
+  LinkReliabilityDiagnosticSnapshot reliabilityDiagnosticSnapshot(
+      uint64_t mono_us) const;
 
  private:
   WifiWorkerMailbox mailbox_;

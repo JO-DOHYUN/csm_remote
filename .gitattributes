@@ -15,3 +15,8 @@
 *.docx binary
 *.pptx binary
 *.zip binary
+
+# Unified-diff context uses a single-space line to represent an unchanged
+# blank source line. Do not flag that patch syntax as product-source trailing
+# whitespace.
+firmware/csm/third_party/mbed_portenta_product/patches/*.patch whitespace=-blank-at-eol

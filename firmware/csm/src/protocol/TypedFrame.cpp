@@ -41,6 +41,14 @@ uint32_t rd_u32_le(const uint8_t* p) {
          (static_cast<uint32_t>(p[3]) << 24);
 }
 
+uint64_t rd_u64_le(const uint8_t* p) {
+  uint64_t value = 0;
+  for (uint8_t i = 0; i < 8; ++i) {
+    value |= static_cast<uint64_t>(p[i]) << (8 * i);
+  }
+  return value;
+}
+
 uint16_t crc16_ccitt(const uint8_t* data, size_t len) {
   uint16_t crc = 0xFFFF;
   for (size_t i = 0; i < len; ++i) {

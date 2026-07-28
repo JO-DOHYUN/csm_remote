@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "profile": "csm-portenta-h7-m7-product-mbed-4.3.1",
+  "target": "PORTENTA_H7_M7",
+  "toolchain": "GCC_ARM",
+  "build_profile": "release",
+  "arduino_core": {
+    "version": "4.3.1",
+    "commit": "6816d442fd00bc17f83c73396d3d8d90285a6a8a",
+    "patch_tree": "762f8ba9ade97ac5068ab355bacd536244cfa6f8",
+    "patch_count": 262
+  },
+  "mbed_os": {
+    "commit": "17dc3dc2e6e2817a8bd3df62f38583319f0e4fed"
+  },
+  "tools": {
+    "mbed_tools": "7.58.0",
+    "cmake": "3.27.9",
+    "ninja": "1.11.1.1",
+    "gcc_arm": "7.2.1"
+  },
+  "lwip": {
+    "ipv4": true,
+    "ipv6": false,
+    "tcp_mss": 1460,
+    "tcp_snd_buf": 11680,
+    "tcp_wnd": 5840,
+    "memp_num_tcp_seg": 40,
+    "mem_size": 40960,
+    "pbuf_pool_size": 5,
+    "tcpip_thread_stacksize": 4096,
+    "socket_max": 4,
+    "tcp_socket_max": 4,
+    "tcp_server_max": 4,
+    "derived": {
+      "tcp_snd_queuelen": 32,
+      "tcp_sndlowat": 5840,
+      "tcp_sndqueuelowat": 16
+    }
+  },
+  "memory_contract": {
+    "d3_base": "0x38000000",
+    "d3_size": 65536,
+    "mailbox_end_exclusive": "0x38000400",
+    "lwip_heap_start": "0x38000400",
+    "lwip_heap_end_exclusive": "0x3800A800",
+    "lwip_heap_envelope_bytes": 41984,
+    "pdm_start": "0x3800FC00",
+    "d1_minimum_free_bytes": 131072,
+    "dtcm_minimum_reserve_bytes": 32768
+  },
+  "artifact": {
+    "library": "artifact/PORTENTA_H7_M7/libmbed.a",
+    "config": "artifact/PORTENTA_H7_M7/mbed_config.h",
+    "generated_manifest": "artifact/PORTENTA_H7_M7/artifact-manifest.json"
+  },
+  "base_framework": {
+    "libmbed_sha256": "411F46E0A6498B647BA9DC7CCEBCBBD0D45305D9C96FAD5A2DF64F9C995885CF",
+    "mbed_config_sha256": "1F0EF173CACB2F278A1550E75665E50BDCCF2F9FCD57F7B7021289653C6F083B"
+  }
+}

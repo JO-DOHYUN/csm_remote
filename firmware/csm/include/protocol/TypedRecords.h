@@ -225,6 +225,44 @@ static constexpr uint8_t kTransportDiagnosticFlagConnected = 1u << 1;
 static constexpr uint8_t kTransportDiagnosticFlagBackpressure = 1u << 2;
 static constexpr uint8_t kTransportDiagnosticFlagQueuePressureLatched = 1u << 3;
 
+// Required Product HMI Link conservation snapshot. These counters remain in
+// release builds; optional deep lwIP/WHD/SDIO probes are a separate,
+// compile-time removable diagnostic layer.
+static constexpr uint16_t kLinkReliabilityDiagnosticPayloadLen = 128;
+static constexpr uint8_t kLinkReliabilityDiagnosticSchema = 1;
+static constexpr uint8_t kLinkReliabilityDiagnosticMonoUsOffset = 0;
+static constexpr uint8_t kLinkReliabilityDiagnosticSchemaOffset = 8;
+static constexpr uint8_t kLinkReliabilityDiagnosticFlagsOffset = 9;
+static constexpr uint8_t kLinkReliabilityDiagnosticCloseReasonOffset = 10;
+static constexpr uint8_t kLinkReliabilityDiagnosticConnectionEpochOffset = 12;
+static constexpr uint8_t kLinkReliabilityDiagnosticBootSessionOffset = 16;
+static constexpr uint8_t kLinkReliabilityDiagnosticLastAcceptedSeqOffset = 24;
+static constexpr uint8_t kLinkReliabilityDiagnosticHighestSentSeqOffset = 32;
+static constexpr uint8_t kLinkReliabilityDiagnosticLastAckedSeqOffset = 40;
+static constexpr uint8_t kLinkReliabilityDiagnosticFirstNotAdmittedSeqOffset = 48;
+static constexpr uint8_t kLinkReliabilityDiagnosticOfferedBytesOffset = 56;
+static constexpr uint8_t kLinkReliabilityDiagnosticAdmittedBytesOffset = 64;
+static constexpr uint8_t kLinkReliabilityDiagnosticSocketSentBytesOffset = 72;
+static constexpr uint8_t kLinkReliabilityDiagnosticReclaimedBytesOffset = 80;
+static constexpr uint8_t kLinkReliabilityDiagnosticRetainedBytesOffset = 88;
+static constexpr uint8_t kLinkReliabilityDiagnosticUnsentBytesOffset = 92;
+static constexpr uint8_t kLinkReliabilityDiagnosticHighWaterBytesOffset = 96;
+static constexpr uint8_t kLinkReliabilityDiagnosticRetainedRecordsOffset = 100;
+static constexpr uint8_t kLinkReliabilityDiagnosticUnsentRecordsOffset = 104;
+static constexpr uint8_t kLinkReliabilityDiagnosticHighWaterRecordsOffset = 108;
+static constexpr uint8_t kLinkReliabilityDiagnosticAckAcceptedOffset = 112;
+static constexpr uint8_t kLinkReliabilityDiagnosticAckRejectedOffset = 116;
+static constexpr uint8_t kLinkReliabilityDiagnosticRewindTotalOffset = 120;
+static constexpr uint8_t kLinkReliabilityDiagnosticJournalFullOffset = 124;
+static constexpr uint8_t kLinkReliabilityFlagSessionActive = 1u << 0;
+static constexpr uint8_t kLinkReliabilityFlagSocketConnected = 1u << 1;
+static constexpr uint8_t kLinkReliabilityFlagAckValid = 1u << 2;
+static constexpr uint8_t kLinkReliabilityFlagIntegrityFault = 1u << 3;
+static constexpr uint8_t kLinkReliabilityFlagBacklogReplay = 1u << 4;
+static_assert(kLinkReliabilityDiagnosticJournalFullOffset + sizeof(uint32_t) ==
+                  kLinkReliabilityDiagnosticPayloadLen,
+              "link reliability diagnostic layout drift");
+
 // Phase 7 projects one BootRecovery ring entry without exposing retained-memory
 // layout. The generic field aliases are phase-specific and preserve the v2
 // payload size used by existing decoders.
@@ -318,6 +356,7 @@ static constexpr uint16_t kBoardEventFeederSequenceGapCode = 48;
 static constexpr uint16_t kBoardEventFeederTransportErrorCode = 49;
 static constexpr uint16_t kBoardEventFeederSourceFaultCode = 50;
 static constexpr uint16_t kBoardEventFeederLinkStaleCode = 51;
+static constexpr uint16_t kBoardEventDataLinkIntegrityFaultCode = 52;
 static constexpr uint16_t kBoardHealthPayloadLen = 52;
 static constexpr uint16_t kBoardHealthV1PayloadLen = 52;
 static constexpr uint16_t kBoardHealthV2PayloadLen = 128;

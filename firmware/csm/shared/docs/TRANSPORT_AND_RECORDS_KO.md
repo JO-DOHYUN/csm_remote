@@ -1,5 +1,36 @@
 # TRANSPORT_AND_RECORDS_KO
 
+## 2026-07-28 retained product-link contract
+
+This section supersedes the older reconnect/no-replay statements below.
+
+- Record `21 APP_RX_COMMIT_ACK` is Android-to-CSM transport control-plane.
+  Its payload is exactly 16 bytes:
+  `boot_session_id u64_le` at 0 and
+  `last_contiguous_publish_seq u64_le` at 8.
+- The ACK watermark means the original canonical frame bytes through that
+  sequence were accepted by the single ordered `SessionCore`, appended to the
+  bounded capture store, and made durable by `fsync`. UI projection, socket
+  receipt, parser dispatch, and record `22` counters are not ACK truth.
+- A positive CSM socket send advances only the Wi-Fi send cursor. A matching,
+  contiguous application ACK advances the reclaim cursor. Disconnect rewinds
+  every unacknowledged record and a new connection replays it.
+- Record `22 LINK_RELIABILITY_DIAGNOSTIC` is product uplink, schema 1,
+  exactly 128 bytes:
+  - `0..7 mono_us u64`; `8 schema u8`; `9 flags u8`; `10 close_reason u8`;
+    `12..15 connection_epoch u32`
+  - `16..55`: boot session, last accepted, highest sent, last ACKed, and
+    first-not-admitted sequence as five `u64`
+  - `56..87`: offered, admitted, socket-sent, reclaimed bytes as four `u64`
+  - `88..111`: retained/unsent/high-water bytes and retained/unsent/high-water
+    records as six `u32`
+  - `112..127`: accepted ACK, rejected ACK, rewind, journal-full as four `u32`
+  - flags: bit0 session active, bit1 socket connected, bit2 ACK valid,
+    bit3 integrity fault, bit4 backlog replay
+- The CSM journal is bounded. First Reserved/Full records the exact
+  first-not-admitted sequence, latches the integrity fault, emits
+  `BOARD_EVENT 52`, and closes the epoch without overwriting retained data.
+
 ## 2026-07-27 active wire contract
 
 This section supersedes older CAN_RX_SEGMENT and TRANSPORT_DIAGNOSTIC layouts
@@ -87,6 +118,8 @@ Record types:
 - `18 REMOTE_CONTROL_STATE`
 - `19 RUNTIME_DIAGNOSTIC` debug profile uplink only
 - `20 TRANSPORT_DIAGNOSTIC` Wi-Fi-enabled product/debug uplink
+- `21 APP_RX_COMMIT_ACK` host-to-board product-link ACK only
+- `22 LINK_RELIABILITY_DIAGNOSTIC` product uplink
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -103,8 +136,9 @@ parse by `payload_len` and skip unknown trailing bytes.
 - `24..31 mono_us u64`
 
 `STREAM_SESSION` is critical evidence. On reconnect, a host waits for a valid
-session anchor before claiming full publication continuity. The board does not
-replay the disconnected interval.
+session anchor before claiming full publication continuity. The retained
+product Wi-Fi sink replays the unacknowledged interval; USB and legacy profiles
+retain their independent sink behavior.
 
 `TRANSPORT_DIAGNOSTIC` schema 1 payload is exactly 128 bytes and is emitted at
 1 Hz only while an uplink host session is open. It is one low-priority
