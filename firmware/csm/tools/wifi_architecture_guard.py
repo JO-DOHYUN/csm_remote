@@ -28,6 +28,12 @@ mailbox_header = (ROOT / "include" / "board" / "uplink" / "WifiWorkerMailbox.h")
 mailbox_source = (
     ROOT / "src" / "board" / "uplink" / "WifiWorkerMailbox.cpp"
 ).read_text(encoding="utf-8")
+publisher_header = (
+    ROOT / "include" / "board" / "uplink" / "CanonicalPublisher.h"
+).read_text(encoding="utf-8")
+publisher_source = (
+    ROOT / "src" / "board" / "uplink" / "CanonicalPublisher.cpp"
+).read_text(encoding="utf-8")
 platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 
 
@@ -513,9 +519,25 @@ for forbidden in (
 for token in (
     "session_targets |= kWifiSessionSinkMask",
     "SessionAnnouncementReason::SinkEpochChanged",
+    "publish_result.missed_required_sink_mask & kWifiSessionSinkMask",
+    "wifi_tcp_sink.isolateMissedSessionAnchor(publish_result.publish_seq)",
 ):
     if token not in main:
         fail(f"fresh connection STREAM_SESSION path is missing {token!r}")
+for token in (
+    "uint8_t required_sink_mask = 0",
+    "uint8_t missed_required_sink_mask = 0",
+):
+    if token not in publisher_header:
+        fail(f"publisher anchor acceptance result is missing {token!r}")
+for token in (
+    "required_sink_mask & ~result.sink_accept_mask",
+    "session_target_sink_mask_ = 0",
+):
+    if token not in publisher_source:
+        fail(f"publisher anchor acceptance enforcement is missing {token!r}")
+if "bool WifiTcpSink::isolateMissedSessionAnchor(" not in sink:
+    fail("Wi-Fi facade lacks requested-anchor epoch isolation")
 
 wifi_begin = main.index("wifi_tcp_sink.begin(wifi_sink_config)")
 remote_begin = main.index("remote_control_runtime.begin(")

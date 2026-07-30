@@ -103,6 +103,8 @@ struct WifiTcpSinkCounters {
   uint64_t first_lost_publish_seq = 0;
   uint64_t last_lost_publish_seq = 0;
   uint32_t live_fifo_loss_total = 0;
+  uint32_t session_anchor_miss_total = 0;
+  uint64_t last_session_anchor_miss_publish_seq = 0;
   bool first_accepted_valid = false;
   bool loss_range_valid = false;
 };
@@ -120,6 +122,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   SinkOfferResult offer(const PublishedFrameView& frame) override;
   SinkServiceResult service(uint32_t byte_budget, uint32_t now_ms,
                             uint32_t now_us);
+  bool isolateMissedSessionAnchor(uint64_t publish_seq);
   void abortQueuedFrames();
   Stream* downlinkStream();
 

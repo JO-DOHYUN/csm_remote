@@ -186,6 +186,30 @@ SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
   return result;
 }
 
+bool WifiTcpSink::isolateMissedSessionAnchor(uint64_t publish_seq) {
+#if BOARD_ENABLE_WIFI_UPLINK
+  counters_.session_anchor_miss_total++;
+  counters_.last_session_anchor_miss_publish_seq = publish_seq;
+  if (!counters_.loss_range_valid ||
+      publish_seq > counters_.last_lost_publish_seq) {
+    noteLiveLossRange(publish_seq, publish_seq, 1);
+  }
+  if (!connected_) return false;
+
+  connected_ = false;
+  isolation_latched_ = true;
+  isolation_pending_worker_epoch_ = true;
+  session_anchor_queued_ = false;
+  mailbox_.requestDisconnect();
+  effective_connection_epoch_++;
+  counters_.connection_epoch = effective_connection_epoch_;
+  return true;
+#else
+  (void)publish_seq;
+  return false;
+#endif
+}
+
 void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
 Stream* WifiTcpSink::downlinkStream() {

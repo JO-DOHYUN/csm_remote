@@ -30,6 +30,8 @@ struct PublishServiceResult {
   uint8_t sink_accept_count = 0;
   uint8_t connected_sink_mask = 0;
   uint8_t sink_accept_mask = 0;
+  uint8_t required_sink_mask = 0;
+  uint8_t missed_required_sink_mask = 0;
   uint64_t publish_seq = 0;
 };
 

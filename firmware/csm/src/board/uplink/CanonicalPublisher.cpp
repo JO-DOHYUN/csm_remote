@@ -129,6 +129,7 @@ PublishServiceResult CanonicalPublisher::publishSession(uint64_t now_us) {
   if (session_target_sink_mask_ == 0) {
     session_target_sink_mask_ = connectedSinkMask();
   }
+  const uint8_t required_sink_mask = session_target_sink_mask_;
   uint8_t payload[kStreamSessionPayloadLen] = {};
   payload[0] = csm::kStreamSessionSchema;
   payload[csm::kStreamSessionReasonOffset] = static_cast<uint8_t>(session_reason_);
@@ -141,6 +142,9 @@ PublishServiceResult CanonicalPublisher::publishSession(uint64_t now_us) {
   PublishServiceResult result =
       publish(csm::RecordType::StreamSession, payload, sizeof(payload),
               UplinkPriority::Critical, 0, true);
+  result.required_sink_mask = required_sink_mask;
+  result.missed_required_sink_mask =
+      static_cast<uint8_t>(required_sink_mask & ~result.sink_accept_mask);
   // A canonical sequence may be assigned only once. Re-encoding a missed
   // per-sink anchor on every service pass creates new publish identities and
   // floods healthy sinks. The failed sink owns its admission failure and must

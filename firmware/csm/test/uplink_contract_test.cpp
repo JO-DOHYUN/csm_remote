@@ -88,6 +88,8 @@ void session_is_identical_before_fanout() {
   CHECK(result.record_published);
   CHECK(result.session_record);
   CHECK(result.sink_accept_count == 2);
+  CHECK(result.required_sink_mask == ((1u << 0) | (1u << 1)));
+  CHECK(result.missed_required_sink_mask == 0);
   CHECK(result.publish_seq == 0);
   CHECK(usb.length == wifi.length);
   CHECK(std::memcmp(usb.bytes, wifi.bytes, usb.length) == 0);
@@ -116,6 +118,8 @@ void missed_session_anchor_is_one_shot_until_a_new_epoch() {
   const auto missed = publisher.service(2);
   CHECK(missed.session_record);
   CHECK(missed.sink_accept_mask == (1u << 0));
+  CHECK(missed.required_sink_mask == (1u << 1));
+  CHECK(missed.missed_required_sink_mask == (1u << 1));
 
   wifi.overflow = false;
   const auto no_flood = publisher.service(3);
@@ -128,6 +132,8 @@ void missed_session_anchor_is_one_shot_until_a_new_epoch() {
   const auto next_epoch = publisher.service(4);
   CHECK(next_epoch.session_record);
   CHECK((next_epoch.sink_accept_mask & (1u << 1)) != 0);
+  CHECK(next_epoch.required_sink_mask == (1u << 1));
+  CHECK(next_epoch.missed_required_sink_mask == 0);
 
   const uint8_t payload[] = {0x55};
   CHECK(publisher.enqueueRecord(RecordType::BoardEvent, payload, sizeof(payload),

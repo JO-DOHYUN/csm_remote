@@ -82,6 +82,11 @@ FIFO다. 이 용량은 RTOS와 network scheduling의 짧은 변동을 흡수하�
 - 다음 client가 연결되면 현재 `boot_session_id`, 현재 full
   `publish_seq64`, 새 connection epoch를 가진 fresh `STREAM_SESSION`을
   가장 먼저 보내고 그 뒤의 현재 Live만 전송한다.
+- sink epoch가 요구한 sink mask는 delivery filter가 아니라 required
+  acceptance mask다. anchor는 연결된 sink 전체에 동일 canonical bytes로
+  한 번 fanout하고, 요구된 Wi-Fi sink가 이를 수락하지 못하면 main이
+  해당 Wi-Fi epoch만 즉시 isolation/flush한다. USB 수락은 Wi-Fi 수락
+  성공으로 대체되지 않는다.
 
 무손실 장기 기록이 제품 요구가 되면 CSM RAM queue를 키우지 않는다. 별도
 logger/storage에 용량, wear, retention과 export 계약을 승인해야 한다.

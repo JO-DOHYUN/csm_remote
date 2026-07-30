@@ -1789,7 +1789,17 @@ static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_
   csm::board::uplink::SinkServiceResult wifi_poll_result;
   poll_uplink_connections(now_ms, &usb_poll_result, &wifi_poll_result);
   record_runtime_breadcrumb(RuntimeStageCanonicalPublish);
-  canonical_publisher.service(mono64_us());
+  const csm::board::uplink::PublishServiceResult publish_result =
+      canonical_publisher.service(mono64_us());
+#if BOARD_ENABLE_WIFI_UPLINK
+  if (publish_result.session_record &&
+      (publish_result.missed_required_sink_mask & kWifiSessionSinkMask) != 0) {
+    // The connection cannot consume any normal canonical record without the
+    // exact full-sequence anchor for its epoch. Close only this Wi-Fi epoch;
+    // USB and the global publisher sequence continue independently.
+    wifi_tcp_sink.isolateMissedSessionAnchor(publish_result.publish_seq);
+  }
+#endif
   record_runtime_breadcrumb(RuntimeStageIdle);
   record_runtime_breadcrumb(RuntimeStageUsbTransmit);
   csm::board::uplink::SinkServiceResult usb_result =

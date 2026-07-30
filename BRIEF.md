@@ -27,6 +27,13 @@ Updated: 2026-07-30
   `RELEASE BLOCKED` until actual Android AP operation, simultaneous RC/dual-CAN
   load, fault injection, and soak gates pass. Older dated sections below are
   historical evidence, not current release claims.
+- The cross-project D-027 anchor-acceptance closure is implemented after that
+  uploaded baseline. `STREAM_SESSION` remains one canonical publication to all
+  connected sinks, while its requested sink mask is now enforced as a required
+  acceptance mask. A missed requested Wi-Fi anchor isolates only that Wi-Fi
+  epoch before normal records. Uplink/isolation host contracts, the Wi-Fi
+  architecture guard and the feeder product M7 build pass at 170,880 B RAM and
+  367,544 B flash. This newer artifact has not been uploaded or Android-qualified.
 
 ## 2026-07-28 retained Wi-Fi product candidate — superseded by D-030
 
