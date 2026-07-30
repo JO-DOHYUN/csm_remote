@@ -89,7 +89,7 @@ void session_is_identical_before_fanout() {
   CHECK(publisher.nextPublishSeq() == 1);
 }
 
-void late_joining_sink_must_receive_its_own_session_anchor() {
+void missed_session_anchor_is_one_shot_until_a_new_epoch() {
   FakeSink usb;
   FakeSink wifi;
   wifi.connected_value = false;
@@ -110,14 +110,21 @@ void late_joining_sink_must_receive_its_own_session_anchor() {
   CHECK(missed.sink_accept_mask == (1u << 0));
 
   wifi.overflow = false;
-  const auto retried = publisher.service(3);
-  CHECK(retried.session_record);
-  CHECK((retried.sink_accept_mask & (1u << 1)) != 0);
+  const auto no_flood = publisher.service(3);
+  CHECK(!no_flood.session_record);
+  CHECK(usb.accept_total == 2);
+
+  publisher.requestSessionAnnouncement(
+      csm::board::uplink::SessionAnnouncementReason::SinkEpochChanged,
+      1u << 1);
+  const auto next_epoch = publisher.service(4);
+  CHECK(next_epoch.session_record);
+  CHECK((next_epoch.sink_accept_mask & (1u << 1)) != 0);
 
   const uint8_t payload[] = {0x55};
   CHECK(publisher.enqueueRecord(RecordType::BoardEvent, payload, sizeof(payload),
                                 UplinkPriority::Normal));
-  CHECK(!publisher.service(4).session_record);
+  CHECK(!publisher.service(5).session_record);
 }
 
 void explicit_session_refresh_precedes_queued_handshake_records() {
@@ -609,7 +616,7 @@ void wifi_queue_snapshot_supports_product_descriptor_capacity() {
 
 int main() {
   session_is_identical_before_fanout();
-  late_joining_sink_must_receive_its_own_session_anchor();
+  missed_session_anchor_is_one_shot_until_a_new_epoch();
   explicit_session_refresh_precedes_queued_handshake_records();
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();

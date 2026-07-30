@@ -141,13 +141,12 @@ PublishServiceResult CanonicalPublisher::publishSession(uint64_t now_us) {
   PublishServiceResult result =
       publish(csm::RecordType::StreamSession, payload, sizeof(payload),
               UplinkPriority::Critical, 0, true);
-  const uint8_t active_targets = static_cast<uint8_t>(
-      session_target_sink_mask_ & result.connected_sink_mask);
-  if (active_targets == 0 ||
-      (result.sink_accept_mask & active_targets) == active_targets) {
-    session_pending_ = false;
-    session_target_sink_mask_ = 0;
-  }
+  // A canonical sequence may be assigned only once. Re-encoding a missed
+  // per-sink anchor on every service pass creates new publish identities and
+  // floods healthy sinks. The failed sink owns its admission failure and must
+  // recover on a later connection epoch.
+  session_pending_ = false;
+  session_target_sink_mask_ = 0;
   return result;
 }
 

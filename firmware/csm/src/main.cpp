@@ -1722,14 +1722,16 @@ static uint32_t observed_wifi_disconnect_total = 0;
 static uint32_t observed_wifi_journal_full_total = 0;
 static void emit_capability();
 
-static void request_connection_session(bool usb_epoch_changed) {
+static void request_connection_session(bool usb_epoch_changed,
+                                       bool wifi_epoch_changed) {
   uint8_t session_targets = 0;
   if (usb_epoch_changed && usb_cdc_sink.connected()) {
     session_targets |= kUsbSessionSinkMask;
   }
 #if BOARD_ENABLE_WIFI_UPLINK
   bool refresh_wifi_capability = false;
-  if (wifi_tcp_sink.connected() && !wifi_tcp_sink.sessionAnchorQueued()) {
+  if (wifi_epoch_changed && wifi_tcp_sink.socketConnected() &&
+      !wifi_tcp_sink.sessionAnchorQueued()) {
     session_targets |= kWifiSessionSinkMask;
     const uint32_t epoch = wifi_tcp_sink.counters().connection_epoch;
     if (epoch != last_wifi_capability_epoch) {
@@ -1763,7 +1765,7 @@ static void poll_uplink_connections(
   if (wifi_poll_result != nullptr) *wifi_poll_result = wifi_poll;
   record_runtime_breadcrumb(RuntimeStageIdle);
 #endif
-  request_connection_session(usb_poll.epoch_changed);
+  request_connection_session(usb_poll.epoch_changed, wifi_poll.epoch_changed);
 }
 
 static void merge_sink_service_result(
@@ -1800,7 +1802,8 @@ static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_
   merge_sink_service_result(wifi_result, wifi_poll_result);
   record_runtime_breadcrumb(RuntimeStageIdle);
 #endif
-  request_connection_session(usb_result.epoch_changed);
+  request_connection_session(usb_result.epoch_changed,
+                             wifi_result.epoch_changed);
   if (usb_result.backpressure_event) {
     emit_board_event(EventSerialTxBackpressure,
                      static_cast<uint16_t>(usb_result.backpressure_duration_ms & 0xFFFF),
