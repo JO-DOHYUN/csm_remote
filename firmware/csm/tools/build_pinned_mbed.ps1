@@ -48,9 +48,11 @@ function Get-Sha256([string]$Path) {
 function Test-ProductSourcePatches {
   $heap = Join-Path $mbedRoot 'connectivity\lwipstack\lwip-sys\arch\lwip_sys_arch.c'
   $buffer = Join-Path $mbedRoot 'connectivity\drivers\wifi\COMPONENT_WHD\whd-bsp-integration\cy_network_buffer.c'
+  $sdio = Join-Path $mbedRoot 'targets\TARGET_STM\TARGET_STM32H7\TARGET_STM32H747xI\TARGET_PORTENTA_H7\COMPONENT_WHD\port\cyhal_sdio.c'
   $portenta = Join-Path $mbedRoot 'targets\TARGET_STM\TARGET_STM32H7\TARGET_STM32H747xI\TARGET_PORTENTA_H7\COMPONENT_WHD\CMakeLists.txt'
   return (Select-String -Quiet -LiteralPath $heap -Pattern '.csm_lwip_heap_d3') -and
     (Select-String -Quiet -LiteralPath $buffer -Pattern 'pbuf_alloc\(PBUF_RAW, size, PBUF_RAM\)') -and
+    (Select-String -Quiet -LiteralPath $sdio -Pattern 'Product contract: propagate SDIO failure') -and
     (Select-String -Quiet -LiteralPath $portenta -Pattern 'port/cy_hal.c')
 }
 
@@ -136,12 +138,17 @@ if ((Get-Sha256 $stockLibrary) -ne $stockLibrarySha -or
 }
 
 $compiledRoot = Join-Path $cmakeBuild 'CMakeFiles\csm_mbed_product.dir'
-if ($PackageOnly -and -not (Test-Path -LiteralPath $compiledRoot)) {
-  $compiledRoot = Join-Path $buildRoot 'mbed-product-app\short-build\CMakeFiles\csm_mbed_product.dir'
+$shortCompiledRoot = Join-Path $buildRoot 'mbed-product-app\short-build\CMakeFiles\csm_mbed_product.dir'
+if ($PackageOnly -and (Test-Path -LiteralPath $shortCompiledRoot)) {
+  # The Mbed compiler expands response files before spawning its child process.
+  # Keep the reproducible short X: build as the packaging source so Windows'
+  # command-line limit cannot turn a valid product build into CreateProcess.
+  $compiledRoot = $shortCompiledRoot
 }
 $generatedConfig = Join-Path $cmakeBuild 'mbed_config.h'
-if ($PackageOnly -and -not (Test-Path -LiteralPath $generatedConfig)) {
-  $generatedConfig = Join-Path $buildRoot 'mbed-product-app\short-build\mbed_config.h'
+$shortGeneratedConfig = Join-Path $buildRoot 'mbed-product-app\short-build\mbed_config.h'
+if ($PackageOnly -and (Test-Path -LiteralPath $shortGeneratedConfig)) {
+  $generatedConfig = $shortGeneratedConfig
 }
 if (-not (Test-Path -LiteralPath $compiledRoot) -or
     -not (Test-Path -LiteralPath $generatedConfig)) {
@@ -151,11 +158,12 @@ if (-not (Test-Path -LiteralPath $compiledRoot) -or
 $objects = Get-ChildItem -Recurse -File $compiledRoot | Where-Object {
   $_.Name -like '*.obj' -and (
     $_.FullName -match '[\\/]connectivity[\\/]lwipstack[\\/]' -or
-    $_.Name -eq 'cy_network_buffer.c.obj'
+    $_.Name -eq 'cy_network_buffer.c.obj' -or
+    $_.Name -eq 'cyhal_sdio.c.obj'
   )
 }
-if ($objects.Count -ne 66) {
-  throw "Expected 66 network replacement objects, found $($objects.Count)"
+if ($objects.Count -ne 67) {
+  throw "Expected 67 network replacement objects, found $($objects.Count)"
 }
 
 $stage = Join-Path $buildRoot ("mbed-overlay-stage-" + [guid]::NewGuid().ToString('N'))

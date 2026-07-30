@@ -31,7 +31,7 @@ bool configureProductMemoryProfile() {
   constexpr uint32_t expected_rasr = ARM_MPU_RASR(
       1,                    // execute never
       ARM_MPU_AP_FULL,      // privileged and unprivileged read/write
-      0,                    // TEX
+      1,                    // TEX: normal memory, non-cacheable
       1,                    // shareable
       0,                    // non-cacheable
       0,                    // non-bufferable
@@ -39,17 +39,15 @@ bool configureProductMemoryProfile() {
       ARM_MPU_REGION_SIZE_64KB);
 
   __DMB();
-  const uint32_t previous_ctrl = MPU->CTRL;
   const uint32_t previous_region = MPU->RNR;
-  MPU->CTRL = 0;
-  __DSB();
-  __ISB();
-
+  // This is the first product-owned D3 configuration, before Wi-Fi starts.
+  // Do not disable the global MPU after Mbed has started: doing so briefly
+  // removes protection/attributes from every active region and can race the
+  // scheduler or an interrupt. Region 15 has the highest priority and only
+  // covers the product-owned D3 window.
   MPU->RNR = kProductD3Region;
   MPU->RBAR = kD3Base;
   MPU->RASR = expected_rasr;
-  MPU->CTRL = previous_ctrl | MPU_CTRL_PRIVDEFENA_Msk |
-              MPU_CTRL_HFNMIENA_Msk | MPU_CTRL_ENABLE_Msk;
   __DSB();
   __ISB();
 

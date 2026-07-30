@@ -1,0 +1,14 @@
+diff --git a/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/port/cyhal_sdio.c b/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/port/cyhal_sdio.c
+--- a/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/port/cyhal_sdio.c
++++ b/targets/TARGET_STM/TARGET_STM32H7/TARGET_STM32H747xI/TARGET_PORTENTA_H7/COMPONENT_WHD/port/cyhal_sdio.c
+@@ -372,7 +372,9 @@ exit:
+         WPRINT_WHD_ERROR(("SDIO->POWER %lx \n", SDIO->POWER));
+         WPRINT_WHD_ERROR(("SDIO->CLKCR %lx \n", SDIO->CLKCR));
+         WPRINT_WHD_ERROR(("result %lx \n", result));
+         WPRINT_WHD_ERROR(("cyhal_sdio_send_cmd %s\n", (result == 0) ? "Passed" : "Failed"));
+-        while (1);
++        // Product contract: propagate SDIO failure to the bounded WHD/AP
++        // transaction. A driver error must isolate the Wi-Fi sink, never
++        // turn into an unbounded MCU-wide stall.
+     }
+     SDMMC1->CMD = 0;
