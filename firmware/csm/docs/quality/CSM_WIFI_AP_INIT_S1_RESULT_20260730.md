@@ -20,11 +20,16 @@
 
 ## Not executed / result
 
-Upload to the physically enumerated `COM7` was attempted once and failed before
-DFU transfer (`OSError(22): no such device`). A subsequent 1200-bps touch could
-not open COM7. Therefore AP start, watchdog-reset absence, USB continuity, and
-CAN continuity are **not claimed**. No additional upload retry was made while
-the owner was away.
+PlatformIO's serial hand-off could not open COM4, but the same binary was then
+written once through the enumerated Arduino DFU bootloader (`2341:035b`, alt 0,
+`0x08040000`) successfully. At 15 seconds after the leave request, the board
+had returned as application COM7 and was absent from the DFU list. This is a
+short boot-continuity pass: no repeated bootloader entry was observed in that
+window.
+
+AP visibility, `BeginAccessPoint` return/error, CAN cadence, and a 30-second
+watchdog-reset absence are still **not claimed** because this short gate did
+not collect typed USB evidence or external CAN data.
 
 ## Next physical gate
 
