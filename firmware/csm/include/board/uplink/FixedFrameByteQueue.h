@@ -63,6 +63,14 @@ class FixedFrameByteQueue {
     uint64_t last_publish_seq = 0;
   };
 
+  struct ClearResult {
+    uint32_t bytes = 0;
+    uint32_t records = 0;
+    uint64_t first_publish_seq = 0;
+    uint64_t last_publish_seq = 0;
+    bool sequence_valid = false;
+  };
+
   explicit FixedFrameByteQueue(Storage& storage) : storage_(&storage) {}
   FixedFrameByteQueue(const FixedFrameByteQueue&) = delete;
   FixedFrameByteQueue& operator=(const FixedFrameByteQueue&) = delete;
@@ -168,28 +176,50 @@ class FixedFrameByteQueue {
     return result;
   }
 
-  uint32_t clear() {
+  ClearResult clearWithEvidence(uint32_t excluded_tail_records = 0) {
+    ClearResult result;
     uint32_t head = descriptor_head_.load(std::memory_order_relaxed);
     const uint32_t tail = descriptor_tail_.load(std::memory_order_acquire);
+    const uint32_t physical_records = tail - head;
+    if (excluded_tail_records > physical_records) {
+      excluded_tail_records = physical_records;
+    }
+    const uint32_t evidence_records =
+        physical_records - excluded_tail_records;
     const uint32_t byte_head = byte_head_.load(std::memory_order_relaxed);
     const bool had_descriptors = head != tail;
     const uint16_t committed_byte_tail =
         had_descriptors
             ? descriptorAt(tail - 1u).byte_end_low
             : static_cast<uint16_t>(byte_head);
-    const uint32_t aborted_bytes = had_descriptors
+    result.bytes = had_descriptors
         ? static_cast<uint16_t>(
               committed_byte_tail - static_cast<uint16_t>(byte_head))
         : 0u;
+    uint32_t cleared_records = 0;
     while (head != tail) {
+      if (cleared_records < evidence_records) {
+        const Descriptor& descriptor = descriptorAt(head);
+        if (!result.sequence_valid) {
+          result.first_publish_seq = descriptor.publish_seq;
+          result.sequence_valid = true;
+        }
+        result.last_publish_seq = descriptor.publish_seq;
+        result.records++;
+      }
       descriptorAt(head).~Descriptor();
       head++;
+      cleared_records++;
     }
     consumer_byte_head_offset_ = advanceRingOffset(
-        consumer_byte_head_offset_, static_cast<uint16_t>(aborted_bytes));
+        consumer_byte_head_offset_, static_cast<uint16_t>(result.bytes));
     descriptor_head_.store(tail, std::memory_order_release);
-    byte_head_.store(byte_head + aborted_bytes, std::memory_order_release);
-    return aborted_bytes;
+    byte_head_.store(byte_head + result.bytes, std::memory_order_release);
+    return result;
+  }
+
+  uint32_t clear() {
+    return clearWithEvidence().bytes;
   }
 
   bool empty() const { return count() == 0; }
@@ -250,6 +280,7 @@ class FixedFrameByteQueue {
     return static_cast<uint16_t>(
         advanced >= ByteCapacity ? advanced - ByteCapacity : advanced);
   }
+
 };
 
 }  // namespace csm::board::uplink

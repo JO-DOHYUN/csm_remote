@@ -73,12 +73,12 @@ def calculate() -> dict:
     ap_sta_concur = macro(worker, "BOARD_WIFI_AP_STA_CONCUR")
     can_queue = macro(main, "BOARD_CAN_QUEUE_SIZE")
 
-    require(queue_records == 1024, "product Wi-Fi descriptor envelope drift")
-    require(queue_bytes == 65520, "product Wi-Fi byte envelope drift")
+    require(queue_records == 128, "product Wi-Fi descriptor envelope drift")
+    require(queue_bytes == 8192, "product Wi-Fi byte envelope drift")
     require(reserve_records == 4, "critical descriptor reserve drift")
     require(reserve_bytes == 2112, "critical byte reserve drift")
     require(stall_ms == 500, "no-progress timeout drift")
-    require(high_water_percent == 96, "pre-full isolation threshold drift")
+    require(high_water_percent == 64, "pre-full isolation threshold drift")
     require(batch_bytes == 1460, "TCP batch target drift")
     require(tx_chunk_bytes == 2920, "TCP write chunk drift")
     require(drain_budget_us == 2000, "nonblocking worker pump budget drift")
@@ -88,8 +88,8 @@ def calculate() -> dict:
     require(ap_sta_concur == 1, "validated WHD compatibility mode drift")
     require(can_queue == 512, "per-bus CAN ingest envelope drift")
     for token in (
-        "BOARD_WIFI_SINK_QUEUE_RECORDS=1024",
-        "BOARD_WIFI_SINK_QUEUE_BYTES=65520",
+        "BOARD_WIFI_SINK_QUEUE_RECORDS=128",
+        "BOARD_WIFI_SINK_QUEUE_BYTES=8192",
         "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
         "BOARD_WIFI_STALL_TIMEOUT_MS=500",
         "BOARD_WIFI_AP_STA_CONCUR=1",
@@ -98,7 +98,7 @@ def calculate() -> dict:
     for token in (
         ".wifi_tx_queue_dtcm (NOLOAD)",
         ".csm_dtcm_bss (NOLOAD)",
-        "0x15FF0",
+        "0x2800",
         "LENGTH(DTCMRAM) - 0x8000",
     ):
         require(token in linker, f"linker ownership guard missing {token}")
@@ -116,7 +116,7 @@ def calculate() -> dict:
         typed_records, "kTransportDiagnosticPayloadLen"
     )
     require(compact_schema == 2, "compact CAN RX schema drift")
-    require(transport_schema == 2, "transport diagnostic schema drift")
+    require(transport_schema == 3, "transport diagnostic schema drift")
     require(transport_payload == 128, "transport diagnostic payload drift")
     rx_fps = 2000
 
@@ -153,10 +153,16 @@ def calculate() -> dict:
     normal_bytes = queue_bytes - reserve_bytes
     normal_records = queue_records - reserve_records
     target_rate = compact_total
-    target_stall_seconds = 1.02
-    target_stall_bytes = math.ceil(target_rate * target_stall_seconds)
+    live_fifo_min_batches = 4
+    live_fifo_required_bytes = batch_bytes * live_fifo_min_batches
     high_water_bytes = math.ceil(queue_bytes * high_water_percent / 100)
-    descriptor_bytes = queue_records * 24
+    max_encoded_frame_bytes = 523
+    fallback_ingress_bytes = math.ceil(
+        target_rate * macro(worker, "BOARD_WIFI_CONNECTED_FALLBACK_MS") / 1000
+    )
+    pressure_guard_bytes = max_encoded_frame_bytes + fallback_ingress_bytes
+    pressure_headroom_bytes = normal_bytes - high_water_bytes
+    descriptor_bytes = queue_records * 16
     dtcm_storage = descriptor_bytes + queue_bytes
     dtcm_usable = 130408
     dtcm_alignment = 32
@@ -170,12 +176,17 @@ def calculate() -> dict:
     require(legacy_rx == 65762, "legacy wire calculation regression")
     require(compact_rx == 44437, "compact wire calculation regression")
     require(compact_total == 57735, "product wire calculation regression")
-    require(dtcm_storage == 90096, "DTCM journal calculation regression")
+    require(dtcm_storage == 10240, "DTCM live FIFO calculation regression")
     require(
-        normal_bytes >= target_stall_bytes,
-        "1.02-second product retention envelope fails",
+        normal_bytes >= live_fifo_required_bytes,
+        "live FIFO no longer holds four complete batch targets",
     )
-    require(high_water_bytes < normal_bytes, "high-water no longer precedes reserve")
+    require(high_water_bytes < normal_bytes,
+            "worker pressure threshold no longer precedes producer reserve")
+    require(
+        pressure_headroom_bytes >= pressure_guard_bytes,
+        "worker pressure threshold cannot absorb one max frame plus fallback ingress",
+    )
     require(dtcm_max_remaining >= 32768, "DTCM safety reserve violated")
 
     return {
@@ -218,15 +229,19 @@ def calculate() -> dict:
                 (measured_raw_high - compact_total) * 100 / measured_raw_high, 2
             ),
         },
-        "stall_envelope": {
+        "live_fifo_envelope": {
             "target_rate_bytes_per_second": target_rate,
-            "target_seconds": target_stall_seconds,
-            "required_bytes": target_stall_bytes,
+            "minimum_batch_count": live_fifo_min_batches,
+            "required_bytes": live_fifo_required_bytes,
             "normal_admission_bytes": normal_bytes,
-            "byte_margin": normal_bytes - target_stall_bytes,
+            "byte_margin": normal_bytes - live_fifo_required_bytes,
             "byte_coverage_seconds": round(normal_bytes / target_rate, 5),
             "normal_admission_records": normal_records,
             "high_water_bytes": high_water_bytes,
+            "max_encoded_frame_bytes": max_encoded_frame_bytes,
+            "fallback_ingress_bytes": fallback_ingress_bytes,
+            "pressure_guard_bytes": pressure_guard_bytes,
+            "pressure_headroom_bytes": pressure_headroom_bytes,
             "high_water_seconds_at_target": round(high_water_bytes / target_rate, 5),
         },
         "memory_bytes": {
@@ -253,10 +268,11 @@ def calculate() -> dict:
             < measured_raw_low,
             "compact_4000fps_fits_measured_raw_high": compact_total_4000
             < measured_raw_high,
-            "product_1_02_second_journal_fits": normal_bytes
-            >= target_stall_bytes,
-            "pre_full_isolation_precedes_reserve": high_water_bytes
-            < normal_bytes,
+            "live_fifo_holds_four_batches": normal_bytes
+            >= live_fifo_required_bytes,
+            "worker_pressure_precedes_reserve": high_water_bytes < normal_bytes,
+            "worker_pressure_protects_reserve": pressure_headroom_bytes
+            >= pressure_guard_bytes,
             "dtcm_safety_reserve_32k": dtcm_max_remaining >= 32768,
         },
     }
@@ -264,7 +280,7 @@ def calculate() -> dict:
 
 def markdown(report: dict) -> str:
     throughput = report["throughput_bytes_per_second"]
-    stall = report["stall_envelope"]
+    live_fifo = report["live_fifo_envelope"]
     memory = report["memory_bytes"]
     gates = report["gates"]
     rows = [
@@ -287,10 +303,18 @@ def markdown(report: dict) -> str:
             "PASS" if gates["compact_4000fps_fits_measured_raw_high"] else "GATE",
         ),
         (
-            "57,735 B/s x 1.02s / normal journal",
-            f"{stall['required_bytes']:,} / "
-            f"{stall['normal_admission_bytes']:,} B",
-            "PASS" if gates["product_1_02_second_journal_fits"] else "FAIL",
+            "Four TCP batches / normal live FIFO",
+            f"{live_fifo['required_bytes']:,} / "
+            f"{live_fifo['normal_admission_bytes']:,} B",
+            "PASS" if gates["live_fifo_holds_four_batches"] else "FAIL",
+        ),
+        (
+            "Pressure headroom / max-frame + fallback ingress",
+            f"{live_fifo['pressure_headroom_bytes']:,} / "
+            f"{live_fifo['pressure_guard_bytes']:,} B",
+            "PASS"
+            if gates["worker_pressure_protects_reserve"]
+            else "FAIL",
         ),
         (
             "Wi-Fi DTCM / usable",

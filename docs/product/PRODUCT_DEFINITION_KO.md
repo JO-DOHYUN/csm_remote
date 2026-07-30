@@ -59,6 +59,13 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 - `CAN_RX_RAW`, `CAN_RX_SEGMENT`, `CONTROL_ACK`, `CAN_TX_RAW`, `BOARD_EVENT`, `BOARD_HEALTH`, `CAPABILITY`는 서로 다른 evidence다.
 - sink 손실, queue overflow, reconnect epoch, parser/storage 실패를 숨기지 않는다.
 - CSM은 Wi-Fi 장기 backlog나 history server가 아니다. Android의 durable capture는 앱 책임이다.
+- Wi-Fi는 앱 capture commit을 기다리지 않으며 과거 telemetry나 motion
+  command를 재생하지 않는다. 재접속은 현재 full publish identity의 새
+  segment에서 시작한다.
+- onboard Wi-Fi worker의 logical isolation은 같은 M7/kernel/WHD/SDIO/전원을
+  공유하는 common-cause fault의 물리 격리를 의미하지 않는다. Wi-Fi fault가
+  RC/CAN에 물리적으로 영향을 줄 수 없다는 양산 요구는 별도 통신
+  MCU/gateway와 HIL 없이 승인하지 않는다.
 
 ## 비목표
 

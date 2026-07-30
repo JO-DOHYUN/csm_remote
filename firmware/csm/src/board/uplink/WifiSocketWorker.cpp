@@ -15,7 +15,9 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
     return false;
   }
   config_ = config;
-  mailbox_.configureReliableSession(config_.boot_session_id);
+  mailbox_.configureSession(config_.boot_session_id);
+  last_admission_snapshot_ = {};
+  (void)mailbox_.tryReadAdmissionSnapshot(last_admission_snapshot_);
   state_ = {};
   state_.runtime_mode = config_.runtime_mode;
   state_.tcp_enabled = wifiRuntimeModeEnablesTcp(config_.runtime_mode);
@@ -95,6 +97,12 @@ void WifiSocketWorker::run() {
     }
 
     serviceRequests();
+    if (mailbox_.abortRequestSequence() != handled_abort_sequence_) {
+      // A producer was still committing while the prior epoch closed. Do not
+      // accept a new client until that epoch's unsent queue is fully discarded.
+      publishState(now_ms);
+      continue;
+    }
     if (client_ == nullptr) {
       if (static_cast<uint32_t>(now_ms - last_accept_poll_ms_) >=
           BOARD_WIFI_ACCEPT_POLL_MS) {
@@ -350,6 +358,7 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
 }
 
 void WifiSocketWorker::serviceAccept(uint32_t) {
+  if (mailbox_.queuePressureDisconnectLatched()) return;
   nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
   beginCall(WifiWorkerCallPhase::AcceptClient);
   TCPSocket* candidate = server_.accept(&error);
@@ -372,14 +381,15 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
       mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
   endCall(0);
 
-  if (!mailbox_.reliableSessionActive()) {
-    mailbox_.activateReliableSession();
-  }
-  mailbox_.discardRx();
+  // RX reset has a worker-owned odd/even generation. Clear the prior socket
+  // epoch before producer admission or facade downlink can observe this one.
+  mailbox_.resetRxForNewEpoch();
+  mailbox_.activateLiveSession();
   client_ = candidate;
   state_.connected = true;
   session_anchor_ = {};
   session_anchor_offset_ = 0;
+  session_anchor_accounted_offset_ = 0;
   session_anchor_required_ = true;
   session_anchor_loaded_ = false;
   tx_progress_.reset();
@@ -405,6 +415,8 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
 
   const uint16_t remaining =
       static_cast<uint16_t>(session_anchor_.length - session_anchor_offset_);
+  if (closePendingIsolationBeforeSocketSend()) return result;
+  if (!refreshAdmissionSnapshotForSettlement()) return result;
   state_.counters.write_attempt_total++;
   state_.counters.send_request_bytes_total += remaining;
   beginCall(WifiWorkerCallPhase::Send);
@@ -422,7 +434,39 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
   }
 
   const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
-  if (disconnect_sequence != handled_disconnect_sequence_) {
+  const bool disconnect_pending =
+      disconnect_sequence != handled_disconnect_sequence_;
+  if (wifiSendResultHasPositiveProgress(sent)) {
+    const uint16_t progressed =
+        sent > remaining ? remaining : static_cast<uint16_t>(sent);
+    const uint16_t prior_anchor_offset = session_anchor_offset_;
+    session_anchor_offset_ =
+        static_cast<uint16_t>(session_anchor_offset_ + progressed);
+    session_anchor_accounted_offset_ = session_anchor_offset_;
+    result.bytes_progressed = progressed;
+    state_.counters.positive_write_total++;
+    state_.counters.bytes_sent_total += progressed;
+    state_.counters.socket_sent_bytes_total += progressed;
+    if (progressed < remaining) state_.counters.partial_write_total++;
+    const WifiTxProgressObservation progress =
+        tx_progress_.observe(completed_ms, true, config_.stall_timeout_ms);
+    if (progress.recovered) {
+      state_.backpressure_active = false;
+      state_.backpressure_duration_ms = 0;
+    }
+    if (wifiSessionAnchorCompleted(prior_anchor_offset, progressed,
+                                   session_anchor_.length)) {
+      session_anchor_required_ = false;
+      state_.counters.fresh_anchor_sent_total++;
+      state_.counters.frame_sent_total++;
+      state_.counters.last_sent_publish_seq = session_anchor_.publish_seq;
+    }
+    closePendingIsolationAfterPositiveSend();
+    notePumpResult(result);
+    (void)now_ms;
+    return result;
+  }
+  if (disconnect_pending) {
     handled_disconnect_sequence_ = disconnect_sequence;
     state_.counters.late_send_result_total++;
     closeClient(WifiCloseReason::IsolationRequest);
@@ -447,33 +491,18 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
     state_.backpressure_active = true;
     state_.backpressure_duration_ms = progress.duration_ms;
     result.no_progress_duration_ms = progress.duration_ms;
-    if (progress.close_no_progress) {
+    const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
+    const bool queue_pressure = wifiQueuePressureReached(
+        queued.queued_bytes, queued.queued_records,
+        BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
+        config_.isolate_high_water_percent);
+    if (wifiShouldCloseQueuePressure(queue_pressure, false)) {
+      closeClient(WifiCloseReason::QueuePressure);
+    } else if (progress.close_no_progress) {
       closeClient(WifiCloseReason::TransmitNoProgress);
     }
     return result;
   }
-
-  const uint16_t progressed =
-      sent > remaining ? remaining : static_cast<uint16_t>(sent);
-  session_anchor_offset_ =
-      static_cast<uint16_t>(session_anchor_offset_ + progressed);
-  result.bytes_progressed = progressed;
-  state_.counters.positive_write_total++;
-  state_.counters.bytes_sent_total += progressed;
-  state_.counters.socket_sent_bytes_total += progressed;
-  if (progressed < remaining) state_.counters.partial_write_total++;
-  const WifiTxProgressObservation progress =
-      tx_progress_.observe(completed_ms, true, config_.stall_timeout_ms);
-  if (progress.recovered) {
-    state_.backpressure_active = false;
-    state_.backpressure_duration_ms = 0;
-  }
-  if (session_anchor_offset_ == session_anchor_.length) {
-    session_anchor_required_ = false;
-    state_.counters.session_anchor_replay_total++;
-  }
-  notePumpResult(result);
-  (void)now_ms;
   return result;
 }
 
@@ -538,6 +567,14 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
     WifiMailboxTxLease lease;
     const uint16_t write_capacity = budget.nextWriteCapacity();
     if (!mailbox_.tryStageTx(tx_buffer_, write_capacity, lease)) break;
+    if (closePendingIsolationBeforeSocketSend()) {
+      notePumpResult(result);
+      return result;
+    }
+    if (!refreshAdmissionSnapshotForSettlement()) {
+      notePumpResult(result);
+      return result;
+    }
 
     state_.counters.write_attempt_total++;
     state_.counters.send_request_bytes_total += lease.length;
@@ -563,14 +600,42 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
     result.bytes_progressed = budget.bytesProgressed();
 
     const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
-    if (disconnect_sequence != handled_disconnect_sequence_) {
+    const bool disconnect_pending =
+        disconnect_sequence != handled_disconnect_sequence_;
+    if (wifiSendResultHasPositiveProgress(sent)) {
+      pending_lease_ = lease;
+      pending_consumed_bytes_ = progressed_bytes;
+      pending_consume_ = true;
+      state_.counters.positive_write_total++;
+      if (pending_consumed_bytes_ < lease.length) {
+        state_.counters.partial_write_total++;
+      }
+      if (!applyPendingConsume()) return result;
+
+      const WifiTxProgressObservation progress =
+          tx_progress_.observe(send_completed_ms, true,
+                               config_.stall_timeout_ms);
+      if (progress.recovered) {
+        if (progress.duration_ms >
+            state_.counters.backpressure_max_duration_ms) {
+          state_.counters.backpressure_max_duration_ms = progress.duration_ms;
+        }
+        state_.backpressure_active = false;
+        state_.backpressure_duration_ms = 0;
+      }
+      if (closePendingIsolationAfterPositiveSend()) {
+        notePumpResult(result);
+        return result;
+      }
+      continue;
+    }
+    if (disconnect_pending) {
       handled_disconnect_sequence_ = disconnect_sequence;
       state_.counters.late_send_result_total++;
       closeClient(WifiCloseReason::IsolationRequest);
       notePumpResult(result);
       return result;
     }
-
     if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
       noteSocketError(static_cast<nsapi_error_t>(sent));
       closeClient(WifiCloseReason::SocketError);
@@ -592,6 +657,16 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       state_.backpressure_active = true;
       state_.backpressure_duration_ms = progress.duration_ms;
       result.no_progress_duration_ms = progress.duration_ms;
+      const WifiMailboxQueueSnapshot current_queue = mailbox_.queueSnapshot();
+      const bool current_pressure = wifiQueuePressureReached(
+          current_queue.queued_bytes, current_queue.queued_records,
+          BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
+          config_.isolate_high_water_percent);
+      if (wifiShouldCloseQueuePressure(current_pressure, false)) {
+        closeClient(WifiCloseReason::QueuePressure);
+        notePumpResult(result);
+        return result;
+      }
       if (state_.backpressure_duration_ms >
           state_.counters.backpressure_max_duration_ms) {
         state_.counters.backpressure_max_duration_ms =
@@ -602,26 +677,6 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       }
       notePumpResult(result);
       return result;
-    }
-
-    pending_lease_ = lease;
-    pending_consumed_bytes_ = progressed_bytes;
-    pending_consume_ = true;
-    state_.counters.positive_write_total++;
-    if (pending_consumed_bytes_ < lease.length) {
-      state_.counters.partial_write_total++;
-    }
-    if (!applyPendingConsume()) return result;
-
-    const WifiTxProgressObservation progress =
-        tx_progress_.observe(send_completed_ms, true,
-                             config_.stall_timeout_ms);
-    if (progress.recovered) {
-      if (progress.duration_ms > state_.counters.backpressure_max_duration_ms) {
-        state_.counters.backpressure_max_duration_ms = progress.duration_ms;
-      }
-      state_.backpressure_active = false;
-      state_.backpressure_duration_ms = 0;
     }
   }
   notePumpResult(result);
@@ -660,6 +715,89 @@ bool WifiSocketWorker::applyPendingConsume() {
   return true;
 }
 
+bool WifiSocketWorker::closePendingIsolationBeforeSocketSend() {
+  const bool queue_pressure_latched =
+      mailbox_.queuePressureDisconnectLatched();
+  const uint32_t queue_pressure_sequence =
+      mailbox_.queuePressureDisconnectRequestSequence();
+  const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
+  if (wifiSocketSendPermitted(
+          queue_pressure_latched, queue_pressure_sequence,
+          handled_queue_pressure_disconnect_sequence_, disconnect_sequence,
+          handled_disconnect_sequence_)) {
+    return false;
+  }
+  switch (wifiPostSendIsolationDecision(
+      queue_pressure_sequence, handled_queue_pressure_disconnect_sequence_,
+      disconnect_sequence, handled_disconnect_sequence_)) {
+    case WifiPostSendIsolation::QueuePressure:
+      handled_queue_pressure_disconnect_sequence_ = queue_pressure_sequence;
+      handled_disconnect_sequence_ = disconnect_sequence;
+      closeClient(WifiCloseReason::QueuePressure);
+      mailbox_.markQueuePressureDisconnectHandled(queue_pressure_sequence);
+      return true;
+    case WifiPostSendIsolation::IsolationRequest:
+      handled_disconnect_sequence_ = disconnect_sequence;
+      closeClient(WifiCloseReason::IsolationRequest);
+      return true;
+    case WifiPostSendIsolation::None:
+      // The producer publishes the latch before advancing its request
+      // sequence. Treat that short transition as a closed send gate; the
+      // control wake will complete the close once the sequence is visible.
+      return true;
+  }
+  return true;
+}
+
+bool WifiSocketWorker::closePendingIsolationAfterPositiveSend() {
+  const bool queue_pressure_latched =
+      mailbox_.queuePressureDisconnectLatched();
+  const uint32_t queue_pressure_sequence =
+      mailbox_.queuePressureDisconnectRequestSequence();
+  const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
+  if (wifiSocketSendPermitted(
+          queue_pressure_latched, queue_pressure_sequence,
+          handled_queue_pressure_disconnect_sequence_, disconnect_sequence,
+          handled_disconnect_sequence_)) {
+    return false;
+  }
+  switch (wifiPostSendIsolationDecision(
+      queue_pressure_sequence, handled_queue_pressure_disconnect_sequence_,
+      disconnect_sequence, handled_disconnect_sequence_)) {
+    case WifiPostSendIsolation::QueuePressure:
+      handled_queue_pressure_disconnect_sequence_ = queue_pressure_sequence;
+      handled_disconnect_sequence_ = disconnect_sequence;
+      state_.counters.late_send_result_total++;
+      closeClient(WifiCloseReason::QueuePressure);
+      // Do not release the producer-side pressure latch until the closed state
+      // has been published by closeClient().
+      mailbox_.markQueuePressureDisconnectHandled(queue_pressure_sequence);
+      return true;
+    case WifiPostSendIsolation::IsolationRequest:
+      handled_disconnect_sequence_ = disconnect_sequence;
+      state_.counters.late_send_result_total++;
+      closeClient(WifiCloseReason::IsolationRequest);
+      return true;
+    case WifiPostSendIsolation::None:
+      // The request sequence is published immediately after the latch.
+      // Return to the worker loop without issuing another socket operation.
+      return true;
+  }
+  return false;
+}
+
+bool WifiSocketWorker::refreshAdmissionSnapshotForSettlement() {
+  WifiMailboxAdmissionSnapshot admission;
+  if (!mailbox_.tryReadAdmissionSnapshot(admission)) {
+    // Never spin while a same-core producer owns the odd revision. Its release
+    // schedules a prompt reconciliation; this pump performs no settlement.
+    mailbox_.requestAdmissionReconcile();
+    return false;
+  }
+  last_admission_snapshot_ = admission;
+  return true;
+}
+
 void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   const bool was_connected = client_ != nullptr || state_.connected;
   const uint32_t no_progress_duration_ms = state_.backpressure_duration_ms;
@@ -675,8 +813,12 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   session_anchor_offset_ = 0;
   session_anchor_required_ = false;
   session_anchor_loaded_ = false;
-  mailbox_.discardRx();
-  if (mailbox_.reliableSessionActive()) mailbox_.rewindUnacked();
+  mailbox_.deactivateLiveSession();
+  mailbox_.invalidateRxEpoch();
+  // Unsent telemetry belongs only to the closed live epoch. It is discarded
+  // asynchronously through the same producer/worker abort gate and is never
+  // replayed into a later connection.
+  mailbox_.requestAbort();
   if (was_connected) {
     state_.counters.connection_epoch++;
     state_.counters.disconnect_total++;
@@ -715,13 +857,27 @@ void WifiSocketWorker::closeSocket(TCPSocket*& socket,
 void WifiSocketWorker::applyAbortRequest() {
   const uint32_t requested = mailbox_.abortRequestSequence();
   if (requested == handled_abort_sequence_) return;
-  uint32_t aborted_bytes = 0;
-  if (!mailbox_.tryApplyAbort(aborted_bytes)) return;
+  if (!refreshAdmissionSnapshotForSettlement()) return;
+  WifiMailboxAbortResult aborted;
+  if (!mailbox_.tryApplyAbort(session_anchor_accounted_offset_, aborted)) {
+    return;
+  }
   handled_abort_sequence_ = requested;
+  session_anchor_accounted_offset_ = 0;
   pending_consume_ = false;
-  if (aborted_bytes > 0) {
+  if (aborted.bytes > 0) {
     state_.counters.queue_abort_total++;
-    state_.counters.queue_aborted_bytes_total += aborted_bytes;
+    state_.counters.queue_aborted_bytes_total += aborted.bytes;
+    state_.counters.queue_aborted_records_total += aborted.records;
+    if (aborted.sequence_valid) {
+      if (!state_.counters.queue_abort_sequence_valid) {
+        state_.counters.first_queue_aborted_publish_seq =
+            aborted.first_publish_seq;
+        state_.counters.queue_abort_sequence_valid = true;
+      }
+      state_.counters.last_queue_aborted_publish_seq =
+          aborted.last_publish_seq;
+    }
   }
 }
 
@@ -767,33 +923,53 @@ void WifiSocketWorker::publishState(uint32_t now_ms, bool force) {
           BOARD_WIFI_STATE_PUBLISH_PERIOD_MS) {
     return;
   }
+  WifiMailboxAdmissionSnapshot admission;
+  if (mailbox_.tryReadAdmissionSnapshot(admission)) {
+    last_admission_snapshot_ = admission;
+  } else {
+    if (!force) return;
+    // A forced epoch/RX/close transition must never be dropped. Settlement
+    // can only advance after refreshAdmissionSnapshotForSettlement() has
+    // cached an admission snapshot covering those bytes/records, so the last
+    // cache remains a coherent conservation owner while this connection state
+    // is published immediately. Producer release requests a fast reconcile.
+    admission = last_admission_snapshot_;
+    mailbox_.requestAdmissionReconcile();
+  }
   last_state_publish_ms_ = now_ms == 0 ? 1 : now_ms;
   sampleStack(now_ms);
   const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
-  const WifiMailboxReliabilitySnapshot reliability =
-      mailbox_.workerReliabilitySnapshot();
-  state_.journal_retained_bytes = queue.queued_bytes;
-  state_.journal_unsent_bytes = queue.unsent_bytes;
-  state_.journal_high_water_bytes = queue.high_water_bytes;
-  state_.journal_retained_records = queue.queued_records;
-  state_.journal_unsent_records = queue.unsent_records;
-  state_.journal_high_water_records = queue.high_water_records;
-  state_.boot_session_id = reliability.boot_session_id;
-  state_.reliable_session_active = reliability.session_active;
-  state_.reliable_ack_valid = reliability.ack_valid;
-  state_.reliable_integrity_fault = reliability.integrity_fault;
-  state_.reliable_replay_active = reliability.replay_active;
-  state_.counters.last_sent_publish_seq =
-      reliability.highest_sent_publish_seq;
-  state_.counters.last_acked_publish_seq =
-      reliability.last_acked_publish_seq;
-  state_.counters.ack_reclaimed_bytes_total =
-      reliability.reclaimed_bytes_total;
-  state_.counters.app_ack_accepted_total =
-      reliability.ack_accepted_total;
-  state_.counters.app_ack_rejected_total =
-      reliability.ack_rejected_total;
-  state_.counters.replay_rewind_total = reliability.rewind_total;
+  state_.accepted_bytes_total = admission.accepted_bytes_total;
+  state_.accepted_records_total = admission.accepted_records_total;
+  state_.last_accepted_publish_seq =
+      admission.last_accepted_publish_seq;
+  state_.accepted_sequence_valid = admission.sequence_valid;
+  state_.queue_bytes = wifiPendingAcceptedBytes(
+      admission.accepted_bytes_total,
+      state_.counters.socket_sent_bytes_total,
+      state_.counters.queue_aborted_bytes_total);
+  state_.queue_high_water_bytes = queue.high_water_bytes;
+  state_.queue_records =
+      admission.accepted_records_total -
+      state_.counters.frame_sent_total -
+      state_.counters.queue_aborted_records_total;
+  state_.queue_high_water_records = queue.high_water_records;
+  WifiMailboxSessionAnchor pending_anchor;
+  if (mailbox_.tryReadSessionAnchor(pending_anchor)) {
+    const uint16_t sent =
+        session_anchor_accounted_offset_ < pending_anchor.length
+            ? session_anchor_accounted_offset_
+            : pending_anchor.length;
+    state_.fresh_anchor_pending_bytes = pending_anchor.length - sent;
+    state_.fresh_anchor_pending_records =
+        state_.fresh_anchor_pending_bytes == 0 ? 0u : 1u;
+  } else {
+    state_.fresh_anchor_pending_bytes = 0;
+    state_.fresh_anchor_pending_records = 0;
+  }
+  state_.boot_session_id = config_.boot_session_id;
+  state_.live_session_active = mailbox_.liveSessionActive();
+  state_.rx_epoch_generation = mailbox_.rxEpochGeneration();
   state_.heartbeat_ms = now_ms;
   mailbox_.publishState(state_);
 }

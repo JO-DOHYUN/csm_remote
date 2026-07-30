@@ -29,10 +29,10 @@ uint16_t build_wifi_transport_diagnostic_payload(
                     snapshot.offer_bytes_total);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticAcceptedBytesOffset,
                     snapshot.accepted_bytes_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticDisconnectedTotalOffset,
-                    snapshot.disconnected_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticOverflowTotalOffset,
-                    snapshot.overflow_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticAcceptedRecordsOffset,
+                    snapshot.accepted_records_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticRejectedRecordsOffset,
+                    snapshot.rejected_records_total);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticQueueBytesOffset,
                     snapshot.queue_bytes);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticQueueRecordsOffset,
@@ -61,19 +61,15 @@ uint16_t build_wifi_transport_diagnostic_payload(
                     snapshot.queue_pressure_close_total);
   CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticQueueHighWaterRecordsOffset,
                     snapshot.queue_high_water_records);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticOfferReservedTotalOffset,
-                    snapshot.offer_reserved_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticOfferFullTotalOffset,
-                    snapshot.offer_full_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWriteAttemptTotalOffset,
-                    snapshot.write_attempt_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticPartialWriteTotalOffset,
-                    snapshot.partial_write_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticSendRequestBytesOffset,
-                    snapshot.send_request_bytes_total);
-  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticWorkerStackFreeOffset,
-                    snapshot.worker_stack_free);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticAbortedBytesOffset,
+                    snapshot.aborted_bytes_total);
+  CSM_WIFI_DIAG_U32(csm::kTransportDiagnosticAbortedRecordsOffset,
+                    snapshot.aborted_records_total);
 #undef CSM_WIFI_DIAG_U32
+  csm::wr_u64_le(&payload[csm::kTransportDiagnosticFirstLostPublishSeqOffset],
+                 snapshot.first_lost_publish_seq);
+  csm::wr_u64_le(&payload[csm::kTransportDiagnosticLastLostPublishSeqOffset],
+                 snapshot.last_lost_publish_seq);
   csm::wr_u64_le(
       &payload[csm::kTransportDiagnosticLastAcceptedPublishSeqOffset],
       snapshot.last_accepted_publish_seq);

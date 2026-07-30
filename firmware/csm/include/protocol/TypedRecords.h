@@ -187,7 +187,7 @@ static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagCompleted = (1u << 6);
 static constexpr uint8_t kRuntimeDiagnosticWifiCallFlagContractChanged = (1u << 7);
 static constexpr uint16_t kTransportDiagnosticPayloadLen = 128;
 static constexpr uint8_t kTransportDiagnosticLegacySchema = 1;
-static constexpr uint8_t kTransportDiagnosticSchema = 2;
+static constexpr uint8_t kTransportDiagnosticSchema = 3;
 static constexpr uint8_t kTransportDiagnosticMonoUsOffset = 0;
 static constexpr uint8_t kTransportDiagnosticSchemaOffset = 8;
 static constexpr uint8_t kTransportDiagnosticFlagsOffset = 9;
@@ -196,8 +196,8 @@ static constexpr uint8_t kTransportDiagnosticRuntimeModeOffset = 11;
 static constexpr uint8_t kTransportDiagnosticConnectionEpochOffset = 12;
 static constexpr uint8_t kTransportDiagnosticOfferBytesOffset = 16;
 static constexpr uint8_t kTransportDiagnosticAcceptedBytesOffset = 20;
-static constexpr uint8_t kTransportDiagnosticDisconnectedTotalOffset = 24;
-static constexpr uint8_t kTransportDiagnosticOverflowTotalOffset = 28;
+static constexpr uint8_t kTransportDiagnosticAcceptedRecordsOffset = 24;
+static constexpr uint8_t kTransportDiagnosticRejectedRecordsOffset = 28;
 static constexpr uint8_t kTransportDiagnosticQueueBytesOffset = 32;
 static constexpr uint8_t kTransportDiagnosticQueueRecordsOffset = 36;
 static constexpr uint8_t kTransportDiagnosticQueueHighWaterBytesOffset = 40;
@@ -212,22 +212,21 @@ static constexpr uint8_t kTransportDiagnosticNoProgressMaxMsOffset = 72;
 static constexpr uint8_t kTransportDiagnosticStallCloseOffset = 76;
 static constexpr uint8_t kTransportDiagnosticQueuePressureCloseOffset = 80;
 static constexpr uint8_t kTransportDiagnosticQueueHighWaterRecordsOffset = 84;
-static constexpr uint8_t kTransportDiagnosticOfferReservedTotalOffset = 88;
-static constexpr uint8_t kTransportDiagnosticOfferFullTotalOffset = 92;
-static constexpr uint8_t kTransportDiagnosticWriteAttemptTotalOffset = 96;
-static constexpr uint8_t kTransportDiagnosticPartialWriteTotalOffset = 100;
-static constexpr uint8_t kTransportDiagnosticSendRequestBytesOffset = 104;
-static constexpr uint8_t kTransportDiagnosticWorkerStackFreeOffset = 108;
+static constexpr uint8_t kTransportDiagnosticAbortedBytesOffset = 88;
+static constexpr uint8_t kTransportDiagnosticAbortedRecordsOffset = 92;
+static constexpr uint8_t kTransportDiagnosticFirstLostPublishSeqOffset = 96;
+static constexpr uint8_t kTransportDiagnosticLastLostPublishSeqOffset = 104;
 static constexpr uint8_t kTransportDiagnosticLastAcceptedPublishSeqOffset = 112;
 static constexpr uint8_t kTransportDiagnosticLastSentPublishSeqOffset = 120;
 static constexpr uint8_t kTransportDiagnosticFlagEnabled = 1u << 0;
 static constexpr uint8_t kTransportDiagnosticFlagConnected = 1u << 1;
 static constexpr uint8_t kTransportDiagnosticFlagBackpressure = 1u << 2;
 static constexpr uint8_t kTransportDiagnosticFlagQueuePressureLatched = 1u << 3;
+static constexpr uint8_t kTransportDiagnosticFlagLossRangeValid = 1u << 4;
 
-// Required Product HMI Link conservation snapshot. These counters remain in
-// release builds; optional deep lwIP/WHD/SDIO probes are a separate,
-// compile-time removable diagnostic layer.
+// Reserved legacy schema for decoding retained captures only. Current product
+// firmware neither publishes nor advertises record 22; live-link conservation
+// evidence is carried by TRANSPORT_DIAGNOSTIC schema 3.
 static constexpr uint16_t kLinkReliabilityDiagnosticPayloadLen = 128;
 static constexpr uint8_t kLinkReliabilityDiagnosticSchema = 1;
 static constexpr uint8_t kLinkReliabilityDiagnosticMonoUsOffset = 0;

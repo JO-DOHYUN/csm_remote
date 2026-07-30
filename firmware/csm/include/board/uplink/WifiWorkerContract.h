@@ -77,12 +77,16 @@ static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
               "Wi-Fi startup retry interval must be non-zero");
 
 #ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
-#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 96
+#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 64
 #endif
 
 static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
                   BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT < 100,
               "Wi-Fi isolation high-water percent must be in (0, 100)");
+
+#ifndef BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND
+#define BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND 57735
+#endif
 
 namespace csm::board::uplink {
 
@@ -278,6 +282,13 @@ struct WifiTransmitPumpResult {
   }
 };
 
+constexpr bool wifiSessionAnchorCompleted(uint16_t prior_offset,
+                                          uint16_t progressed,
+                                          uint16_t anchor_length) {
+  return anchor_length != 0 && prior_offset < anchor_length &&
+         static_cast<uint32_t>(prior_offset) + progressed >= anchor_length;
+}
+
 constexpr bool wifiQueuePressureReached(uint32_t queued_bytes,
                                         uint32_t queued_records,
                                         uint32_t byte_capacity,
@@ -293,6 +304,11 @@ constexpr bool wifiQueuePressureReached(uint32_t queued_bytes,
       static_cast<uint64_t>(queued_records) * 100u >=
           static_cast<uint64_t>(record_capacity) * high_water_percent;
   return byte_pressure || record_pressure;
+}
+
+constexpr bool wifiShouldCloseQueuePressure(bool pressure,
+                                            bool socket_progressed) {
+  return pressure && !socket_progressed;
 }
 
 // Socket no-progress is closed by an independent timeout. Queue high-water is
@@ -346,6 +362,54 @@ struct WifiWorkerCallSnapshot {
   uint32_t heartbeat_ms = 0;
 };
 
+constexpr bool wifiShouldSignalOpaqueSendPressure(
+    bool pressure, const WifiWorkerCallSnapshot& call, uint32_t now_ms,
+    uint32_t observation_ms) {
+  return pressure && call.coherent && call.in_progress &&
+         call.phase == WifiWorkerCallPhase::Send && observation_ms > 0 &&
+         wifiObservedAgeMs(now_ms, call.started_ms) >= observation_ms;
+}
+
+constexpr bool wifiSendResultHasPositiveProgress(int32_t result) {
+  return result > 0;
+}
+
+enum class WifiPostSendIsolation : uint8_t {
+  None = 0,
+  QueuePressure,
+  IsolationRequest,
+};
+
+constexpr WifiPostSendIsolation wifiPostSendIsolationDecision(
+    uint32_t queue_pressure_sequence, uint32_t handled_queue_pressure_sequence,
+    uint32_t disconnect_sequence, uint32_t handled_disconnect_sequence) {
+  if (queue_pressure_sequence != handled_queue_pressure_sequence) {
+    return WifiPostSendIsolation::QueuePressure;
+  }
+  if (disconnect_sequence != handled_disconnect_sequence) {
+    return WifiPostSendIsolation::IsolationRequest;
+  }
+  return WifiPostSendIsolation::None;
+}
+
+constexpr bool wifiSocketSendPermitted(
+    bool queue_pressure_latched, uint32_t queue_pressure_sequence,
+    uint32_t handled_queue_pressure_sequence, uint32_t disconnect_sequence,
+    uint32_t handled_disconnect_sequence) {
+  return !queue_pressure_latched &&
+         wifiPostSendIsolationDecision(
+             queue_pressure_sequence, handled_queue_pressure_sequence,
+             disconnect_sequence, handled_disconnect_sequence) ==
+             WifiPostSendIsolation::None;
+}
+
+constexpr uint32_t wifiPendingAcceptedBytes(uint64_t accepted_bytes,
+                                            uint64_t socket_sent_bytes,
+                                            uint64_t aborted_bytes) {
+  return static_cast<uint32_t>(
+      accepted_bytes - socket_sent_bytes - aborted_bytes);
+}
+
 struct WifiWorkerCounters {
   uint32_t worker_start_total = 0;
   uint32_t worker_start_fail_total = 0;
@@ -366,7 +430,11 @@ struct WifiWorkerCounters {
   uint32_t backpressure_total = 0;
   uint32_t backpressure_max_duration_ms = 0;
   uint32_t queue_abort_total = 0;
-  uint32_t queue_aborted_bytes_total = 0;
+  uint64_t queue_aborted_bytes_total = 0;
+  uint32_t queue_aborted_records_total = 0;
+  uint64_t first_queue_aborted_publish_seq = 0;
+  uint64_t last_queue_aborted_publish_seq = 0;
+  bool queue_abort_sequence_valid = false;
   uint32_t connection_epoch = 0;
   uint32_t connect_total = 0;
   uint32_t disconnect_total = 0;
@@ -392,12 +460,7 @@ struct WifiWorkerCounters {
   uint32_t bytes_per_wake_max = 0;
   uint32_t writes_per_wake_max = 0;
   uint64_t last_sent_publish_seq = 0;
-  uint64_t last_acked_publish_seq = 0;
-  uint64_t ack_reclaimed_bytes_total = 0;
-  uint32_t app_ack_accepted_total = 0;
-  uint32_t app_ack_rejected_total = 0;
-  uint32_t replay_rewind_total = 0;
-  uint32_t session_anchor_replay_total = 0;
+  uint32_t fresh_anchor_sent_total = 0;
 };
 
 struct WifiWorkerStateSnapshot {
@@ -411,10 +474,7 @@ struct WifiWorkerStateSnapshot {
   bool network_ready = false;
   bool connected = false;
   bool backpressure_active = false;
-  bool reliable_session_active = false;
-  bool reliable_ack_valid = false;
-  bool reliable_integrity_fault = false;
-  bool reliable_replay_active = false;
+  bool live_session_active = false;
   uint32_t backpressure_duration_ms = 0;
   uint32_t stall_event_sequence = 0;
   uint32_t stall_event_duration_ms = 0;
@@ -422,12 +482,17 @@ struct WifiWorkerStateSnapshot {
   uint32_t stack_free_bytes = 0;
   uint32_t stack_max_used_bytes = 0;
   int32_t last_network_error = 0;
-  uint32_t journal_retained_bytes = 0;
-  uint32_t journal_unsent_bytes = 0;
-  uint32_t journal_high_water_bytes = 0;
-  uint32_t journal_retained_records = 0;
-  uint32_t journal_unsent_records = 0;
-  uint32_t journal_high_water_records = 0;
+  uint32_t queue_bytes = 0;
+  uint32_t queue_high_water_bytes = 0;
+  uint32_t queue_records = 0;
+  uint32_t queue_high_water_records = 0;
+  uint32_t fresh_anchor_pending_bytes = 0;
+  uint32_t fresh_anchor_pending_records = 0;
+  uint64_t accepted_bytes_total = 0;
+  uint32_t accepted_records_total = 0;
+  uint64_t last_accepted_publish_seq = 0;
+  uint32_t rx_epoch_generation = 0;
+  bool accepted_sequence_valid = false;
   uint64_t boot_session_id = 0;
   WifiCloseReason last_close_reason = WifiCloseReason::None;
   WifiWorkerCounters counters;

@@ -1,22 +1,46 @@
 # TRANSPORT_AND_RECORDS_KO
 
-## 2026-07-28 retained product-link contract
+## 2026-07-30 live-first product-link contract
 
-This section supersedes the older reconnect/no-replay statements below.
+This section supersedes the 2026-07-28 retained product-link contract and all
+older reconnect/replay statements below.
 
-- Record `21 APP_RX_COMMIT_ACK` is Android-to-CSM transport control-plane.
-  Its payload is exactly 16 bytes:
+- The product Wi-Fi uplink is live-only. It uses a bounded FIFO of 128 records
+  and 8,192 encoded bytes. It is a scheduling-jitter buffer, not a journal.
+- A positive socket send immediately releases the accepted bytes. A completed
+  record is released immediately; a partial write retains only its unsent
+  suffix.
+- There is no application receive/commit ACK, reclaim cursor, disconnect
+  rewind, or network backlog replay.
+- Queue overflow or socket stall closes only the Wi-Fi epoch, flushes every
+  queued/partial byte from that epoch, and records the exact loss/close
+  evidence. RC, authority, CAN, canonical publication, and USB continue.
+- A new TCP client receives a fresh current `STREAM_SESSION` before any
+  subsequent Live record. No record from the previous TCP epoch is replayed.
+- The sink is not publisher-connected until the facade has observed the
+  physical socket epoch. The mailbox rejects every non-`STREAM_SESSION` offer
+  until that epoch's canonical anchor is captured. `downlinkStream()` uses the
+  same live-epoch predicate and the same even RX generation observed by the
+  worker and facade. The worker invalidates and clears the prior RX epoch
+  before a new one becomes live, so producer isolation closes command RX
+  immediately instead of waiting for vendor socket close and stale downlink
+  bytes cannot cross reconnect.
+- Android Capture is an independent consumer. Capture open/write/fsync/storage
+  failure never controls CSM admission, socket lifetime, or Live delivery.
+
+Compatibility:
+
+- Record `21` keeps its historical name `APP_RX_COMMIT_ACK` and ID but is
+  legacy reserved. Current CSM implementations decode-ignore a valid legacy
+  frame and must not change RAM ownership, permission, epoch, queue, or any
+  other product state. The ID must not be reassigned.
+  Its legacy payload remains exactly 16 bytes:
   `boot_session_id u64_le` at 0 and
   `last_contiguous_publish_seq u64_le` at 8.
-- The ACK watermark means the original canonical frame bytes through that
-  sequence were accepted by the single ordered `SessionCore`, appended to the
-  bounded capture store, and made durable by `fsync`. UI projection, socket
-  receipt, parser dispatch, and record `22` counters are not ACK truth.
-- A positive CSM socket send advances only the Wi-Fi send cursor. A matching,
-  contiguous application ACK advances the reclaim cursor. Disconnect rewinds
-  every unacknowledged record and a new connection replays it.
-- Record `22 LINK_RELIABILITY_DIAGNOSTIC` is product uplink, schema 1,
-  exactly 128 bytes:
+- Record `22 LINK_RELIABILITY_DIAGNOSTIC` schema 1 is legacy decode-only for
+  existing captures and tools. Current products do not publish it and must not
+  reinterpret schema 1 fields.
+- The exact legacy schema 1 payload remains 128 bytes:
   - `0..7 mono_us u64`; `8 schema u8`; `9 flags u8`; `10 close_reason u8`;
     `12..15 connection_epoch u32`
   - `16..55`: boot session, last accepted, highest sent, last ACKed, and
@@ -27,9 +51,9 @@ This section supersedes the older reconnect/no-replay statements below.
   - `112..127`: accepted ACK, rejected ACK, rewind, journal-full as four `u32`
   - flags: bit0 session active, bit1 socket connected, bit2 ACK valid,
     bit3 integrity fault, bit4 backlog replay
-- The CSM journal is bounded. First Reserved/Full records the exact
-  first-not-admitted sequence, latches the integrity fault, emits
-  `BOARD_EVENT 52`, and closes the epoch without overwriting retained data.
+- Current live FIFO/drop/flush/epoch evidence is carried by the current
+  `TRANSPORT_DIAGNOSTIC`, `BOARD_HEALTH`, and `BOARD_EVENT` contracts until a
+  separately versioned replacement is approved.
 
 ## 2026-07-27 active wire contract
 
@@ -57,20 +81,53 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   schema/header/entry/max; capability_v3_flags bit1 advertises compact segment
   publication.
 
-`TRANSPORT_DIAGNOSTIC` schema 2 remains exactly 128 bytes:
+`TRANSPORT_DIAGNOSTIC` schema 3 remains exactly 128 bytes:
 
-- Fields 0..83 and sequence fields 112..127 retain schema 1 meanings.
-- `84..87 queue_high_water_records u32`
-- `88..91 offer_reserved_total u32`
-- `92..95 offer_full_total u32`
-- `96..99 write_attempt_total u32`
-- `100..103 partial_write_total u32`
-- `104..107 send_request_bytes_total u32`
-- `108..111 worker_stack_free u32`
-- Schema 1 remains PC decode-only. A measurement window must not mix schemas.
-  Schema 2 permits direct calculation of requested bytes/write, positive
-  bytes/write, frames/write, queue high-water, and the exact first loss
-  boundary.
+- `0..7 mono_us u64`; `8 schema=3 u8`; `9 flags u8`; `10 close_reason u8`;
+  `11 runtime_mode u8`; `12..15 connection_epoch u32`
+- `16..19 offered_bytes u32`; `20..23 accepted_bytes u32`;
+  `24..27 accepted_records u32`; `28..31 rejected_records u32`
+- `32..35 pending_queue_bytes u32`; `36..39 pending_queue_records u32`;
+  `40..43 queue_high_water_bytes u32`; `44..47 oldest_queue_age_ms u32`
+- `48..51 positive_socket_bytes u32`; `52..55 completed_socket_records u32`;
+  `56..59 positive_writes u32`; `60..63 would_block u32`
+- `64..67 socket_errors u32`; `68..71 max_send_call_us u32`;
+  `72..75 max_no_progress_ms u32`; `76..79 stall_closes u32`;
+  `80..83 queue_pressure_closes u32`;
+  `84..87 queue_high_water_records u32`
+- `88..91 aborted_accepted_bytes u32`;
+  `92..95 aborted_accepted_records u32`
+- `96..103 first_lost_publish_seq u64`;
+  `104..111 last_lost_publish_seq u64`
+- `112..119 last_accepted_publish_seq u64`;
+  `120..127 last_sent_publish_seq u64`
+- Flag bit4 means the first/last loss sequence range is valid. A fresh anchor
+  never clears this cumulative range.
+- `accepted_records` includes the dedicated current-epoch `STREAM_SESSION`.
+  `rejected_records` counts offers that were never admitted, including
+  pre-anchor/order violation, Busy, reserve, and full rejection.
+  `aborted_accepted_*` counts accepted data discarded when its live epoch
+  closes; the unsent suffix of a partially sent record counts as one aborted
+  record.
+- Modulo the `u32` counter width, both conservation equations must hold:
+  `accepted_bytes = positive_socket_bytes + pending_queue_bytes +
+  aborted_accepted_bytes`, and
+  `accepted_records = completed_socket_records + pending_queue_records +
+  aborted_accepted_records`.
+  Total live loss is `rejected_records + aborted_accepted_records`.
+- `accepted_*`, `positive_socket_*`, `aborted_accepted_*`, and
+  `pending_queue_*` in one record come from one coherent worker publication.
+  `pending_queue_*` is the accepted-but-not-yet-settled ledger derived as
+  accepted minus sent minus aborted; it is not an independently sampled
+  instantaneous FIFO depth. High-water and oldest-age remain physical queue
+  observations and are not used in the conservation equation.
+- Internal accepted, socket-sent, and aborted byte ledgers are `u64`; the
+  schema-3 `u32` byte fields carry their low 32 bits and receivers compute
+  bounded-window deltas modulo `2^32`. This keeps 24-hour operation correct
+  after the first wire-counter wrap.
+- Offset 108 is the upper half of `last_lost_publish_seq`; schema 3 carries no
+  worker-stack field. Schema 1/2 remain decode-only. A measurement window must
+  not mix schemas.
 
 ## 2026-04-22 canonical v1 addendum
 
@@ -118,8 +175,9 @@ Record types:
 - `18 REMOTE_CONTROL_STATE`
 - `19 RUNTIME_DIAGNOSTIC` debug profile uplink only
 - `20 TRANSPORT_DIAGNOSTIC` Wi-Fi-enabled product/debug uplink
-- `21 APP_RX_COMMIT_ACK` host-to-board product-link ACK only
-- `22 LINK_RELIABILITY_DIAGNOSTIC` product uplink
+- `21 APP_RX_COMMIT_ACK` legacy reserved; current board decode-ignore only
+- `22 LINK_RELIABILITY_DIAGNOSTIC` legacy schema 1 decode-only; not currently
+  published
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -136,9 +194,10 @@ parse by `payload_len` and skip unknown trailing bytes.
 - `24..31 mono_us u64`
 
 `STREAM_SESSION` is critical evidence. On reconnect, a host waits for a valid
-session anchor before claiming full publication continuity. The retained
-product Wi-Fi sink replays the unacknowledged interval; USB and legacy profiles
-retain their independent sink behavior.
+fresh current session anchor before accepting the new Live segment. The
+previous TCP epoch is closed as continuous history; the product Wi-Fi sink does
+not replay its unacknowledged interval. USB keeps its independent sink
+behavior.
 
 `TRANSPORT_DIAGNOSTIC` schema 1 payload is exactly 128 bytes and is emitted at
 1 Hz only while an uplink host session is open. It is one low-priority

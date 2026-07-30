@@ -929,8 +929,8 @@ static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
               "diagnostic uplink queue must retain bounded low-value telemetry");
 static UsbCdcSink usb_cdc_sink;
 #if BOARD_ENABLE_WIFI_UPLINK
-static_assert(sizeof(WifiTcpSink::TxStorage) == 90096,
-              "product Wi-Fi DTCM queue storage contract changed");
+static_assert(sizeof(WifiTcpSink::TxStorage) == 10240,
+              "product Wi-Fi live FIFO storage contract changed");
 __attribute__((section(".wifi_tx_queue_dtcm"), aligned(32), used))
 static WifiTcpSink::TxStorage wifi_tx_storage;
 static WifiTcpSink wifi_tcp_sink(wifi_tx_storage);
@@ -1713,12 +1713,13 @@ static bool usb_cdc_dtr_asserted() {
 }
 
 static constexpr uint8_t kUsbSessionSinkMask = (1u << 0);
+static constexpr uint8_t kWifiSessionSinkMask = (1u << 1);
 static uint32_t last_wifi_capability_epoch = 0;
 static bool pending_wifi_close_event = false;
 static uint8_t pending_wifi_close_reason = 0;
 static uint32_t pending_wifi_disconnect_total = 0;
 static uint32_t observed_wifi_disconnect_total = 0;
-static uint32_t observed_wifi_journal_full_total = 0;
+static uint32_t observed_wifi_live_fifo_loss_total = 0;
 static void emit_capability();
 
 static void request_connection_session(bool usb_epoch_changed,
@@ -1730,9 +1731,9 @@ static void request_connection_session(bool usb_epoch_changed,
 #if BOARD_ENABLE_WIFI_UPLINK
   bool refresh_wifi_capability = false;
   if (wifi_epoch_changed && wifi_tcp_sink.socketConnected()) {
-    // The worker replays the immutable boot STREAM_SESSION before journal
-    // bytes on every TCP epoch. Publishing a new tail anchor here would put
-    // identity behind retained backlog and recreate the recovery deadlock.
+    // The closed epoch's unsent copies were discarded. Publish a fresh full
+    // sequence anchor before this connection's current live queue.
+    session_targets |= kWifiSessionSinkMask;
     const uint32_t epoch = wifi_tcp_sink.counters().connection_epoch;
     if (epoch != last_wifi_capability_epoch) {
       last_wifi_capability_epoch = epoch;
@@ -1822,14 +1823,14 @@ static void service_uplink(uint32_t byte_budget = BOARD_SERIAL_TX_MAX_BYTES_PER_
                      wifi_tcp_sink.counters().queue_pressure_close_total);
   }
   const auto& wifi_counters = wifi_tcp_sink.counters();
-  if (wifi_counters.journal_full_total !=
-      observed_wifi_journal_full_total) {
-    observed_wifi_journal_full_total = wifi_counters.journal_full_total;
+  if (wifi_counters.live_fifo_loss_total !=
+      observed_wifi_live_fifo_loss_total) {
+    observed_wifi_live_fifo_loss_total = wifi_counters.live_fifo_loss_total;
     emit_board_event(
         EventDataLinkIntegrityFault,
         static_cast<uint16_t>(
-            wifi_counters.first_not_admitted_publish_seq & 0xFFFFu),
-        wifi_counters.journal_full_total);
+            wifi_counters.first_lost_publish_seq & 0xFFFFu),
+        wifi_counters.live_fifo_loss_total);
   }
   const uint32_t wifi_disconnect_total =
       wifi_tcp_sink.counters().disconnect_total;
@@ -1936,8 +1937,7 @@ static bool should_suppress_low_value_record(RecordType type, UplinkPriority pri
     return false;
   }
 #if BOARD_ENABLE_WIFI_UPLINK
-  if (type == RecordType::TransportDiagnostic ||
-      type == RecordType::LinkReliabilityDiagnostic) {
+  if (type == RecordType::TransportDiagnostic) {
     // This 1 Hz record is the evidence that distinguishes producer, queue,
     // socket, and peer loss. Keep it subject to the bounded diagnostic
     // admission lane, but do not hide it merely because a sink has backlog.
@@ -1969,17 +1969,6 @@ static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
 
 #if BOARD_ENABLE_WIFI_UPLINK
 static void emit_wifi_transport_diagnostic(uint32_t now_ms) {
-  uint8_t reliability_payload[csm::kLinkReliabilityDiagnosticPayloadLen] = {};
-  const auto reliability =
-      wifi_tcp_sink.reliabilityDiagnosticSnapshot(mono64_us());
-  const uint16_t reliability_length =
-      csm::board::uplink::build_link_reliability_diagnostic_payload(
-          reliability, reliability_payload, sizeof(reliability_payload));
-  if (reliability_length == sizeof(reliability_payload)) {
-    emit_record(RecordType::LinkReliabilityDiagnostic,
-                reliability_payload, reliability_length,
-                UplinkPriority::Diagnostic);
-  }
 #if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
   uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
   const auto snapshot =
@@ -2672,9 +2661,6 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::RuntimeDiagnostic));
 #endif
 #if BOARD_ENABLE_WIFI_UPLINK
-  config.supported_uplink_records |=
-      (1u << static_cast<uint8_t>(
-          RecordType::LinkReliabilityDiagnostic));
 #if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::TransportDiagnostic));
@@ -2703,10 +2689,6 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::HostClearFaultLockout));
 #else
   config.supported_downlink_records = 0;
-#endif
-#if BOARD_ENABLE_WIFI_UPLINK
-  config.supported_downlink_records |=
-      (1u << static_cast<uint8_t>(RecordType::AppRxCommitAck));
 #endif
   config.safety_feature_flags = 0x0000000Fu;
   config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY ? 32 : 0;
@@ -5879,16 +5861,6 @@ void setup() {
       static_cast<uint32_t>(requested_wifi_runtime_mode) |
       (static_cast<uint32_t>(effective_wifi_runtime_mode) << 8) |
       (runtime_supervisor.wifiQuarantined() ? (1u << 16) : 0u);
-  record_boot_progress(
-      csm::board::diagnostics::BootProgress::WifiStartRequested,
-      wifi_mode_detail);
-  const bool wifi_sink_started = wifi_tcp_sink.begin(wifi_sink_config);
-  record_boot_progress(
-      csm::board::diagnostics::BootProgress::WifiStartReturned,
-      wifi_mode_detail | (wifi_sink_started ? (1u << 24) : 0u));
-#endif
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootWifiReady);
 #endif
 #if BOARD_ENABLE_WIFI_UPLINK
   canonical_publisher.begin(boot_session_id, &usb_cdc_sink, &wifi_tcp_sink);
@@ -6046,6 +6018,22 @@ void setup() {
   } else {
     emit_board_event(EventRemoteControlInitFailed, 1, 1);
   }
+#endif
+
+#if BOARD_ENABLE_WIFI_UPLINK
+  // Safety, CAN ownership and RC runtime are ready before the lower-priority
+  // network worker can enter an opaque WHD call. A Wi-Fi startup failure
+  // therefore cannot prevent control readiness.
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::WifiStartRequested,
+      wifi_mode_detail);
+  const bool wifi_sink_started = wifi_tcp_sink.begin(wifi_sink_config);
+  record_boot_progress(
+      csm::board::diagnostics::BootProgress::WifiStartReturned,
+      wifi_mode_detail | (wifi_sink_started ? (1u << 24) : 0u));
+#endif
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootWifiReady);
 #endif
 
   emit_capability();

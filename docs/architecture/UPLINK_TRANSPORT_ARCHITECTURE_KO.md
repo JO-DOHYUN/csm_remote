@@ -1,127 +1,152 @@
 # CSM Uplink Transport 아키텍처
 
-Updated: 2026-07-28
+Updated: 2026-07-30
 
-이 문서는 현재 CSM 제품 데이터 경계의 권위 문서다. 과거 queue/재연결
-실험은 `history/decisions/DECISION_LEDGER_KO.md`에만 남긴다.
+이 문서는 현재 CSM 제품 데이터 경계의 권위 문서다. 과거 retained
+journal/APP ACK/replay 실험은
+`history/decisions/DECISION_LEDGER_KO.md`에만 남긴다.
+
+현재 상태는 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다. live-first 구조의
+host 계약, 제품 build, COM7 upload와 짧은 USB+PC Wi-Fi live gate는 통과했지만
+실제 Android, 동시 고부하, fault injection과 soak 전에는 release-qualified로
+표시하지 않는다.
+
+## 제품 우선순위와 시작 순서
+
+제품 시작 순서는 다음으로 고정한다.
+
+```text
+1. 모든 차량 출력 safe/inhibit
+2. reset/watchdog evidence
+3. M4 RC freshness와 M7 authority/safety
+4. CAN ingest와 승인된 CAN TX
+5. USB diagnostic
+6. Wi-Fi observer
+```
+
+Wi-Fi 시작 실패, client 정지, queue overflow 또는 socket stall은 RC,
+authority, CAN, canonical publication과 USB 시작을 막지 않는다. 내부 Wi-Fi는
+같은 M7/kernel/SDIO/전원을 공유하므로 논리적 sink 격리만 주장할 수 있다.
 
 ## 최종 데이터 흐름
 
 ```text
 M4 CRSF latest sample --------\
-RP2040 feeder UART CAN0 -------+--> M7 deterministic executive
-J4 FDCAN CAN1 ----------------/          |
-                                      bounded RecordAdmission
-                                              |
-                                      CanonicalPublisher
-                                  (identity 1회, encode 1회)
-                                     /                  \
-                          UsbCdcSink queue       Wi-Fi retained journal
+RP2040 feeder UART CAN0 -------+--> M7 authority/safety/CAN executive
+J4 FDCAN CAN1 ----------------/                  |
+                                          RecordAdmission
+                                                |
+                                        CanonicalPublisher
+                                    (identity 1회, encode 1회)
+                                       /                  \
+                            UsbCdcSink queue       Wi-Fi live FIFO
+                                                   128 records
+                                                    8,192 B
                                                        |
                                              one RTOS socket worker
                                                        |
                                             WHD SoftAP + raw TCPSocket
                                                        |
-                                       Android ordered SessionCore
-                                                       |
-                                          bounded capture writer
-                                                       |
-                                             fsync durable commit
-                                                       |
-                                    APP_RX_COMMIT_ACK (record 21)
+                                         Android ordered SessionCore
+                                            /                  \
+                                      current Live       independent Capture
 ```
 
 - RC, authority, safety, CAN ingest와 canonical publisher는 network API를
   호출하거나 기다리지 않는다.
-- USB와 Wi-Fi는 독립 queue, cursor, epoch와 failure evidence를 소유한다.
+- USB와 Wi-Fi는 독립 queue, epoch, progress, drop counter를 소유한다.
 - canonical bytes와 `publish_seq64`는 sink 앞에서 한 번만 생성된다.
-- M4/Feeder는 입력 frontend이고 제품 권한·안전·CAN TX ownership은 M7에
-  남는다.
+- Android Capture 성공 여부는 CSM admission, TCP epoch와 Live 송신에
+  영향을 주지 않는다.
+- CSM은 network backlog replay나 Android 파일 durability를 제공하지 않는다.
 
-## Wi-Fi 보존 계약
+## Wi-Fi live FIFO 계약
 
-Wi-Fi 저장소는 `ReliableFrameJournal<1024, 65520>`이다.
+Wi-Fi queue는 `128 records / 8,192 encoded bytes`의 작은 bounded live
+FIFO다. 이 용량은 RTOS와 network scheduling의 짧은 변동을 흡수하기 위한
+것이며 단절 구간을 보존하기 위한 journal이 아니다.
 
-- descriptor 1,024개 × 24 B + encoded byte ring 65,520 B =
-  DTCM 90,096 B이다.
-- normal admission은 마지막 4 descriptor/2,112 B를 critical evidence에
-  예약한다.
-- producer는 release-store로 완성 descriptor만 공개하고 절대 retry,
-  yield, socket wait를 하지 않는다.
-- positive socket return은 send cursor만 전진시킨다.
-- Android가 원본 typed frame을 ordered capture에 기록하고 `fsync`한 뒤
-  보낸 누적 ACK만 reclaim cursor를 전진시킨다.
-- socket close/reconnect는 reclaim cursor까지 rewind한다. ACK되지 않은
-  record는 같은 boot session에서 재전송된다.
-- ACK boot ID 불일치, 아직 전송하지 않은 sequence, 비연속 sequence는
-  모두 거절되고 counter로 남는다.
+- producer offer는 단 한 번의 nonblocking 시도만 한다.
+- positive socket return은 해당 byte를 즉시 소비한다. 완성 record는 즉시
+  해제하고 partial write면 전송되지 않은 suffix만 유지한다.
+- admission 누계는 producer mailbox가 소유하고 worker는 자신의 sent/abort
+  누계와 결합해 `pending = accepted - sent - aborted`인 단일 coherent
+  snapshot을 발행한다. 진단은 물리 FIFO 즉석값과 이 누계를 섞지 않는다.
+- TCP ACK 외에 CSM RAM 회수를 허가하는 application ACK는 없다.
+- disconnect에서 send cursor를 rewind하거나 과거 record를 replay하지 않는다.
+- queue가 record 또는 byte 한계에 닿거나 socket이 stall하면 해당 sink만
+  one-shot close한다.
+- close 경로는 이전 epoch의 FIFO와 partial frame을 전부 flush한다.
+- flush된 record와 close 중 거부된 record는 누계와 정확한 sequence loss
+  경계로 남기며 정상 전송으로 위장하지 않는다.
+- 다음 client가 연결되면 현재 `boot_session_id`, 현재 full
+  `publish_seq64`, 새 connection epoch를 가진 fresh `STREAM_SESSION`을
+  가장 먼저 보내고 그 뒤의 현재 Live만 전송한다.
 
-이 경계는 무한 보존을 뜻하지 않는다. 1,024 descriptor/65,520 B를 넘는
-장기 단절은 다음처럼 fail-visible 처리한다.
+무손실 장기 기록이 제품 요구가 되면 CSM RAM queue를 키우지 않는다. 별도
+logger/storage에 용량, wear, retention과 export 계약을 승인해야 한다.
 
-1. 최초 Reserved/Full에서 `first_not_admitted_publish_seq`를 고정한다.
-2. integrity fault를 latch하고 worker에 one-shot epoch close를 요청한다.
-3. `BOARD_EVENT 52`와 record 22 진단에 손실 경계를 남긴다.
-4. 기존 journal을 덮어쓰지 않는다.
-5. Android는 sequence/parser/capture/storage failure에서 ACK를 fence하고
-   해당 epoch를 닫는다.
-
-완전한 장기 무손실이 제품 요구가 되면 RAM 확대가 아니라 별도
-flash journal 용량·wear·retention 계약을 승인해야 한다.
-
-## 연결 identity
+## identity와 손실 의미
 
 - CAN truth: bus별 `capture_seq64`
 - CAN segment: `segment_seq64`
 - canonical truth: `boot_session_id + publish_seq64`
-- socket delivery: connection epoch + send/reclaim cursor
-- Android durability: capture generation + committed publish sequence
+- socket delivery: connection epoch + socket sent sequence
+- Wi-Fi loss: first/last dropped publish sequence + cumulative drop/flush
+- Android Capture: 앱이 독립 소유하는 generation + file sequence
 
-`STREAM_SESSION`은 boot ID와 full publish sequence를 고정한다. 새 client가
-수락되면 main은 다른 canonical record를 publish하기 전에 session
-announcement를 우선 처리한다. 재연결 때 journal 앞에 남아 있는 record는
-이미 확인된 동일 boot identity로만 복구할 수 있다. identity를 증명할 수
-없는 fresh consumer는 임의 ACK하지 않고 fail closed한다.
+`STREAM_SESSION`은 현재 연결 구간의 기준점이지 replay 허가서가 아니다.
+재연결은 이전 구간을 닫고 새 sink epoch와 새 consumer segment를 시작한다.
+수신자는 sequence gap을 명시하되 최신 Live 처리를 계속한다.
+
+## downlink와 wire compatibility
+
+- record `21 APP_RX_COMMIT_ACK`는 legacy reserved다.
+- current CSM은 legacy record 21을 frame 수준에서 decode-ignore하며 RAM
+  회수, permission, disconnect 또는 다른 상태 변경에 사용하지 않는다.
+- record `22 LINK_RELIABILITY_DIAGNOSTIC` schema 1은 기존 capture와 도구를
+  위한 decode-only 계약이다. current product publication에는 사용하지 않는다.
+- 현재 sink 진단은 `TRANSPORT_DIAGNOSTIC`, `BOARD_HEALTH`, `BOARD_EVENT`의
+  queue/drop/epoch/close evidence로 판정한다.
+- record ID 21 또는 schema 1 record 22를 다른 의미로 재사용하지 않는다.
 
 ## worker와 socket 경계
 
 - `WifiSocketWorker` 하나만 AP, listener, accepted socket, send, receive,
-  abort, close를 소유한다.
-- producer transition, critical record, control request와 `sigio`가 worker를
-  깨우며 10 ms fallback이 notification loss를 제한한다.
+  abort와 close를 소유한다.
+- producer transition, critical/control request와 `sigio`가 worker를 깨우며
+  bounded fallback이 notification loss를 제한한다.
 - 한 pump는 설정된 write 수/byte/time budget을 넘지 않는다.
-- partial write는 record 경계를 유지한 채 남은 byte부터 재개한다.
-- receive 경로는 record 21을 worker에서 소비하고 나머지 typed downlink만
-  bounded passthrough mailbox로 전달한다.
-- vendor call stall은 sink를 논리적으로 격리할 수 있지만 같은 MCU의
+- receive 경로는 current allowlist의 typed downlink만 bounded mailbox로
+  전달한다. legacy record 21은 무효 명령이나 transport fault로 승격하지 않고
+  decode-ignore한다.
+- RX ring reset은 worker 한 곳만 소유한다. close에서 odd generation으로
+  invalidate하고, accept에서 이전 byte/parser 상태를 비운 뒤 새 even
+  generation을 연다. facade가 관측한 generation과 mailbox generation이
+  같을 때만 downlink를 노출한다.
+- 각 vendor send 직전과 positive return을 회계한 직후 pressure/isolation
+  request를 다시 확인한다. 한 epoch의 close 요청 뒤 같은 pump가 추가 send를
+  호출하지 않는다.
+- vendor call stall은 Wi-Fi epoch close를 요청하지만 같은 MCU의
   kernel/driver/SDIO hard stall을 물리적으로 격리한다고 주장하지 않는다.
 
-## pinned Mbed/lwIP 메모리 경계
+## Mbed/lwIP와 메모리 경계
 
-제품 환경
-`portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi`만 pinned archive와
-전용 linker를 사용한다.
+2026-07-28 pinned Mbed/lwIP/D3 profile은 내부 Wi-Fi candidate다. retained
+journal의 정당화 근거였던 1.02초 replay 목표는 폐기됐다. pinned archive,
+custom linker, D3 heap, MPU와 WHD override는 live FIFO 구현 후 실제 필요성과
+RAM 비용을 다시 검증한다.
+
+기존 candidate identity는 과거 artifact 재현에만 사용한다.
 
 - ArduinoCore-mbed: `6816d442fd00bc17f83c73396d3d8d90285a6a8a`
 - Mbed OS: `17dc3dc2e6e2817a8bd3df62f38583319f0e4fed`
 - `libmbed.a` SHA-256:
   `032494298FC6CAFAAD23277B8CBEB01F1BA75CA7F72CCD90383A850EE561FD70`
-- TCP MSS 1,460; send buffer 11,680 B; receive window 5,840 B;
-  40 TCP segments; lwIP heap 40,960 B; TCP/IP stack 4,096 B;
-  sockets 최대 4; IPv4 only; WHD TX `PBUF_RAM`.
-- lwIP heap object 40,979 B는 D3
-  `0x38000400..0x3800A7FF`의 41,984 B envelope에 link-time 고정된다.
-- setup 첫 단계에서 MPU region 15를 D3 64 KiB
-  non-cacheable/shareable/XN으로 설치하고 read-back한다. 실패하면 Wi-Fi를
-  시작하지 않고 USB와 `BOARD_EVENT 52`를 살린다.
-- Ethernet DMA/lwIP D2 section은 M4 소유 경계 뒤의
-  `0x30040000..0x30048000` 안에 남는다.
-- DTCM journal은 90,096/130,408 B이며 linker가 최소 32 KiB reserve를
-  강제한다.
 
-`tools/build_pinned_mbed.ps1`은 source commit, generated config, 교체 object
-목록과 출력 SHA를 manifest에 고정하고 deterministic archive를 만든다.
-PlatformIO pre-script는 manifest hash 불일치 시 제품 빌드를 중단한다.
+새 product artifact는 exact source/archive/link map/MPU read-back과 실기
+처리량을 함께 기록해야 한다. build 성공이나 PC synthetic peer만으로 내부
+Wi-Fi를 제품 transport로 승인하지 않는다.
 
 ## 제품 RC/CAN 경계
 
@@ -132,24 +157,20 @@ PlatformIO pre-script는 manifest hash 불일치 시 제품 빌드를 중단한�
 - legacy MCP profile, host raw CAN TX, Service/HIL joystick path와 MDPS
   bench mapping이 동시에 켜지면 compile-time 실패한다.
 - 무장/중립/failsafe/authority와 실제 FDCAN completion evidence 계약은
-  기존 deterministic executive를 그대로 따른다.
+  Wi-Fi 상태와 독립적으로 유지한다.
 
-## 현재 판정과 다음 gate
+## qualification gate
 
-오프라인 통과:
+구현 후 다음을 순서대로 통과해야 한다.
 
-- product M7, legacy MCP M7, M4 remote frontend, RP2040 feeder build
-- native contract 11종
-- Wi-Fi architecture, RC product, control execution guard
-- 계산상 2,000 fps 57,735 B/s와 1.02 s journal retention
+1. host contract: APP ACK/replay/rewind/retained anchor 부재와 FIFO
+   `128/8192` 확인
+2. startup fault injection: Wi-Fi 실패 중 RC/CAN/USB 정상
+3. idle PC와 실제 Android Live: positive send 즉시 release와 backlog replay 0
+4. queue overflow/socket stall 강제: close, flush, loss evidence, fresh
+   `STREAM_SESSION`, 최신 Live 복구
+5. 2,000 fps + J4 RC + CAN0/CAN1 + USB + Android Wi-Fi 동시 HIL
+6. Android Capture open/write/fsync 실패 중 Live/TCP 지속
+7. reconnect 반복과 1시간/8시간/24시간 soak
 
-실기 미실행:
-
-1. M4/M7/Feeder paired upload와 boot/session identity 확인
-2. AP idle 및 PC/Android durable ACK/replay
-3. 2,000 fps + J4 RC + USB + Wi-Fi 동시 무결성
-4. blocked client, reconnect, app kill/restart, storage-failure fault injection
-5. 장시간 soak와 실제 Android 기기 사용자 시나리오
-
-이 다섯 행을 통과하기 전에는 내부 Wi-Fi를 release-qualified로 표시하지
-않는다.
+현재 내부 Wi-Fi의 판정은 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다.

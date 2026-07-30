@@ -9,27 +9,23 @@ namespace csm::board::uplink {
 
 struct ProductDownlinkRouterCounters {
   uint32_t frame_total = 0;
-  uint32_t app_ack_total = 0;
-  uint32_t app_ack_rejected_total = 0;
+  uint32_t legacy_ack_ignored_total = 0;
+  uint32_t legacy_ack_malformed_total = 0;
   uint32_t passthrough_total = 0;
   uint32_t crc_failure_total = 0;
   uint32_t framing_failure_total = 0;
   uint32_t passthrough_overflow_total = 0;
 };
 
-// Dedicated receive control-plane router. APP_RX_COMMIT_ACK is consumed by
-// the reliable Wi-Fi journal and never enters the motion-command parser.
-// Every other valid typed frame is forwarded byte-identically to the existing
-// Service/HIL mailbox.
+// Dedicated receive router. Legacy APP_RX_COMMIT_ACK record 21 is reserved and
+// discarded; it never affects TX storage and never enters the motion parser.
+// Every other valid typed frame is forwarded byte-identically.
 class ProductDownlinkRouter {
  public:
-  using AckHandler = bool (*)(void* context, uint64_t boot_session_id,
-                              uint64_t last_contiguous_publish_seq);
   using PassthroughHandler = bool (*)(void* context, const uint8_t* bytes,
                                       uint16_t length);
 
-  void begin(AckHandler ack_handler, PassthroughHandler passthrough_handler,
-             void* context);
+  void begin(PassthroughHandler passthrough_handler, void* context);
   bool feed(const uint8_t* bytes, uint16_t length);
   void reset();
 
@@ -39,7 +35,6 @@ class ProductDownlinkRouter {
   static constexpr uint16_t kBufferCapacity =
       static_cast<uint16_t>(csm::encoded_typed_frame_len(csm::kMaxPayloadLen));
 
-  AckHandler ack_handler_ = nullptr;
   PassthroughHandler passthrough_handler_ = nullptr;
   void* context_ = nullptr;
   uint8_t buffer_[kBufferCapacity] = {};

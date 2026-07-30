@@ -7,9 +7,7 @@
 namespace csm::board::uplink {
 
 void ProductDownlinkRouter::begin(
-    AckHandler ack_handler, PassthroughHandler passthrough_handler,
-    void* context) {
-  ack_handler_ = ack_handler;
+    PassthroughHandler passthrough_handler, void* context) {
   passthrough_handler_ = passthrough_handler;
   context_ = context;
   reset();
@@ -68,24 +66,14 @@ bool ProductDownlinkRouter::process() {
     }
 
     ++counters_.frame_total;
-    const bool is_app_ack =
+    const bool is_legacy_app_ack =
         buffer_[2] == csm::kProtocolVersion &&
-        buffer_[3] == static_cast<uint8_t>(csm::RecordType::AppRxCommitAck) &&
-        payload_length == csm::kAppRxCommitAckPayloadLen;
-    if (is_app_ack) {
-      const uint8_t* payload = &buffer_[9];
-      const bool accepted =
-          ack_handler_ != nullptr &&
-          ack_handler_(
-              context_,
-              csm::rd_u64_le(
-                  &payload[csm::kAppRxCommitAckBootSessionOffset]),
-              csm::rd_u64_le(
-                  &payload[csm::kAppRxCommitAckPublishSeqOffset]));
-      if (accepted) {
-        ++counters_.app_ack_total;
+        buffer_[3] == static_cast<uint8_t>(csm::RecordType::AppRxCommitAck);
+    if (is_legacy_app_ack) {
+      if (payload_length == csm::kAppRxCommitAckPayloadLen) {
+        ++counters_.legacy_ack_ignored_total;
       } else {
-        ++counters_.app_ack_rejected_total;
+        ++counters_.legacy_ack_malformed_total;
       }
     } else {
       if (passthrough_handler_ != nullptr &&

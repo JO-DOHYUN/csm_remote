@@ -7,6 +7,9 @@ M7 application은 위험한 driver보다 먼저 reset evidence와 retained recov
 safety 허용, upstream autonomy의 명시적 `InactiveConfirmed`, RC neutral handoff,
 실제 vehicle mapping, hardware gate, CAN backend가 모두 유효하기 전에는 local
 CAN TX를 허용하지 않는다. VSM 미연결은 RC 안전 판단을 바꾸지 않는다.
+초기화 순서는 `safe/inhibit -> reset/watchdog evidence -> safety/RC/CAN
+runtime -> canonical/USB -> Wi-Fi observer`다. Wi-Fi start 실패나 지연은
+제어 readiness를 막지 않는다.
 
 ## 2. RC 운용과 동시 관측
 
@@ -22,11 +25,16 @@ CAN ingest와 RC가 최고 우선순위를 가진다. publisher admission과 각
 
 ## 4. Wi-Fi client 정지
 
-Android가 읽지 않거나 무선 품질이 저하되면 Wi-Fi sink queue만 포화된다. Wi-Fi sink는 자체 drop/timeout/close reason을 기록하고 공유 frame 참조를 제한 시간 내 해제한다. USB와 RC는 계속 동작한다.
+Android가 읽지 않거나 무선 품질이 저하되면 Wi-Fi sink queue만 포화된다.
+Wi-Fi sink는 앱 파일 ACK를 기다리거나 과거 backlog를 보존하지 않는다. 자체
+drop/timeout/close reason과 최초 손실 identity를 기록하고 미송신 frame을 제한
+시간 내 해제한 뒤 현재 Live로 복구한다. USB와 RC는 계속 동작한다.
 
 ## 5. Wi-Fi 재접속
 
-연결 종료 후 board backlog를 재생하지 않는다. 새 연결은 새 sink epoch로 시작하고 현재 live stream을 받는다. Android는 epoch 변화와 identity gap을 손실로 기록한다.
+연결 종료 후 board backlog를 재생하지 않는다. 새 연결은 현재 full publish
+sequence의 새 `STREAM_SESSION` anchor와 sink epoch로 시작하고 현재 live
+stream을 받는다. Android는 epoch 변화와 identity gap을 손실로 기록한다.
 
 ## 6. USB 단절
 

@@ -1,8 +1,37 @@
 # BRIEF
 
-Updated: 2026-07-28
+Updated: 2026-07-30
 
-## 2026-07-28 retained Wi-Fi product candidate
+## 2026-07-30 live-first observer architecture decision
+
+- D-030 supersedes D-028. Current approved Wi-Fi direction is a
+  `128-record / 8,192-byte` nonblocking live FIFO: positive socket send
+  releases bytes immediately; there is no APP ACK, retained network journal,
+  reclaim cursor, disconnect rewind, or backlog replay.
+- Queue overflow or socket stall closes and flushes only the Wi-Fi epoch. The
+  next client begins with a fresh current `STREAM_SESSION` and receives current
+  Live only. Exact drop/flush/epoch/close evidence remains visible; RC, CAN,
+  canonical publication, and USB continue independently.
+- Android Capture is app-local storage. Its open/write/fsync/storage failure
+  cannot fence CSM admission, close TCP, or stop Live.
+- Record `21 APP_RX_COMMIT_ACK` is reserved legacy decode-ignore. Record `22
+  LINK_RELIABILITY_DIAGNOSTIC` schema 1 is legacy decode-only and is not a
+  current product publication.
+- Startup order is safe/inhibit → reset evidence → M4 RC/M7 authority-safety →
+  CAN → USB → Wi-Fi. Internal Portenta Wi-Fi remains an architecture candidate
+  because it shares the M7/kernel/SDIO/power common-cause boundary.
+- The live-first implementation, host contracts, product build, COM7 upload,
+  and a 15-second USB+PC Wi-Fi live gate passed on 2026-07-30. That gate saw
+  one boot session, CRC/typed/segment/capture gaps 0, Wi-Fi overflow/stall/socket
+  error 0, and byte/record conservation residual 0. The artifact remains
+  `RELEASE BLOCKED` until actual Android AP operation, simultaneous RC/dual-CAN
+  load, fault injection, and soak gates pass. Older dated sections below are
+  historical evidence, not current release claims.
+
+## 2026-07-28 retained Wi-Fi product candidate — superseded by D-030
+
+The following records the rejected D-028 candidate and is not an active product
+contract.
 
 - The product Wi-Fi sink is now a nonblocking retained journal rather than a
   send-and-discard queue. `CanonicalPublisher` still encodes once; USB consumes
@@ -43,8 +72,8 @@ Updated: 2026-07-28
   distinct ~2.073 s lower-path zero-progress interval; the small 512-record
   queue then filled to 27,472 B and requested QueuePressure. The whole-window
   946.7 B/s "steady deficit" was an averaging artifact after the epoch close.
-- D-022/D-024 queue conclusions are superseded by D-025/D-026. The final
-  product boundary uses direct WHD AP service with the Portenta-validated
+- D-022/D-024 queue conclusions were superseded by D-025/D-026. The then
+  candidate boundary used direct WHD AP service with the Portenta-validated
   `ap_sta_concur=true` compatibility role, checked raw `TCPSocket` ownership,
   byte-based 1,024 B batching, independent latency classes, one pre-full close,
   and a 1,280-record/65,520-byte queue sized for 100 kbit/s x 5 s.
@@ -270,7 +299,8 @@ Updated: 2026-07-28
 - typed v1 frame은 유지하면서 `CanonicalPublisher`가 fanout 전에 `publish_seq64`를 배정하고 `seq u16`에 하위 16비트를 기록한다. `STREAM_SESSION`이 full identity를 고정한다.
 - `TypedRecords.h`가 CAN raw/segment와 `BOARD_HEALTH v13` field offset constants를
   제공하며 v13은 v12의 472-byte prefix를 그대로 보존한다.
-- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 48 KiB byte pool, 512 descriptors, 4-record/2 KiB critical reserve와 2-record/75 ms bounded batching을 사용한다.
+- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 8,192 B/128-record live FIFO, 4-record/2,112 B critical reserve, 64% 선제 격리 경계를 사용하며 accepted/sent/aborted는 내부 64-bit 보존식으로 관리한다.
+- 2026-07-30 최종 feeder product M7 build는 RAM 170,848/523,624 B(32.6%), Flash 367,392/786,432 B(46.7%)였고 COM7 DFU 업로드가 성공했다. 15초 USB+PC Wi-Fi gate는 4,098 records, bad CRC/gap 0, Wi-Fi overflow/stall/socket error 0, 보존식 residual 0으로 통과했다.
 - Wi-Fi observer env는 Arduino Mbed Wi-Fi AP direct와 TCP server `192.168.4.1:3333`, client 1개를 사용한다.
 - host fanout contract test, passive M7 build, Wi-Fi observer M7 build, M4 frontend proof/probe와 passive symbol guard가 통과했다.
 - 2026-07-15 D-016 Android diagnostics binding 변경 후 host fanout contract와 passive/Wi-Fi observer M7 build를 다시 통과했다.
@@ -289,20 +319,26 @@ Updated: 2026-07-28
 - M4 RC frontend, M7 단일 authority/CAN TX owner를 유지한다.
 - M7 evidence를 canonical publisher에서 한 번 직렬화한다.
 - USB CDC와 Wi-Fi TCP는 bounded 독립 sink로 fanout한다.
-- Wi-Fi 1차 제품은 Android observer 한 대, live-only, reconnect 시 새 epoch, board backlog replay 없음이다.
+- Wi-Fi 1차 제품은 Android observer 한 대, live-only, reconnect 시 새 epoch,
+  fresh current `STREAM_SESSION`, board backlog replay 없음이다.
+- Wi-Fi는 128-record/8,192-byte FIFO에서 positive send 즉시 release하며
+  overflow/stall에서는 해당 epoch를 close+flush한다.
+- Android Capture 실패는 앱 내부 PARTIAL/CORRUPT이며 CSM/TCP/Live를
+  제어하지 않는다.
+- Wi-Fi는 safety/RC/CAN/USB 뒤에 시작한다.
 - Windows USB observer와 Android Wi-Fi observer는 RC 운용 중 동시에 사용할 수 있어야 한다.
 
-## 다음 구현 gate
+## 다음 qualification gate
 
-1. close-only 수정 build의 실제 Android connect/stream/disconnect 20회와 graceful/abrupt reconnect 검증은 완료했다.
-2. 같은 revision으로 Windows USB + Android Wi-Fi + CAN + RC 동시 300초와 장시간 soak를 수행한다.
-3. 재발 시 bootloader reset latch 또는 외부 power/reset evidence를 구현·대조한다.
+1. 실제 Android에서 positive-send release, no-backlog reconnect, fresh
+   `STREAM_SESSION`을 검증한다.
+2. queue overflow/socket stall/Capture storage failure를 주입해 Wi-Fi만
+   close+flush되고 RC/CAN/USB가 지속되는지 검증한다.
+3. Windows USB + Android Wi-Fi + RC + dual CAN 2,000 fps 동시 HIL과
+   1/8/24시간 soak를 수행한다.
 4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
 5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
 6. FDCAN completion-correlated `CAN_TX_RAW` host contract는 완료했다. 실제
    Kvaser ID/payload/주기/ACK와 late/cancel failure HIL은 남아 있다.
-7. Wi-Fi raw TCP capacity gate를 먼저 닫은 뒤 Windows USB + Android Wi-Fi +
-   RC + dual CAN 동시 HIL, fault injection,
-   blocked-client/reconnect와 장시간 soak를 수행한다.
 
 Android 전용 wire 형식이나 sink별 별도 encode 경로는 만들지 않는다.

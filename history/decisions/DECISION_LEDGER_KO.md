@@ -449,8 +449,9 @@
 ## D-028 Promote a bounded retained journal and pinned D3 network profile
 
 - Date: 2026-07-28
-- Status: Architecture, code, offline builds and contracts passed; physical
-  upload/HIL gates remain open.
+- Status: Superseded by D-030. This block is historical evidence only; its
+  APP ACK, retained journal, rewind/replay, and outage-retention policy is not
+  an active product contract.
 - Decision: preserve one canonical publication and independent USB/Wi-Fi
   sinks, but replace Wi-Fi send-and-discard storage with a 1,024-descriptor,
   65,520-byte retained SPSC journal. Socket progress advances only the send
@@ -497,3 +498,48 @@
 - Compatibility: retained layout, historical counters, event IDs, and
   BOARD_HEALTH offsets remain stable. Legacy persisted quarantine/retry bits
   are cleared at boot and reported inactive.
+
+## D-030 Restore a live-first observer link and demote internal Wi-Fi to candidate
+
+- Date: 2026-07-30
+- Status: Approved architecture; implementation, device HIL, simultaneous
+  load, fault injection, and soak remain open. Internal Portenta Wi-Fi is
+  release-blocked.
+- Supersedes: D-028 in full. D-029 retained boot/reset/call evidence remains
+  active because it is diagnostic black-box state, not network telemetry
+  replay.
+- Product requirement: control uses freshness/deadline/failsafe, observation
+  prioritizes current Live with explicit loss, and Android Capture is
+  independent storage. Android file durability must never control CSM RAM,
+  socket lifetime, Live admission, RC, CAN, or USB.
+- Data plane: keep one canonical publication and independent USB/Wi-Fi sinks.
+  Replace the 1,024/65,520 retained journal with a 128-record/8,192-byte
+  nonblocking live FIFO. A positive socket send immediately releases accepted
+  bytes; a completed record is released and a partial write retains only its
+  suffix.
+- Recovery: remove application ACK, reclaim cursor, disconnect rewind, network
+  backlog replay, and immutable first-boot anchor replay. Queue overflow or
+  socket stall closes only that Wi-Fi epoch, records the exact drop/close
+  boundary, flushes the FIFO and partial frame, and allows RC/CAN/publisher/USB
+  to continue. The next TCP client starts with a fresh current
+  `STREAM_SESSION` followed only by current Live.
+- Startup: safe/inhibit, reset/watchdog evidence, M4 RC freshness, M7
+  authority/safety, CAN ingest/TX, and USB are initialized before Wi-Fi. Wi-Fi
+  start failure cannot block the control product.
+- Wire compatibility: record `21 APP_RX_COMMIT_ACK` remains a reserved legacy
+  ID and is decode-ignore only; it grants no permission and changes no state.
+  Record `22 LINK_RELIABILITY_DIAGNOSTIC` schema 1 remains decode-only for old
+  captures/tools and is not current product publication. IDs and legacy schema
+  meanings are not reused.
+- Network platform: the pinned Mbed/lwIP/D3/MPU/WHD profile remains a
+  reproducible internal-Wi-Fi experiment, not product qualification. Its
+  necessity and RAM/regression cost are re-evaluated after the smaller live
+  FIFO is implemented. If common-cause stalls or required mixed-load margin
+  remain, qualify an external communications MCU/gateway instead of adding
+  backlog state to the control MCU.
+- Qualification: host guards must prove APP ACK/replay/rewind absence and the
+  128/8,192 bounds. Physical gates must cover Wi-Fi startup failure, overflow,
+  stall, reconnect, fresh-session/no-backlog behavior, Android Capture
+  failures, 2,000 fps + RC + dual CAN + USB + Wi-Fi, and 1/8/24-hour soak.
+  Build, PC surrogate, or short idle success alone cannot promote release
+  status.

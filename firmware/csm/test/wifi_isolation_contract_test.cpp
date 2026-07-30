@@ -14,14 +14,22 @@ struct TestWifiMailboxStorage {
   csm::board::uplink::WifiWorkerMailbox::TxStorage storage;
 };
 
+static constexpr uint16_t kTestSessionAnchorLength = 1;
+
 class TestWifiWorkerMailbox final
     : private TestWifiMailboxStorage,
       public csm::board::uplink::WifiWorkerMailbox {
  public:
   TestWifiWorkerMailbox()
       : csm::board::uplink::WifiWorkerMailbox(storage) {
-    configureReliableSession(1);
-    activateReliableSession();
+    configureSession(1);
+    activateLiveSession();
+    uint8_t anchor_byte = 0;
+    csm::board::uplink::PublishedFrameView anchor{
+        &anchor_byte, kTestSessionAnchorLength, 0,
+        csm::RecordType::StreamSession,
+        csm::board::uplink::UplinkPriority::Critical};
+    (void)tryOffer(anchor, 1);
   }
 };
 
@@ -120,27 +128,21 @@ void testQueueHighWaterAndAbortGeneration() {
         WifiMailboxOfferResult::Reserved);
   CHECK(mailbox.queuePressureDisconnectLatched());
   CHECK(mailbox.queuePressureDisconnectRequestSequence() == 1);
-  for (uint8_t index = 0;
-       index < BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS; ++index) {
-    CHECK(mailbox.tryOffer(
-              makeFrame(bytes, sizeof(bytes), 100 + index,
-                        UplinkPriority::Critical),
-              10) == WifiMailboxOfferResult::Accepted);
-  }
   CHECK(mailbox.tryOffer(
             makeFrame(bytes, sizeof(bytes), 200, UplinkPriority::Critical), 10) ==
-        WifiMailboxOfferResult::Full);
+        WifiMailboxOfferResult::Busy);
   CHECK(mailbox.queuePressureDisconnectRequestSequence() == 1);
 
   uint8_t staged[16] = {};
   WifiMailboxTxLease lease;
   CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
   CHECK(lease.length != 0);
-  uint32_t aborted = 0;
-  CHECK(mailbox.tryApplyAbort(aborted));
-  CHECK(aborted ==
+  WifiMailboxAbortResult aborted;
+  CHECK(mailbox.tryApplyAbort(kTestSessionAnchorLength, aborted));
+  CHECK(aborted.records == normal_capacity);
+  CHECK(aborted.bytes ==
         static_cast<uint32_t>(
-            normal_capacity + BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS) *
+            normal_capacity) *
             sizeof(bytes));
 
   WifiWorkerMailbox::TxConsumeResult consumed;
@@ -156,7 +158,12 @@ void testQueueHighWaterAndAbortGeneration() {
   CHECK(mailbox.acknowledgeQueuePressureDisconnect(
       mailbox.queuePressureDisconnectHandledSequence()));
   CHECK(!mailbox.queuePressureDisconnectLatched());
-  mailbox.activateReliableSession();
+  mailbox.activateLiveSession();
+  uint8_t anchor_byte = 0;
+  PublishedFrameView anchor{
+      &anchor_byte, kTestSessionAnchorLength, 100,
+      csm::RecordType::StreamSession, UplinkPriority::Critical};
+  CHECK(mailbox.tryOffer(anchor, 20) == WifiMailboxOfferResult::Accepted);
   CHECK(mailbox.tryOffer(
             makeFrame(bytes, sizeof(bytes), 101, UplinkPriority::Critical), 20) ==
         WifiMailboxOfferResult::Accepted);
@@ -177,8 +184,62 @@ void testPumpBudgetBoundsWritesAndBytes() {
   CHECK(pump.writes_attempted == 2);
   CHECK(pump.bytes_progressed == 24);
   CHECK(!pump.would_block);
-  CHECK(mailbox.queueSnapshot().queued_bytes == 48);
+  CHECK(mailbox.queueSnapshot().queued_bytes == 24);
   CHECK(mailbox.queueSnapshot().unsent_bytes == 24);
+}
+
+void testFreshAnchorPartialCompletionBoundary() {
+  using namespace csm::board::uplink;
+  CHECK(!wifiSessionAnchorCompleted(0, 8, 20));
+  CHECK(!wifiSessionAnchorCompleted(8, 11, 20));
+  CHECK(wifiSessionAnchorCompleted(8, 12, 20));
+  CHECK(!wifiSessionAnchorCompleted(20, 1, 20));
+  CHECK(wifiSendResultHasPositiveProgress(1));
+  CHECK(!wifiSendResultHasPositiveProgress(0));
+  CHECK(!wifiSendResultHasPositiveProgress(-1));
+  CHECK(wifiPostSendIsolationDecision(2, 1, 9, 9) ==
+        WifiPostSendIsolation::QueuePressure);
+  CHECK(wifiPostSendIsolationDecision(1, 1, 10, 9) ==
+        WifiPostSendIsolation::IsolationRequest);
+  CHECK(wifiPostSendIsolationDecision(1, 1, 9, 9) ==
+        WifiPostSendIsolation::None);
+  CHECK(!wifiSocketSendPermitted(true, 1, 1, 9, 9));
+  CHECK(!wifiSocketSendPermitted(false, 2, 1, 9, 9));
+  CHECK(!wifiSocketSendPermitted(false, 1, 1, 10, 9));
+  CHECK(wifiSocketSendPermitted(false, 1, 1, 9, 9));
+  constexpr uint64_t kAcceptedPastWireWrap =
+      static_cast<uint64_t>(UINT32_MAX) + 1024u;
+  constexpr uint64_t kSentPastWireWrap =
+      static_cast<uint64_t>(UINT32_MAX) + 1000u;
+  CHECK(wifiPendingAcceptedBytes(
+            kAcceptedPastWireWrap, kSentPastWireWrap, 4u) == 20u);
+  CHECK(static_cast<uint32_t>(kAcceptedPastWireWrap) == 1023u);
+}
+
+void testPressureThresholdProtectsCriticalReserve() {
+  using namespace csm::board::uplink;
+  CHECK(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT == 64);
+  CHECK(kWifiPressureThresholdBytes == 5243);
+  CHECK(kWifiFallbackIngressBytes == 289);
+  CHECK(kWifiPressureThresholdBytes +
+            csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
+            kWifiFallbackIngressBytes <=
+        BOARD_WIFI_SINK_QUEUE_BYTES -
+            BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES);
+}
+
+void testOpaqueSendPressureSignalsAtFallbackBoundary() {
+  using namespace csm::board::uplink;
+  WifiWorkerCallSnapshot call;
+  call.coherent = true;
+  call.in_progress = true;
+  call.phase = WifiWorkerCallPhase::Send;
+  call.started_ms = 100;
+  CHECK(!wifiShouldSignalOpaqueSendPressure(true, call, 104, 5));
+  CHECK(wifiShouldSignalOpaqueSendPressure(true, call, 105, 5));
+  CHECK(!wifiShouldSignalOpaqueSendPressure(false, call, 200, 5));
+  call.phase = WifiWorkerCallPhase::Receive;
+  CHECK(!wifiShouldSignalOpaqueSendPressure(true, call, 200, 5));
 }
 
 void testSustainedProducerStaysWithinPumpEnvelope() {
@@ -197,30 +258,37 @@ void testSustainedProducerStaysWithinPumpEnvelope() {
         simulateTransmitPump(mailbox, 2, 8, 4, SimulatedSend::Progress);
     CHECK(pump.writes_attempted == 2);
     CHECK(pump.bytes_progressed == 8);
-    acknowledge(mailbox, sequence - 1);
     CHECK(mailbox.queueSnapshot().queued_records == 0);
     CHECK(!mailbox.queuePressureDisconnectLatched());
   }
 }
 
-void testHighWaterRequestsPreFullIsolation() {
+void testHighWaterIsWorkerNoProgressBoundaryBeforeReserve() {
   using namespace csm::board::uplink;
   TestWifiWorkerMailbox mailbox;
   const uint8_t bytes[] = {1, 2, 3, 4};
   uint64_t sequence = 0;
-  while (!mailbox.queuePressureDisconnectLatched()) {
-    const WifiMailboxOfferResult offered = mailbox.tryOffer(
-        makeFrame(bytes, sizeof(bytes), sequence++, UplinkPriority::Normal),
-        10);
-    if (offered == WifiMailboxOfferResult::Reserved) break;
-    CHECK(offered == WifiMailboxOfferResult::Accepted);
+  while (!wifiQueuePressureReached(
+      mailbox.queueSnapshot().queued_bytes,
+      mailbox.queueSnapshot().queued_records,
+      BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
+      BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT)) {
+    CHECK(mailbox.tryOffer(
+              makeFrame(bytes, sizeof(bytes), sequence++,
+                        UplinkPriority::Normal),
+              10) == WifiMailboxOfferResult::Accepted);
   }
   const WifiMailboxQueueSnapshot queued = mailbox.queueSnapshot();
   CHECK(wifiQueuePressureReached(
       queued.queued_bytes, queued.queued_records, BOARD_WIFI_SINK_QUEUE_BYTES,
       BOARD_WIFI_SINK_QUEUE_RECORDS, BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT));
-  CHECK(queued.queued_records < BOARD_WIFI_SINK_QUEUE_RECORDS);
-  CHECK(mailbox.queuePressureDisconnectRequestSequence() == 1);
+  CHECK(queued.queued_records <
+        BOARD_WIFI_SINK_QUEUE_RECORDS -
+            BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
+  CHECK(!mailbox.queuePressureDisconnectLatched());
+  CHECK(wifiShouldCloseQueuePressure(true, false));
+  CHECK(!wifiShouldCloseQueuePressure(true, true));
+  CHECK(!wifiShouldCloseQueuePressure(false, false));
 }
 
 void testWouldBlockBelowHighWaterUsesOnlyTransmitTimeout() {
@@ -282,7 +350,7 @@ void testSlowPositiveProgressRequestsOneAdmissionBoundaryClose() {
     CHECK(mailbox.tryOffer(
               makeFrame(bytes, sizeof(bytes), sequence++,
                         UplinkPriority::Normal),
-              10) == WifiMailboxOfferResult::Full);
+              10) == WifiMailboxOfferResult::Busy);
   }
   CHECK(mailbox.queuePressureDisconnectRequestSequence() == 1);
 }
@@ -305,6 +373,52 @@ void testRxEpochDiscardAndOverflow() {
   CHECK(mailbox.peekRx() == csm::kFrameSof1);
   mailbox.discardRx();
   CHECK(mailbox.rxAvailable() == 0);
+
+  const uint32_t initial_generation = mailbox.rxEpochGeneration();
+  CHECK((initial_generation & 1u) == 0u);
+  mailbox.invalidateRxEpoch();
+  const uint32_t invalid_generation = mailbox.rxEpochGeneration();
+  CHECK((invalid_generation & 1u) != 0u);
+  CHECK(mailbox.rxAvailable() == 0);
+  CHECK(mailbox.readRx() == -1);
+  mailbox.resetRxForNewEpoch();
+  CHECK((mailbox.rxEpochGeneration() & 1u) == 0u);
+  CHECK(mailbox.rxEpochGeneration() > invalid_generation);
+
+  // Race a facade consumer against worker epoch invalidation. A stale plain
+  // tail store could move the tail behind the discard and corrupt the next
+  // epoch; CAS tail ownership plus generation fencing must preserve it.
+  uint8_t small_payload[4] = {0x11, 0x22, 0x33, 0x44};
+  uint8_t small_frame[csm::encoded_typed_frame_len(sizeof(small_payload))] = {};
+  size_t small_written = 0;
+  CHECK(csm::encode_typed_frame(
+      small_frame, sizeof(small_frame), csm::RecordType::HostHeartbeat,
+      small_payload, sizeof(small_payload), 0, 0, &small_written));
+  for (uint32_t cycle = 0; cycle < 200; ++cycle) {
+    mailbox.resetRxForNewEpoch();
+    CHECK(mailbox.pushRx(small_frame, static_cast<uint16_t>(small_written)));
+    std::atomic<bool> start{false};
+    std::thread consumer([&] {
+      while (!start.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      while (mailbox.readRx() >= 0) {
+      }
+    });
+    start.store(true, std::memory_order_release);
+    if ((cycle & 1u) != 0u) std::this_thread::yield();
+    mailbox.invalidateRxEpoch();
+    consumer.join();
+    CHECK((mailbox.rxEpochGeneration() & 1u) != 0u);
+    CHECK(mailbox.rxAvailable() == 0);
+
+    mailbox.resetRxForNewEpoch();
+    CHECK(mailbox.pushRx(small_frame, static_cast<uint16_t>(small_written)));
+    for (size_t index = 0; index < small_written; ++index) {
+      CHECK(mailbox.readRx() == small_frame[index]);
+    }
+    CHECK(mailbox.readRx() == -1);
+  }
 }
 
 void testCallBoundarySnapshot() {
@@ -478,8 +592,11 @@ void testTransmitNoProgressPolicy() {
 int main() {
   testQueueHighWaterAndAbortGeneration();
   testPumpBudgetBoundsWritesAndBytes();
+  testFreshAnchorPartialCompletionBoundary();
+  testPressureThresholdProtectsCriticalReserve();
+  testOpaqueSendPressureSignalsAtFallbackBoundary();
   testSustainedProducerStaysWithinPumpEnvelope();
-  testHighWaterRequestsPreFullIsolation();
+  testHighWaterIsWorkerNoProgressBoundaryBeforeReserve();
   testWouldBlockBelowHighWaterUsesOnlyTransmitTimeout();
   testSlowPositiveProgressRequestsOneAdmissionBoundaryClose();
   testRxEpochDiscardAndOverflow();

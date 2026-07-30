@@ -29,6 +29,7 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   service_reported_stall_event_sequence_ = 0;
   service_reported_queue_pressure_close_total_ = 0;
   acknowledged_queue_pressure_disconnect_sequence_ = 0;
+  observed_queue_aborted_records_total_ = 0;
   session_anchor_queued_ = false;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
@@ -48,8 +49,12 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
 bool WifiTcpSink::enabled() const { return enabled_; }
 
 bool WifiTcpSink::connected() const {
-  return enabled_ && wifiRuntimeModeEnablesTcp(config_.runtime_mode) &&
-         mailbox_.reliableSessionActive();
+  const uint32_t observed_rx_generation = worker_state_.rx_epoch_generation;
+  const uint32_t current_rx_generation = mailbox_.rxEpochGeneration();
+  return socketConnected() && mailbox_.liveSessionActive() &&
+         !mailbox_.queuePressureDisconnectLatched() &&
+         (observed_rx_generation & 1u) == 0u &&
+         observed_rx_generation == current_rx_generation;
 }
 
 bool WifiTcpSink::socketConnected() const {
@@ -69,6 +74,15 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
     counters_.offer_disconnected_total++;
     return SinkOfferResult::Disconnected;
   }
+  if (!session_anchor_queued_ &&
+      frame.type != csm::RecordType::StreamSession) {
+    // A newly observed socket epoch is not a live data sink until its exact
+    // canonical full-sequence anchor has been admitted.
+    counters_.offer_busy_total++;
+    counters_.offer_overflow_total++;
+    noteLiveLossRange(frame.publish_seq, frame.publish_seq, 1);
+    return SinkOfferResult::Overflow;
+  }
   const WifiMailboxOfferResult offered = mailbox_.tryOffer(frame, millis());
   switch (offered) {
     case WifiMailboxOfferResult::Accepted:
@@ -76,24 +90,17 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
     case WifiMailboxOfferResult::Busy:
       counters_.offer_busy_total++;
       counters_.offer_overflow_total++;
+      noteLiveLossRange(frame.publish_seq, frame.publish_seq, 1);
       return SinkOfferResult::Overflow;
     case WifiMailboxOfferResult::Reserved:
       counters_.offer_reserved_total++;
       counters_.offer_overflow_total++;
-      if (!counters_.first_not_admitted_valid) {
-        counters_.first_not_admitted_valid = true;
-        counters_.first_not_admitted_publish_seq = frame.publish_seq;
-        counters_.journal_full_total++;
-      }
+      noteLiveLossRange(frame.publish_seq, frame.publish_seq, 1);
       return SinkOfferResult::Overflow;
     case WifiMailboxOfferResult::Full:
       counters_.offer_full_total++;
       counters_.offer_overflow_total++;
-      if (!counters_.first_not_admitted_valid) {
-        counters_.first_not_admitted_valid = true;
-        counters_.first_not_admitted_publish_seq = frame.publish_seq;
-        counters_.journal_full_total++;
-      }
+      noteLiveLossRange(frame.publish_seq, frame.publish_seq, 1);
       return SinkOfferResult::Overflow;
     case WifiMailboxOfferResult::Invalid:
       counters_.offer_invalid_total++;
@@ -114,6 +121,22 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
   counters_.queue_high_water_bytes = queued.high_water_bytes;
   counters_.queue_high_water_records = queued.high_water_records;
   return SinkOfferResult::Accepted;
+}
+
+void WifiTcpSink::noteLiveLossRange(uint64_t first_publish_seq,
+                                    uint64_t last_publish_seq,
+                                    uint32_t records) {
+  if (records == 0) return;
+  counters_.live_fifo_loss_total += records;
+  if (!counters_.loss_range_valid ||
+      first_publish_seq < counters_.first_lost_publish_seq) {
+    counters_.first_lost_publish_seq = first_publish_seq;
+  }
+  if (!counters_.loss_range_valid ||
+      last_publish_seq > counters_.last_lost_publish_seq) {
+    counters_.last_lost_publish_seq = last_publish_seq;
+  }
+  counters_.loss_range_valid = true;
 }
 
 SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
@@ -166,7 +189,7 @@ SinkServiceResult WifiTcpSink::service(uint32_t byte_budget, uint32_t now_ms,
 void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
 Stream* WifiTcpSink::downlinkStream() {
-  return socketConnected() ? this : nullptr;
+  return connected() ? this : nullptr;
 }
 
 int WifiTcpSink::available() {
@@ -195,38 +218,44 @@ uint32_t WifiTcpSink::workerHeartbeatAgeMs(uint32_t now_ms) const {
 WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
     uint64_t mono_us, uint32_t now_ms) const {
   const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
+  const WifiWorkerCounters& worker = worker_state_.counters;
   WifiTransportDiagnosticSnapshot snapshot;
   snapshot.mono_us = mono_us;
   snapshot.last_accepted_publish_seq =
-      counters_.first_accepted_valid ? counters_.last_accepted_publish_seq : 0;
-  snapshot.last_sent_publish_seq = counters_.last_sent_publish_seq;
+      worker_state_.accepted_sequence_valid
+          ? worker_state_.last_accepted_publish_seq
+          : 0;
+  snapshot.last_sent_publish_seq = worker.last_sent_publish_seq;
   snapshot.connection_epoch = counters_.connection_epoch;
   snapshot.offer_bytes_total = counters_.offer_bytes_total;
-  snapshot.accepted_bytes_total = counters_.offer_accept_bytes_total;
-  snapshot.disconnected_total = counters_.offer_disconnected_total;
-  snapshot.overflow_total = counters_.offer_overflow_total;
-  snapshot.queue_bytes = queue.queued_bytes;
-  snapshot.queue_records = queue.queued_records;
-  snapshot.queue_high_water_bytes = queue.high_water_bytes;
+  snapshot.accepted_bytes_total =
+      static_cast<uint32_t>(worker_state_.accepted_bytes_total);
+  snapshot.accepted_records_total = worker_state_.accepted_records_total;
+  snapshot.rejected_records_total = counters_.offer_overflow_total;
+  snapshot.queue_bytes = worker_state_.queue_bytes;
+  snapshot.queue_records = worker_state_.queue_records;
+  snapshot.queue_high_water_bytes = worker_state_.queue_high_water_bytes;
   if (queue.queued_records != 0 && queue.first_queued_ms != 0) {
     snapshot.queue_oldest_age_ms = now_ms - queue.first_queued_ms;
   }
-  snapshot.socket_bytes_total = counters_.bytes_sent_total;
-  snapshot.socket_frames_total = counters_.frame_sent_total;
-  snapshot.positive_write_total = counters_.positive_write_total;
-  snapshot.would_block_total = counters_.would_block_total;
-  snapshot.socket_error_total = counters_.socket_error_total;
-  snapshot.send_call_max_us = counters_.send_call_max_us;
-  snapshot.no_progress_max_ms = counters_.backpressure_max_duration_ms;
-  snapshot.stall_close_total = counters_.stall_close_total;
-  snapshot.queue_pressure_close_total = counters_.queue_pressure_close_total;
-  snapshot.queue_high_water_records = queue.high_water_records;
-  snapshot.offer_reserved_total = counters_.offer_reserved_total;
-  snapshot.offer_full_total = counters_.offer_full_total;
-  snapshot.write_attempt_total = counters_.write_attempt_total;
-  snapshot.partial_write_total = counters_.partial_write_total;
-  snapshot.send_request_bytes_total = counters_.send_request_bytes_total;
-  snapshot.worker_stack_free = worker_state_.stack_free_bytes;
+  snapshot.socket_bytes_total =
+      static_cast<uint32_t>(worker.socket_sent_bytes_total);
+  snapshot.socket_frames_total = worker.frame_sent_total;
+  snapshot.positive_write_total = worker.positive_write_total;
+  snapshot.would_block_total = worker.would_block_total;
+  snapshot.socket_error_total = worker.socket_error_total;
+  snapshot.send_call_max_us = worker.send_call_max_us;
+  snapshot.no_progress_max_ms = worker.backpressure_max_duration_ms;
+  snapshot.stall_close_total =
+      worker.stall_close_total + logical_call_stall_total_;
+  snapshot.queue_pressure_close_total = worker.queue_pressure_close_total;
+  snapshot.queue_high_water_records =
+      worker_state_.queue_high_water_records;
+  snapshot.aborted_bytes_total =
+      static_cast<uint32_t>(worker.queue_aborted_bytes_total);
+  snapshot.aborted_records_total = worker.queue_aborted_records_total;
+  snapshot.first_lost_publish_seq = counters_.first_lost_publish_seq;
+  snapshot.last_lost_publish_seq = counters_.last_lost_publish_seq;
   snapshot.close_reason =
       static_cast<uint8_t>(worker_state_.last_close_reason);
   snapshot.runtime_mode = static_cast<uint8_t>(config_.runtime_mode);
@@ -238,54 +267,8 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
   if (mailbox_.queuePressureDisconnectLatched()) {
     snapshot.flags |= csm::kTransportDiagnosticFlagQueuePressureLatched;
   }
-  return snapshot;
-}
-
-LinkReliabilityDiagnosticSnapshot
-WifiTcpSink::reliabilityDiagnosticSnapshot(uint64_t mono_us) const {
-  const WifiMailboxQueueSnapshot queue = mailbox_.queueSnapshot();
-  LinkReliabilityDiagnosticSnapshot snapshot;
-  snapshot.mono_us = mono_us;
-  snapshot.boot_session_id = worker_state_.boot_session_id;
-  snapshot.last_accepted_publish_seq =
-      counters_.first_accepted_valid ? counters_.last_accepted_publish_seq : 0;
-  snapshot.highest_sent_publish_seq = counters_.last_sent_publish_seq;
-  snapshot.last_acked_publish_seq = counters_.last_acked_publish_seq;
-  snapshot.first_not_admitted_publish_seq =
-      counters_.first_not_admitted_valid
-          ? counters_.first_not_admitted_publish_seq
-          : 0;
-  snapshot.offered_bytes_total = counters_.offer_bytes_total64;
-  snapshot.admitted_bytes_total = counters_.offer_accept_bytes_total64;
-  snapshot.socket_sent_bytes_total = counters_.socket_sent_bytes_total;
-  snapshot.reclaimed_bytes_total = counters_.reclaimed_bytes_total;
-  snapshot.retained_bytes = queue.queued_bytes;
-  snapshot.unsent_bytes = queue.unsent_bytes;
-  snapshot.high_water_bytes = queue.high_water_bytes;
-  snapshot.retained_records = queue.queued_records;
-  snapshot.unsent_records = queue.unsent_records;
-  snapshot.high_water_records = queue.high_water_records;
-  snapshot.ack_accepted_total = counters_.app_ack_accepted_total;
-  snapshot.ack_rejected_total = counters_.app_ack_rejected_total;
-  snapshot.rewind_total = counters_.replay_rewind_total;
-  snapshot.journal_full_total = counters_.journal_full_total;
-  snapshot.connection_epoch = counters_.connection_epoch;
-  snapshot.close_reason =
-      static_cast<uint8_t>(worker_state_.last_close_reason);
-  if (worker_state_.reliable_session_active) {
-    snapshot.flags |= csm::kLinkReliabilityFlagSessionActive;
-  }
-  if (socketConnected()) {
-    snapshot.flags |= csm::kLinkReliabilityFlagSocketConnected;
-  }
-  if (worker_state_.reliable_ack_valid) {
-    snapshot.flags |= csm::kLinkReliabilityFlagAckValid;
-  }
-  if (worker_state_.reliable_integrity_fault) {
-    snapshot.flags |= csm::kLinkReliabilityFlagIntegrityFault;
-  }
-  if (worker_state_.reliable_replay_active) {
-    snapshot.flags |= csm::kLinkReliabilityFlagBacklogReplay;
+  if (counters_.loss_range_valid) {
+    snapshot.flags |= csm::kTransportDiagnosticFlagLossRangeValid;
   }
   return snapshot;
 }
@@ -304,13 +287,26 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   if (reportable_epoch_delta > 0) {
     effective_connection_epoch_ += reportable_epoch_delta;
     result.epoch_changed = true;
-    mailbox_.discardRx();
     session_anchor_queued_ = false;
   }
   worker_state_ = state;
   connected_ = state.tcp_enabled && state.connected && !isolation_latched_;
   backpressure_active_ = state.tcp_enabled && state.backpressure_active;
   const WifiWorkerCounters& worker = state.counters;
+  const uint32_t aborted_record_delta =
+      worker.queue_aborted_records_total -
+      observed_queue_aborted_records_total_;
+  observed_queue_aborted_records_total_ =
+      worker.queue_aborted_records_total;
+  if (aborted_record_delta != 0) {
+    if (worker.queue_abort_sequence_valid) {
+      noteLiveLossRange(worker.first_queue_aborted_publish_seq,
+                        worker.last_queue_aborted_publish_seq,
+                        aborted_record_delta);
+    } else {
+      counters_.live_fifo_loss_total += aborted_record_delta;
+    }
+  }
   counters_.worker_start_total = worker.worker_start_total;
   counters_.worker_start_fail_total = worker.worker_start_fail_total;
   counters_.startup_attempt_total = worker.startup_attempt_total;
@@ -330,7 +326,9 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.backpressure_total = worker.backpressure_total;
   counters_.backpressure_max_duration_ms = worker.backpressure_max_duration_ms;
   counters_.queue_abort_total = worker.queue_abort_total;
-  counters_.queue_aborted_bytes_total = worker.queue_aborted_bytes_total;
+  counters_.queue_aborted_bytes_total =
+      static_cast<uint32_t>(worker.queue_aborted_bytes_total);
+  counters_.queue_aborted_records_total = worker.queue_aborted_records_total;
   counters_.connection_epoch = effective_connection_epoch_;
   counters_.connect_total = worker.connect_total;
   counters_.disconnect_total = worker.disconnect_total;
@@ -358,11 +356,6 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.bytes_per_wake_max = worker.bytes_per_wake_max;
   counters_.writes_per_wake_max = worker.writes_per_wake_max;
   counters_.last_sent_publish_seq = worker.last_sent_publish_seq;
-  counters_.last_acked_publish_seq = worker.last_acked_publish_seq;
-  counters_.reclaimed_bytes_total = worker.ack_reclaimed_bytes_total;
-  counters_.app_ack_accepted_total = worker.app_ack_accepted_total;
-  counters_.app_ack_rejected_total = worker.app_ack_rejected_total;
-  counters_.replay_rewind_total = worker.replay_rewind_total;
   const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
   counters_.queue_high_water_bytes = queued.high_water_bytes;
   counters_.queue_high_water_records = queued.high_water_records;
@@ -396,7 +389,6 @@ void WifiTcpSink::isolateStalledCall(const WifiWorkerCallSnapshot& call,
   counters_.stall_close_total =
       worker_state_.counters.stall_close_total + logical_call_stall_total_;
   mailbox_.requestDisconnect();
-  mailbox_.discardRx();
   result.backpressure_event = true;
   result.backpressure_duration_ms = call_age_ms;
   if (was_connected) {

@@ -9,7 +9,7 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 1024
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 128
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -18,7 +18,6 @@
 
 #include "board/uplink/WifiWorkerContract.h"
 #include "board/uplink/WifiWorkerMailbox.h"
-#include "board/uplink/LinkReliabilityDiagnostic.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 
 static_assert(BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS < BOARD_WIFI_SINK_QUEUE_RECORDS,
@@ -67,6 +66,7 @@ struct WifiTcpSinkCounters {
   uint32_t backpressure_max_duration_ms = 0;
   uint32_t queue_abort_total = 0;
   uint32_t queue_aborted_bytes_total = 0;
+  uint32_t queue_aborted_records_total = 0;
   uint32_t connection_epoch = 0;
   uint32_t connect_total = 0;
   uint32_t disconnect_total = 0;
@@ -100,15 +100,11 @@ struct WifiTcpSinkCounters {
   uint64_t first_accepted_publish_seq = 0;
   uint64_t last_accepted_publish_seq = 0;
   uint64_t last_sent_publish_seq = 0;
-  uint64_t last_acked_publish_seq = 0;
-  uint64_t reclaimed_bytes_total = 0;
-  uint64_t first_not_admitted_publish_seq = 0;
-  uint32_t app_ack_accepted_total = 0;
-  uint32_t app_ack_rejected_total = 0;
-  uint32_t replay_rewind_total = 0;
-  uint32_t journal_full_total = 0;
+  uint64_t first_lost_publish_seq = 0;
+  uint64_t last_lost_publish_seq = 0;
+  uint32_t live_fifo_loss_total = 0;
   bool first_accepted_valid = false;
-  bool first_not_admitted_valid = false;
+  bool loss_range_valid = false;
 };
 
 class WifiTcpSink final : public IFrameSink, public Stream {
@@ -151,9 +147,6 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t workerHeartbeatAgeMs(uint32_t now_ms) const;
   WifiTransportDiagnosticSnapshot diagnosticSnapshot(
       uint64_t mono_us, uint32_t now_ms) const;
-  LinkReliabilityDiagnosticSnapshot reliabilityDiagnosticSnapshot(
-      uint64_t mono_us) const;
-
  private:
   WifiWorkerMailbox mailbox_;
   WifiSocketWorker* worker_ = nullptr;
@@ -174,8 +167,11 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t service_reported_stall_event_sequence_ = 0;
   uint32_t service_reported_queue_pressure_close_total_ = 0;
   uint32_t acknowledged_queue_pressure_disconnect_sequence_ = 0;
+  uint32_t observed_queue_aborted_records_total_ = 0;
   bool session_anchor_queued_ = false;
 
+  void noteLiveLossRange(uint64_t first_publish_seq,
+                         uint64_t last_publish_seq, uint32_t records);
   void syncWorkerState(const WifiWorkerStateSnapshot& state,
                        SinkServiceResult& result);
   void isolateStalledCall(const WifiWorkerCallSnapshot& call,

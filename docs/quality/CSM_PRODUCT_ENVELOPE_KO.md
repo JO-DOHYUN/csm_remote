@@ -1,102 +1,135 @@
 # CSM Product Envelope
 
-Updated: 2026-07-28
+Updated: 2026-07-30
 
 이 문서는 Portenta H7 + Feather RP2040 CAN feeder 제품의 계산·메모리·검증
-gate다. 실행 가능한 계산 원본은
-`firmware/csm/tools/product_envelope.py`이며, prose보다 우선한다.
+gate다. live-first 구현, host 계약, 제품 build, COM7 upload와 짧은 PC live
+gate는 통과했다. 아래 계산은 최종 동시부하 qualification 입력이며 그 자체가
+release PASS 주장은 아니다.
 
-## 계산 기준
+## 제품 데이터율 기준
 
-| Gate | 계산값 | 판정 |
+| Gate | 계산 또는 기존 측정 | 현재 판정 |
 |---|---:|:---:|
-| CAN RX 2,000 fps legacy → compact | 65,762 → 44,437 B/s | PASS |
-| 2,000 fps 전체 제품 stream | 57,735 B/s | PASS(계산) |
-| 기존 raw AP 저/고 실측 | 65,083 / 69,413 B/s | 참고 |
-| 4,000 fps 전체 제품 stream | 102,172 B/s | GATE |
-| 57,735 B/s × 1.02 s | 58,890 B | PASS |
-| normal journal byte envelope | 63,408 B | PASS |
-| Wi-Fi journal DTCM / usable DTCM | 90,096 / 130,408 B | PASS |
+| CAN RX 2,000 fps legacy → compact | 65,762 → 44,437 B/s | 계산 |
+| 2,000 fps 전체 제품 stream | 57,735 B/s | 동시 HIL 필요 |
+| 기존 raw AP 저/고 실측 | 65,083 / 69,413 B/s | 과거 참고 |
+| 4,000 fps 전체 제품 stream | 102,172 B/s | 제품 목표 아님 |
 
-2,000 fps 계산은 현재 compact CAN schema 2, control evidence와 1 Hz product
-health/reliability record를 포함한다. 기존 raw AP 실측은 용량 참고값이지
-새 pinned build의 물리 통과 증거가 아니다. 4,000 fps는 현재 내부 Wi-Fi
-release 목표가 아니며 USB truth path 또는 상위 transport gate가 필요하다.
+기존 raw AP 결과는 canonical product stream, Android Capture, RC/CAN/USB
+동시부하를 검증하지 않는다. 특히 zero-progress window가 있었으므로 평균
+처리량만으로 release margin을 주장하지 않는다.
 
-## retained journal 용량
+## Wi-Fi live FIFO envelope
 
-- descriptor: 1,024 × 24 B = 24,576 B
-- encoded byte ring: 65,520 B
-- 총 DTCM storage: 90,096 B
-- critical reserve: 4 records / 2,112 B
-- normal byte envelope: 63,408 B
-- 2,000 fps 계산 부하에서 normal retention: 약 1.098 s
-- 검증 계약 outage: 1.02 s, 58,890 B
+현재 승인 계약:
 
-Full 전 정상 record를 버려 더 오래 버티는 정책은 사용하지 않는다.
-최초 admission failure가 곧 무결성 경계이며 epoch isolation과 명시적
-counter/event를 발생시킨다.
+```text
+record capacity: 128
+encoded-byte capacity: 8,192 B
+admission: single nonblocking offer
+release: positive socket send 즉시
+disconnect replay: 없음
+application ACK: 없음
+overflow/stall: close + flush + fresh STREAM_SESSION
+```
 
-## 제품 Mbed/lwIP profile
+8,192 B는 57,735 B/s 생산량의 약 142 ms에 해당하지만 outage 보존 시간이
+아니다. record와 byte 한계 중 먼저 닿는 경계가 적용된다. queue는 짧은
+scheduling jitter만 흡수하며 실제 TCP 단절 구간은 손실로 종료한다.
+
+descriptor는 compile-time 16 B이며 128개는 2,048 B다. 8,192 B encoded
+ring과 합한 정적 DTCM storage는 10,240 B이고 linker assertion과
+`sizeof(WifiTcpSink::TxStorage)` assertion이 이를 고정한다. 기존 90,096 B
+retained journal 대비 79,856 B를 회수하지만, 전체 section 사용량과 여유는
+최종 build map으로 다시 확인한다.
+
+64% pressure 경계는 5,243 B다. normal admission 6,080 B까지 남는 837 B가
+최대 encoded frame 523 B와 5 ms fallback 동안의 계산 유입 289 B 합계
+812 B보다 크다는 것을 source-backed 계산과 static assertion으로 고정한다.
+
+## overflow와 복구 계약
+
+queue full 또는 socket stall 시 다음 순서를 검증한다.
+
+1. RC/CAN/canonical publisher/USB는 계속 진행한다.
+2. Wi-Fi sink가 first/last dropped publish sequence와 누계를 고정한다.
+3. 해당 TCP epoch만 close하고 FIFO와 partial frame을 flush한다.
+4. 과거 record를 rewind/replay하지 않는다.
+5. 새 연결은 현재 boot/full sequence의 fresh `STREAM_SESSION`부터 시작한다.
+6. Android는 이전 segment를 GAP/PARTIAL로 닫고 최신 Live를 계속한다.
+
+CSM은 Android Capture 상태나 파일 commit을 이 과정의 조건으로 사용하지
+않는다.
+
+## Mbed/lwIP candidate
+
+2026-07-28 pinned profile은 재현 가능한 내부 Wi-Fi 실험 기준이며 최종 제품
+승인이 아니다.
 
 - ArduinoCore-mbed commit:
   `6816d442fd00bc17f83c73396d3d8d90285a6a8a`
 - Mbed OS commit:
   `17dc3dc2e6e2817a8bd3df62f38583319f0e4fed`
-- deterministic `libmbed.a` SHA-256:
+- candidate `libmbed.a` SHA-256:
   `032494298FC6CAFAAD23277B8CBEB01F1BA75CA7F72CCD90383A850EE561FD70`
-- MSS 1,460; SND_BUF 11,680 B; TCP_WND 5,840 B; TCP_SEG 40;
-  MEM_SIZE 40,960 B; PBUF_POOL_SIZE 5; TCP/IP stack 4,096 B;
-  IPv4 on/IPv6 off; max sockets 4; WHD TX `PBUF_RAM`.
 
-Archive, generated config와 application override SHA는
-`third_party/mbed_portenta_product/artifact/PORTENTA_H7_M7/artifact-manifest.json`
-에 고정한다.
+MSS/SND_BUF/TCP_WND/lwIP heap/D3 linker/MPU/WHD override는 live-first build의
+실제 필요성, RAM 비용과 regression을 다시 판정한다. retained replay
+용량을 만족시키기 위한 설정은 더 이상 제품 근거가 아니다.
 
-## 메모리 ownership
+## 메모리 ownership gate
 
-| 영역 | 제품 ownership |
+새 build는 다음을 map과 runtime evidence로 함께 확인한다.
+
+| 영역 | gate |
 |---|---|
-| D1 `0x24000000` | app/core initialized data, stack/heap |
-| DTCM | 90,096 B retained Wi-Fi journal + CPU-only arenas |
-| D2 `..0x30040000` | M4-owned physical window |
-| D2 `0x30040000..0x30048000` | M7 network DMA/lwIP sections |
-| D3 `0x38000400..0x3800A7FF` | pinned lwIP heap envelope |
+| D1 | app/core data, stack/heap headroom |
+| DTCM | live FIFO와 CPU-only arena의 실제 사용량 |
+| D2 | M4 window와 M7 network DMA section 비중첩 |
+| D3 | lwIP heap actual size와 MPU attribute |
 
-Product linker는 heap object 40,979 B, D3 envelope 41,984 B, DTCM journal
-90,096 B, D2 경계와 OpenAMP exclusion을 assert한다. MPU region 15 read-back이
-실패하면 Wi-Fi는 fail disabled다. 구형 MCP/diagnostic 환경은 별도 standard
-linker를 사용하므로 이 product-only 배치에 종속되지 않는다.
+필수 evidence:
 
-## 현재 artifact
-
-- M7 product build: D1 RAM 169,632/523,624 B, flash
-  364,856/786,432 B
-- M7 firmware SHA-256:
-  `59E646042B0FB312843A9D29DCBBB61CF75169979BA392CF9FA40BA86E9D33AF`
-- M4 remote frontend: RAM 43,248/294,248 B, flash 73,928/1,048,576 B
-- RP2040 feeder: RAM 59,732/262,144 B, flash 80,892/8,384,512 B
-
-위 SHA는 현재 오프라인 candidate다. 실제 upload 직전에 source/manifest가
-변하면 다시 산출한다.
+- section별 used/free와 linker assertion
+- worker/main/M4 stack minimum free
+- heap high-water와 장시간 growth 0
+- cache/MPU read-back
+- Wi-Fi 미시작 또는 반복 close 중 RC/CAN/USB deadline 영향 0
 
 ## release table
 
-각 실기 행은 input fps/bytes, canonical admitted B/s, socket sent B/s,
-ACK reclaimed B/s, retained/unsent/high-water, first-not-admitted, ACK reject,
-rewind, epoch/close, CRC/typed/segment/capture gap, source drop, main-loop
-maximum gap와 worker stack floor를 함께 기록한다.
+각 실기 행은 다음을 같은 시간창에서 기록한다.
+
+```text
+input fps와 canonical produced B/s
+Wi-Fi offered/admitted/dropped/socket-sent/flushed B와 record
+queue current/high-water records와 bytes
+first/last dropped publish sequence
+epoch/connect/disconnect/close reason
+would-block/socket error/stall/maximum no-progress
+USB/source/CAN drop와 canonical gap
+main-loop maximum gap, control deadline miss, worker stack floor
+Android received/applied gap와 Capture 독립 상태
+```
 
 필수 행:
 
-1. idle + PC durable consumer
-2. idle + Android production consumer
-3. 2,000 fps + USB + Wi-Fi
-4. 2,000 fps + J4 RC + CAN0/CAN1 + USB + Wi-Fi
-5. blocked client 1.02 s 이내 복구와 초과 failure boundary
-6. reconnect, Android kill/restart와 capture recovery
-7. capture open/append/fsync failure
-8. 장시간 soak
+1. boot/startup 중 Wi-Fi disabled/AP failure와 RC/CAN/USB 정상
+2. idle + PC live consumer
+3. idle + 실제 Android production consumer
+4. 2,000 fps + USB + Wi-Fi
+5. 2,000 fps + J4 RC + CAN0/CAN1 + USB + Wi-Fi
+6. blocked client와 강제 queue overflow/socket stall
+7. reconnect 100회: backlog 0, fresh session, 최신 Live 복구
+8. Android Capture open/write/fsync/storage 실패: Live/TCP 지속
+9. 1시간/8시간/24시간 soak
 
-모든 required integrity counter가 0이고 계산 conservation과 실측
-`offered → admitted → sent → reclaimed → retained`가 일치해야 통과한다.
+통과 조건은 각 측정창의 시작·종료 queue delta를 포함해
+`offered = admitted + dropped`,
+`admitted = socket-sent + flushed + queued-delta`가 일치하고, USB도 같은
+방식으로 독립 보존되며, 모든 loss/close sequence 경계가 일치하는 것이다.
+Wi-Fi drop은 허용된 fault injection에서만 명시적 GAP으로 인정하며 정상
+steady-state에서는 0이어야 한다.
+
+현재 내부 Wi-Fi 상태는 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다.

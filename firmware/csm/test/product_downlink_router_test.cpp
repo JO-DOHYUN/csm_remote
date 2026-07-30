@@ -24,14 +24,6 @@ struct Capture {
   std::vector<uint8_t> passthrough;
 };
 
-bool capture_ack(void* context, uint64_t boot, uint64_t seq) {
-  auto* capture = static_cast<Capture*>(context);
-  ++capture->ack_total;
-  capture->boot = boot;
-  capture->seq = seq;
-  return true;
-}
-
 bool capture_passthrough(void* context, const uint8_t* bytes,
                          uint16_t length) {
   auto* capture = static_cast<Capture*>(context);
@@ -53,7 +45,7 @@ std::vector<uint8_t> encode(csm::RecordType type, const uint8_t* payload,
 void ack_is_consumed_and_never_reaches_motion_lane() {
   Capture capture;
   csm::board::uplink::ProductDownlinkRouter router;
-  router.begin(capture_ack, capture_passthrough, &capture);
+  router.begin(capture_passthrough, &capture);
   uint8_t payload[csm::kAppRxCommitAckPayloadLen] = {};
   csm::wr_u64_le(
       &payload[csm::kAppRxCommitAckBootSessionOffset],
@@ -65,17 +57,15 @@ void ack_is_consumed_and_never_reaches_motion_lane() {
                             sizeof(payload));
 
   for (const uint8_t byte : frame) CHECK(router.feed(&byte, 1));
-  CHECK(capture.ack_total == 1);
-  CHECK(capture.boot == 0x1122334455667788ULL);
-  CHECK(capture.seq == 0x0102030405060708ULL);
+  CHECK(capture.ack_total == 0);
   CHECK(capture.passthrough.empty());
-  CHECK(router.counters().app_ack_total == 1);
+  CHECK(router.counters().legacy_ack_ignored_total == 1);
 }
 
 void service_command_remains_byte_identical() {
   Capture capture;
   csm::board::uplink::ProductDownlinkRouter router;
-  router.begin(capture_ack, capture_passthrough, &capture);
+  router.begin(capture_passthrough, &capture);
   const uint8_t payload[] = {1, 2, 3, 4};
   const auto frame =
       encode(csm::RecordType::HostQueryCapability, payload, sizeof(payload));
@@ -88,7 +78,7 @@ void service_command_remains_byte_identical() {
 void corrupt_ack_cannot_reclaim() {
   Capture capture;
   csm::board::uplink::ProductDownlinkRouter router;
-  router.begin(capture_ack, capture_passthrough, &capture);
+  router.begin(capture_passthrough, &capture);
   uint8_t payload[csm::kAppRxCommitAckPayloadLen] = {};
   const auto valid =
       encode(csm::RecordType::AppRxCommitAck, payload, sizeof(payload));
@@ -98,7 +88,7 @@ void corrupt_ack_cannot_reclaim() {
   CHECK(capture.ack_total == 0);
   CHECK(router.counters().crc_failure_total == 1);
   CHECK(router.feed(valid.data(), valid.size()));
-  CHECK(capture.ack_total == 1);
+  CHECK(capture.ack_total == 0);
 }
 
 }  // namespace
@@ -108,6 +98,6 @@ int main() {
   service_command_remains_byte_identical();
   corrupt_ack_cannot_reclaim();
   if (failures != 0) return 1;
-  std::puts("PASS: product downlink ACK isolation contract");
+  std::puts("PASS: product downlink legacy-ACK isolation contract");
   return 0;
 }

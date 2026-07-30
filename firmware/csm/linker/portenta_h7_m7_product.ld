@@ -206,8 +206,8 @@ SECTIONS
 
     ASSERT(__csm_dtcm_bss_end__ <= ORIGIN(DTCMRAM) + LENGTH(DTCMRAM),
            "CSM DTCM arena overflow")
-    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x15FF0,
-           "Wi-Fi reliable journal storage size drift")
+    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x2800,
+           "Wi-Fi live FIFO storage size drift")
     ASSERT(__wifi_tx_queue_end__ <=
                ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - 0x8000,
            "Wi-Fi queue consumed DTCM safety reserve")

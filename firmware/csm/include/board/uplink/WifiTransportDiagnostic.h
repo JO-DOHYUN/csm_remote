@@ -11,8 +11,8 @@ struct WifiTransportDiagnosticSnapshot {
   uint32_t connection_epoch = 0;
   uint32_t offer_bytes_total = 0;
   uint32_t accepted_bytes_total = 0;
-  uint32_t disconnected_total = 0;
-  uint32_t overflow_total = 0;
+  uint32_t accepted_records_total = 0;
+  uint32_t rejected_records_total = 0;
   uint32_t queue_bytes = 0;
   uint32_t queue_records = 0;
   uint32_t queue_high_water_bytes = 0;
@@ -27,12 +27,10 @@ struct WifiTransportDiagnosticSnapshot {
   uint32_t stall_close_total = 0;
   uint32_t queue_pressure_close_total = 0;
   uint32_t queue_high_water_records = 0;
-  uint32_t offer_reserved_total = 0;
-  uint32_t offer_full_total = 0;
-  uint32_t write_attempt_total = 0;
-  uint32_t partial_write_total = 0;
-  uint32_t send_request_bytes_total = 0;
-  uint32_t worker_stack_free = 0;
+  uint32_t aborted_bytes_total = 0;
+  uint32_t aborted_records_total = 0;
+  uint64_t first_lost_publish_seq = 0;
+  uint64_t last_lost_publish_seq = 0;
   uint8_t flags = 0;
   uint8_t close_reason = 0;
   uint8_t runtime_mode = 0;
