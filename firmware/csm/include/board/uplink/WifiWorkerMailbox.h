@@ -71,6 +71,12 @@ struct WifiMailboxTxLease {
   uint16_t length = 0;
 };
 
+struct WifiMailboxSessionAnchor {
+  uint8_t bytes[csm::encoded_typed_frame_len(csm::kMaxPayloadLen)] = {};
+  uint64_t publish_seq = 0;
+  uint16_t length = 0;
+};
+
 class WifiWorkerMailbox {
  public:
   using TxQueue = ReliableFrameJournal<BOARD_WIFI_SINK_QUEUE_RECORDS,
@@ -89,6 +95,7 @@ class WifiWorkerMailbox {
   WifiMailboxReliabilitySnapshot workerReliabilitySnapshot() const;
   WifiMailboxOfferResult tryOffer(const PublishedFrameView& frame,
                                   uint32_t now_ms);
+  bool tryReadSessionAnchor(WifiMailboxSessionAnchor& anchor) const;
   bool tryStageTx(uint8_t* destination, uint16_t capacity,
                   WifiMailboxTxLease& lease);
   bool tryConsumeTx(const WifiMailboxTxLease& lease, uint16_t bytes,
@@ -135,6 +142,13 @@ class WifiWorkerMailbox {
   uint32_t ack_accepted_total_ = 0;
   uint32_t ack_rejected_total_ = 0;
   uint32_t rewind_total_ = 0;
+  // The first canonical STREAM_SESSION is the immutable boot identity.
+  // It is retained outside the reclaimable journal so every TCP epoch can
+  // establish identity before replaying older unacknowledged records.
+  uint8_t session_anchor_bytes_
+      [csm::encoded_typed_frame_len(csm::kMaxPayloadLen)] = {};
+  uint64_t session_anchor_publish_seq_ = 0;
+  std::atomic<uint16_t> session_anchor_length_{0};
   std::atomic<uint32_t> abort_request_sequence_{0};
   std::atomic<uint32_t> disconnect_request_sequence_{0};
   std::atomic<uint32_t> queue_pressure_disconnect_request_sequence_{0};
@@ -169,6 +183,7 @@ class WifiWorkerMailbox {
   std::atomic<uint32_t> state_words_[kStateWordCount] = {};
 
   void requestQueuePressureDisconnect();
+  void latchReliableIntegrityFault();
   void notifyWorker(uint32_t bits) const;
   bool pushPassthroughRx(const uint8_t* bytes, uint16_t length);
   bool applyAppAck(uint64_t boot_session_id, uint64_t publish_seq);

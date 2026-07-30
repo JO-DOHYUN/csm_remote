@@ -1713,7 +1713,6 @@ static bool usb_cdc_dtr_asserted() {
 }
 
 static constexpr uint8_t kUsbSessionSinkMask = (1u << 0);
-static constexpr uint8_t kWifiSessionSinkMask = (1u << 1);
 static uint32_t last_wifi_capability_epoch = 0;
 static bool pending_wifi_close_event = false;
 static uint8_t pending_wifi_close_reason = 0;
@@ -1730,9 +1729,10 @@ static void request_connection_session(bool usb_epoch_changed,
   }
 #if BOARD_ENABLE_WIFI_UPLINK
   bool refresh_wifi_capability = false;
-  if (wifi_epoch_changed && wifi_tcp_sink.socketConnected() &&
-      !wifi_tcp_sink.sessionAnchorQueued()) {
-    session_targets |= kWifiSessionSinkMask;
+  if (wifi_epoch_changed && wifi_tcp_sink.socketConnected()) {
+    // The worker replays the immutable boot STREAM_SESSION before journal
+    // bytes on every TCP epoch. Publishing a new tail anchor here would put
+    // identity behind retained backlog and recreate the recovery deadlock.
     const uint32_t epoch = wifi_tcp_sink.counters().connection_epoch;
     if (epoch != last_wifi_capability_epoch) {
       last_wifi_capability_epoch = epoch;

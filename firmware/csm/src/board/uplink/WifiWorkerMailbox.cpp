@@ -15,6 +15,7 @@ void WifiWorkerMailbox::setNotifier(const WifiWorkerNotifier& notifier) {
 
 void WifiWorkerMailbox::configureReliableSession(uint64_t boot_session_id) {
   boot_session_id_ = boot_session_id;
+  session_anchor_length_.store(0, std::memory_order_release);
 }
 
 void WifiWorkerMailbox::activateReliableSession() {
@@ -90,12 +91,17 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
                BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES);
   if (enters_critical_reserve) {
     result = WifiMailboxOfferResult::Reserved;
-    reliable_integrity_fault_.store(true, std::memory_order_release);
-    requestQueuePressureDisconnect();
+    latchReliableIntegrityFault();
   } else if (!queue_.push(frame, now_ms)) {
     result = WifiMailboxOfferResult::Full;
-    reliable_integrity_fault_.store(true, std::memory_order_release);
-    requestQueuePressureDisconnect();
+    latchReliableIntegrityFault();
+  }
+  if (result == WifiMailboxOfferResult::Accepted &&
+      frame.type == csm::RecordType::StreamSession &&
+      session_anchor_length_.load(std::memory_order_acquire) == 0) {
+    memcpy(session_anchor_bytes_, frame.bytes, frame.length);
+    session_anchor_publish_seq_ = frame.publish_seq;
+    session_anchor_length_.store(frame.length, std::memory_order_release);
   }
   producer_active_.store(false, std::memory_order_release);
   if (result == WifiMailboxOfferResult::Accepted &&
@@ -109,6 +115,17 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     notifyWorker(WifiWakeTxData);
   }
   return result;
+}
+
+bool WifiWorkerMailbox::tryReadSessionAnchor(
+    WifiMailboxSessionAnchor& anchor) const {
+  const uint16_t length =
+      session_anchor_length_.load(std::memory_order_acquire);
+  if (length == 0 || length > sizeof(anchor.bytes)) return false;
+  memcpy(anchor.bytes, session_anchor_bytes_, length);
+  anchor.publish_seq = session_anchor_publish_seq_;
+  anchor.length = length;
+  return true;
 }
 
 bool WifiWorkerMailbox::tryStageTx(uint8_t* destination, uint16_t capacity,
@@ -241,6 +258,15 @@ bool WifiWorkerMailbox::applyAppAck(uint64_t boot_session_id,
   }
   ++ack_accepted_total_;
   reclaimed_bytes_total_ += ack.reclaimed_bytes;
+  // Admission loss remains permanently visible in journal_full_total and
+  // first_not_admitted_publish_seq. Once the retained prefix is durably
+  // acknowledged, however, keeping the live fault latch set would disable
+  // product telemetry until a board reboot. Resume future admission only at
+  // this unambiguous empty-journal boundary.
+  if (reliableIntegrityFault() &&
+      queue_.snapshot().retained_records == 0) {
+    reliable_integrity_fault_.store(false, std::memory_order_release);
+  }
   return true;
 }
 
@@ -373,6 +399,18 @@ void WifiWorkerMailbox::requestQueuePressureDisconnect() {
     queue_pressure_disconnect_request_sequence_.fetch_add(
         1, std::memory_order_release);
     notifyWorker(WifiWakeControl);
+  }
+}
+
+void WifiWorkerMailbox::latchReliableIntegrityFault() {
+  bool expected = false;
+  if (reliable_integrity_fault_.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    // One epoch close announces the transition and rewinds replay. Further
+    // critical-frame admission failures must not keep evicting the recovery
+    // peer before it can drain and ACK the retained prefix.
+    requestQueuePressureDisconnect();
   }
 }
 

@@ -11,6 +11,7 @@
 #include "board/uplink/FixedFrameByteQueue.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 #include "board/uplink/WifiWorkerMailbox.h"
+#include "protocol/HostCommands.h"
 #include "protocol/TypedRecords.h"
 
 using csm::RecordType;
@@ -470,6 +471,108 @@ void wifi_mailbox_abort_invalidates_staged_generation() {
   CHECK(consumed.frames == 1);
 }
 
+void wifi_mailbox_retains_first_boot_anchor_outside_journal() {
+  using namespace csm::board::uplink;
+  TestWifiWorkerMailbox mailbox;
+  uint8_t original[19] = {};
+  original[0] = 0xA5;
+  original[18] = 0x5A;
+  PublishedFrameView first{original, sizeof(original), 7,
+                           RecordType::StreamSession,
+                           UplinkPriority::Critical,
+                           UplinkDeliveryClass::LatencyBounded};
+  CHECK(mailbox.tryOffer(first, 10) == WifiMailboxOfferResult::Accepted);
+
+  WifiMailboxSessionAnchor anchor;
+  CHECK(mailbox.tryReadSessionAnchor(anchor));
+  CHECK(anchor.length == sizeof(original));
+  CHECK(anchor.publish_seq == 7);
+  CHECK(std::memcmp(anchor.bytes, original, sizeof(original)) == 0);
+
+  uint32_t aborted_bytes = 0;
+  CHECK(mailbox.tryApplyAbort(aborted_bytes));
+  CHECK(aborted_bytes == sizeof(original));
+  anchor = {};
+  CHECK(mailbox.tryReadSessionAnchor(anchor));
+  CHECK(anchor.publish_seq == 7);
+  CHECK(std::memcmp(anchor.bytes, original, sizeof(original)) == 0);
+
+  mailbox.activateReliableSession();
+  uint8_t later[19] = {};
+  later[0] = 0xBB;
+  PublishedFrameView second{later, sizeof(later), 99,
+                            RecordType::StreamSession,
+                            UplinkPriority::Critical,
+                            UplinkDeliveryClass::LatencyBounded};
+  CHECK(mailbox.tryOffer(second, 20) == WifiMailboxOfferResult::Accepted);
+  anchor = {};
+  CHECK(mailbox.tryReadSessionAnchor(anchor));
+  CHECK(anchor.publish_seq == 7);
+  CHECK(anchor.bytes[0] == 0xA5);
+  CHECK(anchor.bytes[18] == 0x5A);
+}
+
+void wifi_mailbox_recovers_live_admission_after_durable_drain() {
+  using namespace csm::board::uplink;
+  TestWifiWorkerMailbox mailbox;
+  uint8_t bytes[64] = {};
+  uint64_t last_accepted = 0;
+  for (uint64_t sequence = 0; sequence < 2000; ++sequence) {
+    PublishedFrameView frame{bytes, sizeof(bytes), sequence,
+                             RecordType::BoardEvent,
+                             UplinkPriority::Normal};
+    const WifiMailboxOfferResult result = mailbox.tryOffer(frame, 10);
+    if (result != WifiMailboxOfferResult::Accepted) break;
+    last_accepted = sequence;
+  }
+  CHECK(mailbox.reliableIntegrityFault());
+  const uint32_t first_close_request =
+      mailbox.queuePressureDisconnectRequestSequence();
+  for (uint16_t attempt = 0; attempt < 16; ++attempt) {
+    const uint64_t sequence = last_accepted + 1;
+    PublishedFrameView critical{bytes, sizeof(bytes), sequence,
+                                RecordType::StreamSession,
+                                UplinkPriority::Critical,
+                                UplinkDeliveryClass::LatencyBounded};
+    if (mailbox.tryOffer(critical, 11 + attempt) ==
+        WifiMailboxOfferResult::Accepted) {
+      last_accepted = sequence;
+    }
+  }
+  CHECK(mailbox.queuePressureDisconnectRequestSequence() ==
+        first_close_request);
+
+  uint8_t staged[256] = {};
+  while (mailbox.queueSnapshot().unsent_records != 0) {
+    WifiMailboxTxLease lease;
+    CHECK(mailbox.tryStageTx(staged, sizeof(staged), lease));
+    WifiWorkerMailbox::TxConsumeResult consumed;
+    bool stale = false;
+    CHECK(mailbox.tryConsumeTx(lease, lease.length, consumed, stale));
+    CHECK(!stale);
+  }
+
+  uint8_t ack_payload[csm::kAppRxCommitAckPayloadLen] = {};
+  csm::wr_u64_le(
+      &ack_payload[csm::kAppRxCommitAckBootSessionOffset], 1);
+  csm::wr_u64_le(
+      &ack_payload[csm::kAppRxCommitAckPublishSeqOffset], last_accepted);
+  uint8_t ack_frame[
+      csm::encoded_typed_frame_len(csm::kAppRxCommitAckPayloadLen)] = {};
+  size_t ack_length = 0;
+  CHECK(csm::encode_typed_frame(
+      ack_frame, sizeof(ack_frame), RecordType::AppRxCommitAck,
+      ack_payload, sizeof(ack_payload), 0, 0, &ack_length));
+  CHECK(mailbox.pushRx(ack_frame, static_cast<uint16_t>(ack_length)));
+  CHECK(mailbox.queueSnapshot().queued_records == 0);
+  CHECK(!mailbox.reliableIntegrityFault());
+
+  PublishedFrameView resumed{bytes, sizeof(bytes), last_accepted + 1,
+                             RecordType::BoardEvent,
+                             UplinkPriority::Normal};
+  CHECK(mailbox.tryOffer(resumed, 20) == WifiMailboxOfferResult::Accepted);
+}
+
 struct WifiWakeCapture {
   uint32_t calls = 0;
   uint32_t bits = 0;
@@ -628,6 +731,8 @@ int main() {
   byte_queue_spsc_preserves_order_without_shared_lock();
   wifi_mailbox_latency_class_tracks_consumer_completion();
   wifi_mailbox_abort_invalidates_staged_generation();
+  wifi_mailbox_retains_first_boot_anchor_outside_journal();
+  wifi_mailbox_recovers_live_admission_after_durable_drain();
   wifi_mailbox_wakes_only_on_actionable_transitions();
   runtime_diagnostic_layout_is_fixed_and_bounded();
   transport_diagnostic_is_single_bounded_wire_record();

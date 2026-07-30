@@ -40,6 +40,10 @@ class WifiSocketWorker final {
   bool server_opened_ = false;
   uint8_t tx_buffer_[BOARD_WIFI_TX_CHUNK_BYTES] = {};
   uint8_t rx_buffer_[256] = {};
+  WifiMailboxSessionAnchor session_anchor_;
+  uint16_t session_anchor_offset_ = 0;
+  bool session_anchor_required_ = false;
+  bool session_anchor_loaded_ = false;
   WifiMailboxTxLease pending_lease_;
   uint16_t pending_consumed_bytes_ = 0;
   bool pending_consume_ = false;
@@ -74,6 +78,7 @@ class WifiSocketWorker final {
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);
   void serviceReceive(uint32_t now_ms);
+  WifiTransmitPumpResult serviceSessionAnchor(uint32_t now_ms);
   WifiTransmitPumpResult serviceTransmit(uint32_t now_ms);
   void notePumpResult(const WifiTransmitPumpResult& result);
   bool applyPendingConsume();

@@ -334,6 +334,11 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   // cannot be starved by a saturated telemetry stream.
   serviceReceive(now_ms);
   if (client_ == nullptr) return;
+  const WifiTransmitPumpResult anchor = serviceSessionAnchor(millis());
+  if (client_ == nullptr || session_anchor_required_) {
+    if (client_ != nullptr && anchor.progressed()) signalWake(WifiWakeTxData);
+    return;
+  }
   const WifiTransmitPumpResult transmitted = serviceTransmit(millis());
   if (client_ != nullptr && transmitted.progressed() &&
       !transmitted.would_block && !transmitted.zero_write &&
@@ -373,6 +378,10 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
   mailbox_.discardRx();
   client_ = candidate;
   state_.connected = true;
+  session_anchor_ = {};
+  session_anchor_offset_ = 0;
+  session_anchor_required_ = true;
+  session_anchor_loaded_ = false;
   tx_progress_.reset();
   state_.backpressure_active = false;
   state_.backpressure_duration_ms = 0;
@@ -380,6 +389,92 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
   state_.counters.connect_total++;
   publishState(millis(), true);
   signalWake(WifiWakeTxData);
+}
+
+WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
+  WifiTransmitPumpResult result;
+  if (!session_anchor_required_ || client_ == nullptr) return result;
+  if (!session_anchor_loaded_) {
+    if (!mailbox_.tryReadSessionAnchor(session_anchor_)) return result;
+    session_anchor_loaded_ = true;
+  }
+  if (session_anchor_offset_ >= session_anchor_.length) {
+    session_anchor_required_ = false;
+    return result;
+  }
+
+  const uint16_t remaining =
+      static_cast<uint16_t>(session_anchor_.length - session_anchor_offset_);
+  state_.counters.write_attempt_total++;
+  state_.counters.send_request_bytes_total += remaining;
+  beginCall(WifiWorkerCallPhase::Send);
+  const nsapi_size_or_error_t sent =
+      client_->send(session_anchor_.bytes + session_anchor_offset_, remaining);
+  const uint32_t duration_us = endCall(sent);
+  const uint32_t completed_ms = millis();
+  result.writes_attempted = 1;
+  if (duration_us > state_.counters.send_call_max_us) {
+    state_.counters.send_call_max_us = duration_us;
+  }
+  if (config_.drain_time_budget_us > 0 &&
+      duration_us > config_.drain_time_budget_us) {
+    state_.counters.send_budget_overrun_total++;
+  }
+
+  const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
+  if (disconnect_sequence != handled_disconnect_sequence_) {
+    handled_disconnect_sequence_ = disconnect_sequence;
+    state_.counters.late_send_result_total++;
+    closeClient(WifiCloseReason::IsolationRequest);
+    return result;
+  }
+  if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
+    noteSocketError(static_cast<nsapi_error_t>(sent));
+    closeClient(WifiCloseReason::SocketError);
+    return result;
+  }
+  if (sent <= 0) {
+    if (sent == NSAPI_ERROR_WOULD_BLOCK) {
+      state_.counters.would_block_total++;
+      result.would_block = true;
+    } else {
+      state_.counters.zero_write_total++;
+      result.zero_write = true;
+    }
+    const WifiTxProgressObservation progress =
+        tx_progress_.observe(completed_ms, false, config_.stall_timeout_ms);
+    if (progress.started) state_.counters.backpressure_total++;
+    state_.backpressure_active = true;
+    state_.backpressure_duration_ms = progress.duration_ms;
+    result.no_progress_duration_ms = progress.duration_ms;
+    if (progress.close_no_progress) {
+      closeClient(WifiCloseReason::TransmitNoProgress);
+    }
+    return result;
+  }
+
+  const uint16_t progressed =
+      sent > remaining ? remaining : static_cast<uint16_t>(sent);
+  session_anchor_offset_ =
+      static_cast<uint16_t>(session_anchor_offset_ + progressed);
+  result.bytes_progressed = progressed;
+  state_.counters.positive_write_total++;
+  state_.counters.bytes_sent_total += progressed;
+  state_.counters.socket_sent_bytes_total += progressed;
+  if (progressed < remaining) state_.counters.partial_write_total++;
+  const WifiTxProgressObservation progress =
+      tx_progress_.observe(completed_ms, true, config_.stall_timeout_ms);
+  if (progress.recovered) {
+    state_.backpressure_active = false;
+    state_.backpressure_duration_ms = 0;
+  }
+  if (session_anchor_offset_ == session_anchor_.length) {
+    session_anchor_required_ = false;
+    state_.counters.session_anchor_replay_total++;
+  }
+  notePumpResult(result);
+  (void)now_ms;
+  return result;
 }
 
 void WifiSocketWorker::serviceReceive(uint32_t) {
@@ -576,6 +671,10 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   state_.backpressure_active = false;
   state_.backpressure_duration_ms = 0;
   pending_consume_ = false;
+  session_anchor_ = {};
+  session_anchor_offset_ = 0;
+  session_anchor_required_ = false;
+  session_anchor_loaded_ = false;
   mailbox_.discardRx();
   if (mailbox_.reliableSessionActive()) mailbox_.rewindUnacked();
   if (was_connected) {

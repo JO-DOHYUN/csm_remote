@@ -397,6 +397,7 @@ struct WifiWorkerCounters {
   uint32_t app_ack_accepted_total = 0;
   uint32_t app_ack_rejected_total = 0;
   uint32_t replay_rewind_total = 0;
+  uint32_t session_anchor_replay_total = 0;
 };
 
 struct WifiWorkerStateSnapshot {
