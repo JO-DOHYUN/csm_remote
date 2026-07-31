@@ -243,4 +243,17 @@ if pre_submit_poll < 0 or builtin_submit < 0 or pre_submit_poll > builtin_submit
 if "static_cast<uint16_t>(tx_outcome.code) << 8u" not in host_tx_body:
     fail("host CAN enqueue failure evidence must retain the owner outcome code")
 
+payload_policy_begin = main.find(
+    "static bool __attribute__((unused)) is_valid_service_hil_payload("
+)
+payload_policy_end = main.find("\n}", payload_policy_begin)
+payload_policy = main[payload_policy_begin:payload_policy_end]
+for required in (
+    "for (uint8_t i = 1; i < 7; ++i)",
+    "data[7] == 0",
+    "data[7] == csm::board::control::kRemoteAuxiliaryNegative",
+):
+    if required not in payload_policy:
+        fail(f"Service/HIL steering CENTER payload policy missing {required}")
+
 print("Control execution guard passed.")

@@ -478,8 +478,10 @@ Current board host TX policy:
 - Extended and RTR frames are rejected in this baseline.
 - `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses an exact
   bench allowlist: standard `0x005` DLC8 drive payload and standard `0x007` DLC8
-  steering payload described above. ID, DLC, fixed bytes, speed range, direction,
-  and zero tail are all validated before authority/safety admission. The removed
+  steering payload described above. Service/HIL CENTER preserves steering byte0,
+  sets byte7 to `0x01` for 4 seconds, then returns to byte0 `130` and byte7 `0x00`.
+  Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
+  bounded steering overlay are validated before authority/safety admission. The removed
   `0x100/0x200` adapter is not accepted.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second

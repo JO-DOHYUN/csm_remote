@@ -5032,10 +5032,11 @@ static bool __attribute__((unused)) is_valid_service_hil_payload(
   if (can_id == csm::board::control::kRemoteSteeringCanId) {
     if (data[0] < csm::board::control::kRemoteSteeringMinimum ||
         data[0] > csm::board::control::kRemoteSteeringMaximum) return false;
-    for (uint8_t i = 1; i < 8; ++i) {
+    for (uint8_t i = 1; i < 7; ++i) {
       if (data[i] != 0) return false;
     }
-    return true;
+    return data[7] == 0 ||
+        data[7] == csm::board::control::kRemoteAuxiliaryNegative;
   }
   return false;
 #else
