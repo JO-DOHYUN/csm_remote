@@ -231,6 +231,11 @@ void RemoteControlRuntime::noteCanTxCompletion(uint32_t now_ms,
   latchCanTxInhibit(now_ms);
 }
 
+void RemoteControlRuntime::clearCanTxInhibitForService(uint32_t now_ms) {
+  status_.can_tx_inhibit_latched = false;
+  requestImmediateSilence(now_ms);
+}
+
 void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
   status_.frontend_alive = frontend_seen_ &&
       (now_ms - last_frontend_seen_ms_ <= config_.m4_heartbeat_timeout_ms);

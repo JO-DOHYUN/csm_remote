@@ -431,6 +431,13 @@
 #ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
 #define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 5000
 #endif
+#ifndef BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET
+// Pace the TCP byte stream into at most one complete control record per main
+// loop. TCP may coalesce heartbeat, lease, drive and steering records; draining
+// a large byte burst synchronously can otherwise fill all three FDCAN TX
+// elements before the next completion poll.
+#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 40
+#endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
 #define BOARD_APPLICATION_CAN_DATA_TX_ENABLED                               \
@@ -3398,15 +3405,17 @@ static void increment_builtin_can_counter(uint32_t* counter) {
 
 static void builtin_can_tx_completion(
     void*, const csm::board::can::BuiltinCanTxCompletion& completion) {
-  const bool first_failure =
+  const bool first_failure_evidence =
       !completion.transmitted() &&
       !completion.failure_previously_reported;
+  const bool terminal_failure =
+      completion.terminal && !completion.transmitted();
   if (completion.transmitted()) {
     increment_builtin_can_counter(&builtin_can_tx_total);
     emit_can_tx_raw(completion.frame.bus, completion.frame.can_id_flags,
                     completion.frame.dlc, completion.frame.data,
                     builtin_can_tx_total, builtin_can_tx_failed_total);
-  } else if (first_failure) {
+  } else if (first_failure_evidence) {
     increment_builtin_can_counter(&builtin_can_tx_failed_total);
     const uint16_t detail =
         (completion.terminal ? 0u : 0x8000u) |
@@ -3416,7 +3425,9 @@ static void builtin_can_tx_completion(
                      builtin_can_tx_failed_total);
   }
 
-  if (first_failure) {
+  // DeadlineExceededPending is not a terminal result: TXBTO can still prove
+  // that the frame won arbitration while cancellation was requested.
+  if (terminal_failure) {
     builtin_can_tx_inhibit_latched = true;
   }
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -3424,7 +3435,7 @@ static void builtin_can_tx_completion(
       csm::board::can::BuiltinCanTxOrigin::RemoteControl) {
     if (completion.transmitted()) {
       remote_control_runtime.noteCanTxCompletion(millis(), true);
-    } else if (first_failure) {
+    } else if (terminal_failure) {
       remote_control_runtime.noteCanTxCompletion(millis(), false);
     }
   }
@@ -4217,7 +4228,7 @@ static bool __attribute__((unused)) control_backend_ready_for_bus(uint8_t bus) {
 #endif
 #if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   if (bus == BOARD_BUILTIN_CAN_BUS_ID) {
-    return builtin_can_tx_ok;
+    return builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
   }
 #endif
   return false;
@@ -4229,9 +4240,39 @@ static bool any_control_backend_ready() {
   ready = ready || (can_backend_ok && mcp2515 != nullptr);
 #endif
 #if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-  ready = ready || builtin_can_tx_ok;
+  ready = ready || (builtin_can_tx_ok && !builtin_can_tx_inhibit_latched);
 #endif
   return ready;
+}
+
+static bool recover_builtin_can_tx_for_deliberate_arm(uint8_t bus) {
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL)
+  if (bus != BOARD_BUILTIN_CAN_BUS_ID) return true;
+  if (!builtin_can_tx_ok) return false;
+  if (!builtin_can_tx_inhibit_latched) return true;
+
+  service_builtin_can_tx_completions();
+  if (builtin_can_tx_owner.activeJournalSlots() != 0 ||
+      builtin_can_tx_owner.trackingFaultLatched()) {
+    return false;
+  }
+
+  const csm::board::can::BuiltinFdcanSnapshot snapshot =
+      builtin_fdcan_diagnostics.snapshot();
+  const bool error_passive = snapshot.valid && ((snapshot.psr & (1u << 5)) != 0);
+  const bool bus_off = snapshot.valid && ((snapshot.psr & (1u << 7)) != 0);
+  if (!snapshot.valid || error_passive || bus_off) return false;
+
+  builtin_can_tx_inhibit_latched = false;
+#if BOARD_ENABLE_REMOTE_CONTROL
+  remote_control_runtime.clearCanTxInhibitForService(millis());
+#endif
+  return true;
+#else
+  (void)bus;
+  return true;
+#endif
 }
 
 static bool host_control_authority_allowed() {
@@ -5342,6 +5383,10 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
+  // Reap hardware completions immediately before each host submission. The
+  // host downlink parser can dispatch more than one record in a service call,
+  // so the loop-entry poll alone is not a sufficient admission boundary.
+  service_builtin_can_tx_completions();
   if (!builtin_can_tx_ok || builtin_can_tx_inhibit_latched) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
@@ -5364,7 +5409,9 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
                      host_can_tx_request_total);
     emit_board_event(
         EventBuiltinCanTxFailed,
-        static_cast<uint16_t>(-tx_outcome.driver_result),
+        (static_cast<uint16_t>(tx_outcome.code) << 8u) |
+            static_cast<uint16_t>(
+                static_cast<uint32_t>(-tx_outcome.driver_result) & 0xFFu),
         builtin_can_tx_failed_total);
     return;
   }
@@ -5432,9 +5479,6 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
 
   uint8_t reason = ControlReasonOk;
   uint8_t status = ControlAckAccepted;
-  const bool backend_ready =
-      requested_bus == 0xFF ? any_control_backend_ready() : control_backend_ready_for_bus(requested_bus);
-
   switch (action) {
     case csm::HostControlDisarm:
       safety_supervisor.disarm(millis());
@@ -5443,6 +5487,12 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
       if (!host_control_authority_allowed()) {
         reason = ControlReasonAuthorityDenied;
       } else {
+        const bool recovered =
+            requested_bus == 0xFF ||
+            recover_builtin_can_tx_for_deliberate_arm(requested_bus);
+        const bool backend_ready = recovered &&
+            (requested_bus == 0xFF ? any_control_backend_ready() :
+             control_backend_ready_for_bus(requested_bus));
         reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
       }
       break;
@@ -6151,7 +6201,7 @@ void loop() {
   service_remote_control();
 #endif
   record_runtime_breadcrumb(RuntimeStageHostDownlink);
-  service_host_downlink(256);
+  service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
   record_runtime_breadcrumb(RuntimeStageIdle);
   update_safety_state();
   toggle_safety_watchdog_if_needed();

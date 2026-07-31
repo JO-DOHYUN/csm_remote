@@ -107,20 +107,25 @@ if completion_body.count("emit_can_tx_raw(") != 1:
 if "noteCanTxCompletion(" not in completion_body:
     fail("remote CAN success/failure must be driven by hardware completion")
 if (
-    "const bool first_failure =" not in completion_body
+    "const bool first_failure_evidence =" not in completion_body
     or "!completion.failure_previously_reported" not in completion_body
 ):
     fail("completion callback must identify the first failure per submission")
+if (
+    "const bool terminal_failure =" not in completion_body
+    or "completion.terminal && !completion.transmitted()" not in completion_body
+):
+    fail("completion callback must distinguish terminal failure from a pending deadline")
 if completion_body.count(
     "increment_builtin_can_counter(&builtin_can_tx_failed_total);"
 ) != 1:
     fail("each submission failure must be counted at exactly one callback site")
-if "else if (first_failure)" not in completion_body:
+if "else if (first_failure_evidence)" not in completion_body:
     fail("nonterminal first failure must enter failure accounting")
-if "if (first_failure) {\n    builtin_can_tx_inhibit_latched = true;" not in completion_body:
-    fail("first failure must latch local CAN TX inhibit")
-if "else if (first_failure) {\n      remote_control_runtime.noteCanTxCompletion(millis(), false);" not in completion_body:
-    fail("first failure must reach remote runtime failure accounting")
+if "if (terminal_failure) {\n    builtin_can_tx_inhibit_latched = true;" not in completion_body:
+    fail("only terminal failure may latch local CAN TX inhibit")
+if "else if (terminal_failure) {\n      remote_control_runtime.noteCanTxCompletion(millis(), false);" not in completion_body:
+    fail("terminal failure must reach remote runtime failure accounting")
 if main.count("builtin_can_runtime_ready_for_health()") != 4:
     fail("CAN inhibit must feed its health helper, LED, and both health flags")
 health_ready_begin = main.find(
@@ -223,5 +228,19 @@ if "wifi_epoch != last_wifi_epoch" not in wifi_downlink_body:
     fail("Wi-Fi downlink parser must be scoped to a connection epoch")
 if "safety_supervisor.invalidateHostSession(millis());" not in wifi_downlink_body:
     fail("Wi-Fi epoch change must invalidate heartbeat, arm, and lease")
+if "#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 40" not in main:
+    fail("host downlink must remain paced below a multi-record TCP burst")
+if "service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);" not in loop_body:
+    fail("loop must use the bounded host downlink byte budget")
+
+host_tx_begin = main.find("static void handle_host_can_tx_request(")
+host_tx_end = main.find("\n}", host_tx_begin)
+host_tx_body = main[host_tx_begin:host_tx_end]
+pre_submit_poll = host_tx_body.find("service_builtin_can_tx_completions();")
+builtin_submit = host_tx_body.find("submit_builtin_can_frame(")
+if pre_submit_poll < 0 or builtin_submit < 0 or pre_submit_poll > builtin_submit:
+    fail("host CAN admission must reap FDCAN completions before submission")
+if "static_cast<uint16_t>(tx_outcome.code) << 8u" not in host_tx_body:
+    fail("host CAN enqueue failure evidence must retain the owner outcome code")
 
 print("Control execution guard passed.")

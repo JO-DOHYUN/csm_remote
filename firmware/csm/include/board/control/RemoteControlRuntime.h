@@ -101,6 +101,9 @@ class RemoteControlRuntime {
   void noteCanTxEnqueueResult(uint32_t now_ms, bool accepted);
   // Only the built-in CAN owner's hardware completion journal calls this.
   void noteCanTxCompletion(uint32_t now_ms, bool transmitted);
+  // A deliberate, disarmed Service/HIL ARM retry may clear a terminal CAN
+  // inhibit after the shared owner proves that no request remains ambiguous.
+  void clearCanTxInhibitForService(uint32_t now_ms);
 
   bool hostControlAllowed() const { return status_.host_control_allowed; }
   const RemoteControlRuntimeConfig& config() const { return config_; }

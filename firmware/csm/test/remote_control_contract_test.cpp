@@ -1176,7 +1176,8 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   CHECK(runtime.status().cycle_deadline_misses == 8);
 
   // FIFO rejection is a control fault, not a retry hint. It advances no
-  // evidence counter and permanently inhibits further local TX this boot.
+  // success evidence and inhibits local TX until a deliberate, disarmed
+  // Service/HIL retry clears the runtime side of the fault.
   const auto rejected = runtime.service(50, inputs);
   CHECK(rejected.frame_ready);
   const uint32_t completed_before_reject = runtime.status().can_tx_success;
@@ -1191,6 +1192,9 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   runtime.noteCanTxCompletion(56, false);
   CHECK(runtime.status().can_tx_success == completed_before_reject);
   CHECK(runtime.status().can_tx_failed == 2);
+  CHECK(runtime.status().can_tx_inhibit_latched);
+  runtime.clearCanTxInhibitForService(57);
+  CHECK(!runtime.status().can_tx_inhibit_latched);
 }
 
 void runtimeImmediateStopRespectsSafetyAndWraparound() {
