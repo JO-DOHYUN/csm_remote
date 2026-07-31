@@ -7,6 +7,41 @@ def fail(message: str) -> None:
 
 root = Path(__file__).resolve().parents[1]
 main = (root / "src" / "main.cpp").read_text(encoding="utf-8")
+platformio = (root / "platformio.ini").read_text(encoding="utf-8")
+
+
+def environment_body(name: str) -> str:
+    marker = f"[env:{name}]"
+    start = platformio.find(marker)
+    if start < 0:
+        fail(f"missing build environment {name}")
+    end = platformio.find("\n[env:", start + len(marker))
+    return platformio[start : end if end >= 0 else len(platformio)]
+
+
+service_hil_feeder = environment_body(
+    "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi"
+)
+for required in (
+    "BOARD_CSM_PROFILE_FULL_INSTRUMENTED=1",
+    "BOARD_CSM_PROFILE_REMOTE_PRODUCT=0",
+    "BOARD_ENABLE_FEEDER_UART=1",
+    "BOARD_ENABLE_REMOTE_CONTROL=1",
+    "BOARD_ENABLE_REMOTE_AUTHORITY=1",
+    "BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING=0",
+    "BOARD_ENABLE_MDPS_BENCH_MAPPING=1",
+    "BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS=1",
+    "BOARD_ENABLE_HOST_CAN_TX_BUILTIN=1",
+    "BOARD_ENABLE_HOST_DOWNLINK=1",
+    "BOARD_HOST_DOWNLINK_TRANSPORT_WIFI=1",
+    "BOARD_ENABLE_MCP2515=0",
+):
+    if required not in service_hil_feeder:
+        fail(f"feeder Service/HIL profile missing {required}")
+
+overlay = (root / "tools" / "product_mbed_overlay.py").read_text(encoding="utf-8")
+if "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi" not in overlay:
+    fail("feeder Service/HIL profile must use the pinned product Mbed artifact")
 
 direct_write = "builtin_can_ref().write("
 if main.count(direct_write) != 1:

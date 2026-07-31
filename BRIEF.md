@@ -1,6 +1,19 @@
 # BRIEF
 
-Updated: 2026-07-30
+Updated: 2026-07-31
+
+## 2026-07-31 feeder Service/HIL tablet gate
+
+- Added `portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi`. It keeps
+  feeder CAN0 ingress, M4 RC, J4 CAN1 and pinned product Mbed while advertising
+  full-instrumented profile 2 and opening only the bounded Wi-Fi Service/HIL
+  host path. The observer artifact was not changed or built.
+- Control execution guards and the M7 build passed at 171,104 B RAM and
+  370,224 B flash. COM7 DFU upload completed successfully.
+- TOP10 Android 9 tablet reconnected to `VSM-CSM-DEV`, received both CAN lanes,
+  accepted ARM through `CONTROL_ACK`, entered `ArmedIdle`, and disarmed on
+  background. Android local Capture remained `CORRUPT`; that independent app
+  storage issue is still open and does not qualify the full release gate.
 
 ## 2026-07-30 live-first observer architecture decision
 

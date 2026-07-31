@@ -7,6 +7,7 @@ from pathlib import Path
 
 PRODUCT_ENVIRONMENTS = {
     "portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi",
+    "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi",
 }
 
 
