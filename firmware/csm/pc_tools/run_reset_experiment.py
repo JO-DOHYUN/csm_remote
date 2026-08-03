@@ -18,7 +18,7 @@ from pathlib import Path
 
 import serial
 
-from verify_typed_stream import i32, parse_frame, u16, u32, u64
+from verify_typed_stream import decode_can_rx_segment, i32, parse_frame, u16, u32, u64
 
 
 BOARD_HEALTH_TYPE = 8
@@ -662,19 +662,14 @@ def main() -> int:
                             state["can_rx_frames"] += 1
                             state["can_rx_frames_by_bus"][bus] += 1
                     elif frame["type"] == CAN_RX_SEGMENT_TYPE:
-                        payload = frame["payload"]
-                        if len(payload) >= 32:
-                            count = u16(payload, 16)
-                            for index in range(count):
-                                offset = 32 + index * 30
-                                if offset + 30 > len(payload):
-                                    state["runtime_diagnostic_errors"].append(
-                                        "CAN RX segment length does not contain its declared frames"
-                                    )
-                                    break
-                                bus = payload[offset + 21]
+                        try:
+                            segment = decode_can_rx_segment(frame["payload"])
+                        except ValueError as exc:
+                            state["runtime_diagnostic_errors"].append(str(exc))
+                        else:
+                            for entry in segment["frames"]:
                                 state["can_rx_frames"] += 1
-                                state["can_rx_frames_by_bus"][bus] += 1
+                                state["can_rx_frames_by_bus"][entry["bus"]] += 1
                     elif frame["type"] == REMOTE_CONTROL_STATE_TYPE:
                         payload = frame["payload"]
                         if len(payload) >= 228:

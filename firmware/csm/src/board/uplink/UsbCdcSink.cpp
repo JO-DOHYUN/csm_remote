@@ -12,6 +12,8 @@
 
 namespace csm::board::uplink {
 
+UsbCdcSink::UsbCdcSink() : queue_(queue_storage_) {}
+
 void UsbCdcSink::begin(const UsbCdcSinkConfig& config) {
   config_ = config;
   counters_ = {};
@@ -77,16 +79,17 @@ SinkServiceResult UsbCdcSink::service(uint32_t byte_budget, uint32_t now_ms,
   while (!queue_.empty() && result.actual_bytes < pump_budget && writes < max_writes) {
     if (config_.drain_time_budget_us > 0 &&
         static_cast<uint32_t>(micros() - start_us) >= config_.drain_time_budget_us) break;
-    auto* entry = queue_.front();
-    if (entry == nullptr) break;
-    uint32_t requested = static_cast<uint32_t>(entry->length - entry->offset);
     const uint32_t budget_left = pump_budget - result.actual_bytes;
-    if (requested > budget_left) requested = budget_left;
-    if (requested > BOARD_SERIAL_TX_CHUNK_BYTES) requested = BOARD_SERIAL_TX_CHUNK_BYTES;
+    const uint16_t stage_capacity = static_cast<uint16_t>(
+        budget_left < BOARD_SERIAL_TX_CHUNK_BYTES
+            ? budget_left
+            : BOARD_SERIAL_TX_CHUNK_BYTES);
+    const uint16_t requested =
+        queue_.copyFrontBytes(tx_stage_, stage_capacity);
     if (requested == 0) break;
 
     uint32_t actual = 0;
-    _SerialUSB.send_nb(&entry->bytes[entry->offset], requested, &actual, true);
+    _SerialUSB.send_nb(tx_stage_, requested, &actual, true);
     if (actual > requested) actual = requested;
     writes++;
     counters_.write_attempt_total++;
@@ -95,20 +98,16 @@ SinkServiceResult UsbCdcSink::service(uint32_t byte_budget, uint32_t now_ms,
       noteBackpressure(now_ms, result);
       break;
     }
-    const bool frame_complete = actual == static_cast<uint32_t>(entry->length - entry->offset);
-    const uint64_t completed_seq = entry->publish_seq;
-    queue_.consume(static_cast<uint16_t>(actual));
+    const TxQueue::ConsumeResult consumed = queue_.consumeMany(actual);
     result.actual_bytes += actual;
+    result.frames_completed += consumed.frames;
     counters_.bytes_sent_total += actual;
+    applyUsbCompletionEvidence(counters_, consumed.frames,
+                               consumed.last_publish_seq);
     if (actual < requested) {
       counters_.partial_write_total++;
       noteBackpressure(now_ms, result);
       break;
-    }
-    if (frame_complete) {
-      counters_.frame_sent_total++;
-      counters_.last_sent_publish_seq = completed_seq;
-      result.frames_completed++;
     }
     if (blocked_since_ms_ != 0) {
       const uint32_t duration = now_ms - blocked_since_ms_;

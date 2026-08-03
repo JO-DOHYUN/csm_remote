@@ -936,7 +936,7 @@ static_assert(BOARD_UPLINK_DIAGNOSTIC_QUEUE_RECORDS >= 2,
               "diagnostic uplink queue must retain bounded low-value telemetry");
 static UsbCdcSink usb_cdc_sink;
 #if BOARD_ENABLE_WIFI_UPLINK
-static_assert(sizeof(WifiTcpSink::TxStorage) == 10240,
+static_assert(sizeof(WifiTcpSink::TxStorage) == 53248,
               "product Wi-Fi live FIFO storage contract changed");
 __attribute__((section(".wifi_tx_queue_dtcm"), aligned(32), used))
 static WifiTcpSink::TxStorage wifi_tx_storage;

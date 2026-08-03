@@ -10,6 +10,7 @@
 #include "board/uplink/FixedFrameQueue.h"
 #include "board/uplink/FixedFrameByteQueue.h"
 #include "board/uplink/RecordAdmission.h"
+#include "board/uplink/UsbCdcSink.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 #include "protocol/HostCommands.h"
@@ -22,6 +23,8 @@ using csm::board::uplink::FixedFrameQueue;
 using csm::board::uplink::PublishedFrameView;
 using csm::board::uplink::SinkOfferResult;
 using csm::board::uplink::UplinkPriority;
+using csm::board::uplink::UsbCdcSinkCounters;
+using csm::board::uplink::applyUsbCompletionEvidence;
 
 namespace {
 
@@ -78,6 +81,34 @@ class FakeSink final : public IFrameSink {
     return SinkOfferResult::Accepted;
   }
 };
+
+void usb_short_write_commits_completed_frame_evidence() {
+  using Queue = csm::board::uplink::FixedFrameByteQueue<4, 523>;
+  Queue::Storage storage = {};
+  Queue queue(storage);
+  const uint8_t first_bytes[3] = {1, 2, 3};
+  const uint8_t second_bytes[4] = {4, 5, 6, 7};
+  CHECK(queue.push(PublishedFrameView{
+      first_bytes, sizeof(first_bytes), 100, RecordType::BoardEvent,
+      UplinkPriority::Normal}));
+  CHECK(queue.push(PublishedFrameView{
+      second_bytes, sizeof(second_bytes), 101, RecordType::BoardHealth,
+      UplinkPriority::Normal}));
+  uint8_t staged[7] = {};
+  CHECK(queue.copyFrontBytes(staged, sizeof(staged)) == sizeof(staged));
+
+  // Model a writer accepting the first complete frame and one byte of the
+  // second frame from a multi-record staged batch.
+  const auto consumed = queue.consumeMany(4);
+  CHECK(consumed.frames == 1);
+  CHECK(consumed.last_publish_seq == 100);
+  CHECK(queue.count() == 1);
+  UsbCdcSinkCounters counters;
+  applyUsbCompletionEvidence(counters, consumed.frames,
+                             consumed.last_publish_seq);
+  CHECK(counters.frame_sent_total == 1);
+  CHECK(counters.last_sent_publish_seq == 100);
+}
 
 void session_is_identical_before_fanout() {
   FakeSink usb;
@@ -1073,6 +1104,7 @@ void wifi_queue_snapshot_supports_product_descriptor_capacity() {
 }  // namespace
 
 int main() {
+  usb_short_write_commits_completed_frame_evidence();
   session_is_identical_before_fanout();
   missed_session_anchor_is_one_shot_until_a_new_epoch();
   explicit_session_refresh_precedes_queued_handshake_records();

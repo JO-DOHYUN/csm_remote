@@ -216,16 +216,24 @@ void testFreshAnchorPartialCompletionBoundary() {
   CHECK(static_cast<uint32_t>(kAcceptedPastWireWrap) == 1023u);
 }
 
-void testPressureThresholdProtectsCriticalReserve() {
+void testQueueEnvelopeCoversDeclaredTransient() {
   using namespace csm::board::uplink;
   CHECK(kProductEnabledWireBytesPerSecond == 111922);
   CHECK(kProductEnabledRecordsPerSecond == 686);
   CHECK(kProductUplinkMinimumBytesPerSecond == 120000);
   CHECK(kProductUplinkDesignBytesPerSecond == 135000);
-  CHECK(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT == 59);
-  CHECK(kWifiPressureThresholdBytes == 4834);
+  CHECK(BOARD_WIFI_SINK_QUEUE_BYTES == 49152);
+  CHECK(BOARD_WIFI_SINK_QUEUE_RECORDS == 256);
+  CHECK(BOARD_WIFI_TRANSIENT_COVERAGE_MS == 250);
+  CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES == 32768);
+  CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES == 8192);
+  CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS == 192);
+  CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS == 64);
   CHECK(kWifiFallbackIngressBytes == 675);
-  CHECK(kWifiPressureThresholdBytes +
+  CHECK(kWifiTransientIngressBytes == 33750);
+  CHECK(kWifiFallbackIngressRecords == 4);
+  CHECK(kWifiTransientIngressRecords == 172);
+  CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES +
             csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
             kWifiFallbackIngressBytes <=
         BOARD_WIFI_SINK_QUEUE_BYTES -
@@ -235,25 +243,51 @@ void testPressureThresholdProtectsCriticalReserve() {
   const uint32_t normal_records = BOARD_WIFI_SINK_QUEUE_RECORDS -
       BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS;
   CHECK((static_cast<uint64_t>(normal_bytes) * 1000u) /
-            kProductUplinkDesignBytesPerSecond >= 40u);
+            kProductUplinkDesignBytesPerSecond >= 250u);
   CHECK((static_cast<uint64_t>(normal_records) * 1000u) /
-            kProductEnabledRecordsPerSecond >= 180u);
+            kProductEnabledRecordsPerSecond >= 250u);
   CHECK(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP >=
         kWifiDesignIngressBytesPerFallback);
 }
 
-void testOpaqueSendPressureSignalsAtFallbackBoundary() {
+void testPressureTrackerUsesHysteresisWithoutEpochClose() {
   using namespace csm::board::uplink;
-  WifiWorkerCallSnapshot call;
-  call.coherent = true;
-  call.in_progress = true;
-  call.phase = WifiWorkerCallPhase::Send;
-  call.started_ms = 100;
-  CHECK(!wifiShouldSignalOpaqueSendPressure(true, call, 104, 5));
-  CHECK(wifiShouldSignalOpaqueSendPressure(true, call, 105, 5));
-  CHECK(!wifiShouldSignalOpaqueSendPressure(false, call, 200, 5));
-  call.phase = WifiWorkerCallPhase::Receive;
-  CHECK(!wifiShouldSignalOpaqueSendPressure(true, call, 200, 5));
+  WifiQueuePressureTracker tracker;
+  auto pressure = tracker.observe(
+      100, BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES - 1u,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS - 1u,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
+      BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS);
+  CHECK(!pressure.active);
+  pressure = tracker.observe(
+      110, BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES, 1,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
+      BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS);
+  CHECK(pressure.entered);
+  CHECK(pressure.active);
+  pressure = tracker.observe(
+      150, BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS + 1u,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
+      BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS);
+  CHECK(pressure.active);
+  CHECK(!pressure.recovered);
+  pressure = tracker.observe(
+      175, BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
+      BOARD_WIFI_PRESSURE_LOW_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS);
+  CHECK(pressure.recovered);
+  CHECK(!pressure.active);
+  CHECK(pressure.duration_ms == 65);
 }
 
 void testSustainedProducerStaysWithinPumpEnvelope() {
@@ -277,7 +311,7 @@ void testSustainedProducerStaysWithinPumpEnvelope() {
   }
 }
 
-void testHighWaterIsWorkerNoProgressBoundaryBeforeReserve() {
+void testHighWaterIsObservableBoundaryBeforeReserve() {
   using namespace csm::board::uplink;
   TestWifiWorkerMailbox mailbox;
   const uint8_t bytes[] = {1, 2, 3, 4};
@@ -285,8 +319,8 @@ void testHighWaterIsWorkerNoProgressBoundaryBeforeReserve() {
   while (!wifiQueuePressureReached(
       mailbox.queueSnapshot().queued_bytes,
       mailbox.queueSnapshot().queued_records,
-      BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
-      BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT)) {
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS)) {
     CHECK(mailbox.tryOffer(
               makeFrame(bytes, sizeof(bytes), sequence++,
                         UplinkPriority::Normal),
@@ -294,15 +328,13 @@ void testHighWaterIsWorkerNoProgressBoundaryBeforeReserve() {
   }
   const WifiMailboxQueueSnapshot queued = mailbox.queueSnapshot();
   CHECK(wifiQueuePressureReached(
-      queued.queued_bytes, queued.queued_records, BOARD_WIFI_SINK_QUEUE_BYTES,
-      BOARD_WIFI_SINK_QUEUE_RECORDS, BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT));
+      queued.queued_bytes, queued.queued_records,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS));
   CHECK(queued.queued_records <
         BOARD_WIFI_SINK_QUEUE_RECORDS -
             BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS);
   CHECK(!mailbox.queuePressureDisconnectLatched());
-  CHECK(wifiShouldCloseQueuePressure(true, false));
-  CHECK(!wifiShouldCloseQueuePressure(true, true));
-  CHECK(!wifiShouldCloseQueuePressure(false, false));
 }
 
 void testWouldBlockBelowHighWaterUsesOnlyTransmitTimeout() {
@@ -323,8 +355,9 @@ void testWouldBlockBelowHighWaterUsesOnlyTransmitTimeout() {
   pump.no_progress_duration_ms = first_block.duration_ms;
   const WifiMailboxQueueSnapshot after = mailbox.queueSnapshot();
   const bool pressure_after = wifiQueuePressureReached(
-      after.queued_bytes, after.queued_records, BOARD_WIFI_SINK_QUEUE_BYTES,
-      BOARD_WIFI_SINK_QUEUE_RECORDS, BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT);
+      after.queued_bytes, after.queued_records,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS);
   CHECK(pump.writes_attempted == 1);
   CHECK(pump.bytes_progressed == 0);
   CHECK(pump.would_block);
@@ -561,7 +594,8 @@ void testRuntimeModeContract() {
   CHECK(BOARD_WIFI_CONNECTED_FALLBACK_MS == 5);
   CHECK(BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS == 20);
   CHECK(BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS == 2);
-  CHECK(BOARD_WIFI_STALL_TIMEOUT_MS == 500);
+  CHECK(BOARD_WIFI_STALL_TIMEOUT_MS == 5000);
+  CHECK(BOARD_WIFI_CALL_STALL_TIMEOUT_MS == 5000);
   CHECK(!wifiRuntimeModeStartsWorker(WifiRuntimeMode::Disabled));
   CHECK(wifiRuntimeModeStartsWorker(WifiRuntimeMode::AccessPointOnly));
   CHECK(wifiRuntimeModeStartsWorker(WifiRuntimeMode::FullTcp));
@@ -607,10 +641,10 @@ int main() {
   testQueueHighWaterAndAbortGeneration();
   testPumpBudgetBoundsWritesAndBytes();
   testFreshAnchorPartialCompletionBoundary();
-  testPressureThresholdProtectsCriticalReserve();
-  testOpaqueSendPressureSignalsAtFallbackBoundary();
+  testQueueEnvelopeCoversDeclaredTransient();
+  testPressureTrackerUsesHysteresisWithoutEpochClose();
   testSustainedProducerStaysWithinPumpEnvelope();
-  testHighWaterIsWorkerNoProgressBoundaryBeforeReserve();
+  testHighWaterIsObservableBoundaryBeforeReserve();
   testWouldBlockBelowHighWaterUsesOnlyTransmitTimeout();
   testSlowPositiveProgressRequestsOneAdmissionBoundaryClose();
   testRxEpochDiscardAndOverflow();

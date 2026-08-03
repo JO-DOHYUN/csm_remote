@@ -9,7 +9,7 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 128
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 256
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -64,6 +64,9 @@ struct WifiTcpSinkCounters {
   uint32_t would_block_total = 0;
   uint32_t backpressure_total = 0;
   uint32_t backpressure_max_duration_ms = 0;
+  uint32_t pressure_enter_total = 0;
+  uint32_t pressure_recover_total = 0;
+  uint32_t pressure_max_duration_ms = 0;
   uint32_t queue_abort_total = 0;
   uint32_t queue_aborted_bytes_total = 0;
   uint32_t queue_aborted_records_total = 0;

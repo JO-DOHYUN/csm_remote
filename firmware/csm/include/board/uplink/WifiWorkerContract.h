@@ -5,11 +5,11 @@
 #include "board/uplink/ProductUplinkEnvelope.h"
 
 #ifndef BOARD_WIFI_STALL_TIMEOUT_MS
-#define BOARD_WIFI_STALL_TIMEOUT_MS 500
+#define BOARD_WIFI_STALL_TIMEOUT_MS 5000
 #endif
 
 #ifndef BOARD_WIFI_CALL_STALL_TIMEOUT_MS
-#define BOARD_WIFI_CALL_STALL_TIMEOUT_MS 250
+#define BOARD_WIFI_CALL_STALL_TIMEOUT_MS 5000
 #endif
 
 #ifndef BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS
@@ -85,13 +85,34 @@ static_assert(BOARD_WIFI_AP_STA_CONCUR == 0 ||
 static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
               "Wi-Fi startup retry interval must be non-zero");
 
-#ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
-#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 59
+#ifndef BOARD_WIFI_TRANSIENT_COVERAGE_MS
+#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 250
 #endif
 
-static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
-                  BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT < 100,
-              "Wi-Fi isolation high-water percent must be in (0, 100)");
+#ifndef BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES
+#define BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES 32768
+#endif
+
+#ifndef BOARD_WIFI_PRESSURE_LOW_WATER_BYTES
+#define BOARD_WIFI_PRESSURE_LOW_WATER_BYTES 8192
+#endif
+
+#ifndef BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS
+#define BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS 192
+#endif
+
+#ifndef BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS
+#define BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS 64
+#endif
+
+static_assert(BOARD_WIFI_TRANSIENT_COVERAGE_MS > 0,
+              "Wi-Fi transient coverage must be non-zero");
+static_assert(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES <
+                  BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
+              "Wi-Fi byte pressure hysteresis is invalid");
+static_assert(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS <
+                  BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
+              "Wi-Fi record pressure hysteresis is invalid");
 
 static constexpr uint32_t kWifiDesignIngressBytesPerFallback =
     (static_cast<uint64_t>(
@@ -197,7 +218,14 @@ struct WifiTcpSinkConfig {
   uint32_t batch_max_latency_ms = BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS;
   uint32_t latency_bound_max_ms = BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS;
   uint16_t batch_target_bytes = BOARD_WIFI_TX_BATCH_TARGET_BYTES;
-  uint8_t isolate_high_water_percent = BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT;
+  uint32_t pressure_high_water_bytes =
+      BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES;
+  uint32_t pressure_low_water_bytes =
+      BOARD_WIFI_PRESSURE_LOW_WATER_BYTES;
+  uint16_t pressure_high_water_records =
+      BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS;
+  uint16_t pressure_low_water_records =
+      BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS;
   // Zero continuously retries at a bounded interval. Diagnostic profiles may
   // select a finite non-zero attempt count.
   uint8_t startup_attempt_limit = BOARD_WIFI_STARTUP_ATTEMPT_LIMIT;
@@ -309,30 +337,66 @@ constexpr bool wifiSessionAnchorCompleted(uint16_t prior_offset,
 
 constexpr bool wifiQueuePressureReached(uint32_t queued_bytes,
                                         uint32_t queued_records,
-                                        uint32_t byte_capacity,
-                                        uint32_t record_capacity,
-                                        uint32_t high_water_percent) {
-  if (high_water_percent == 0) return false;
-  const bool byte_pressure =
-      byte_capacity > 0 &&
-      static_cast<uint64_t>(queued_bytes) * 100u >=
-          static_cast<uint64_t>(byte_capacity) * high_water_percent;
-  const bool record_pressure =
-      record_capacity > 0 &&
-      static_cast<uint64_t>(queued_records) * 100u >=
-          static_cast<uint64_t>(record_capacity) * high_water_percent;
-  return byte_pressure || record_pressure;
+                                        uint32_t high_water_bytes,
+                                        uint32_t high_water_records) {
+  return (high_water_bytes > 0 && queued_bytes >= high_water_bytes) ||
+         (high_water_records > 0 && queued_records >= high_water_records);
 }
 
-constexpr bool wifiShouldCloseQueuePressure(bool pressure,
-                                            bool socket_progressed) {
-  return pressure && !socket_progressed;
+constexpr bool wifiQueuePressureRecovered(uint32_t queued_bytes,
+                                          uint32_t queued_records,
+                                          uint32_t low_water_bytes,
+                                          uint32_t low_water_records) {
+  return queued_bytes <= low_water_bytes &&
+         queued_records <= low_water_records;
 }
 
-// Socket no-progress is closed by an independent timeout. Queue high-water is
-// a second, earlier loss boundary: the producer atomically requests one
-// QueuePressure epoch close before Reserved/Full, and never waits for the
-// worker.
+struct WifiQueuePressureObservation {
+  bool active = false;
+  bool entered = false;
+  bool recovered = false;
+  uint32_t duration_ms = 0;
+};
+
+// High-water is an observable/recoverable state, never a TCP close reason.
+// Actual admission loss and the independent no-positive-progress timeout own
+// epoch termination.
+class WifiQueuePressureTracker {
+ public:
+  WifiQueuePressureObservation observe(
+      uint32_t now_ms, uint32_t queued_bytes, uint32_t queued_records,
+      uint32_t high_water_bytes, uint32_t high_water_records,
+      uint32_t low_water_bytes, uint32_t low_water_records) {
+    WifiQueuePressureObservation result;
+    if (!active_) {
+      if (wifiQueuePressureReached(queued_bytes, queued_records,
+                                   high_water_bytes, high_water_records)) {
+        active_ = true;
+        started_ms_ = now_ms;
+        result.entered = true;
+      }
+    } else if (wifiQueuePressureRecovered(
+                   queued_bytes, queued_records, low_water_bytes,
+                   low_water_records)) {
+      result.recovered = true;
+      result.duration_ms = now_ms - started_ms_;
+      active_ = false;
+    }
+    result.active = active_;
+    if (active_) result.duration_ms = now_ms - started_ms_;
+    return result;
+  }
+
+  void reset() {
+    active_ = false;
+    started_ms_ = 0;
+  }
+
+ private:
+  bool active_ = false;
+  uint32_t started_ms_ = 0;
+};
+
 class WifiTxProgressTracker {
  public:
   WifiTxProgressObservation observe(uint32_t now_ms, bool progressed,
@@ -379,14 +443,6 @@ struct WifiWorkerCallSnapshot {
   int32_t result = 0;
   uint32_t heartbeat_ms = 0;
 };
-
-constexpr bool wifiShouldSignalOpaqueSendPressure(
-    bool pressure, const WifiWorkerCallSnapshot& call, uint32_t now_ms,
-    uint32_t observation_ms) {
-  return pressure && call.coherent && call.in_progress &&
-         call.phase == WifiWorkerCallPhase::Send && observation_ms > 0 &&
-         wifiObservedAgeMs(now_ms, call.started_ms) >= observation_ms;
-}
 
 constexpr bool wifiSendResultHasPositiveProgress(int32_t result) {
   return result > 0;
@@ -447,6 +503,9 @@ struct WifiWorkerCounters {
   uint32_t would_block_total = 0;
   uint32_t backpressure_total = 0;
   uint32_t backpressure_max_duration_ms = 0;
+  uint32_t pressure_enter_total = 0;
+  uint32_t pressure_recover_total = 0;
+  uint32_t pressure_max_duration_ms = 0;
   uint32_t queue_abort_total = 0;
   uint64_t queue_aborted_bytes_total = 0;
   uint32_t queue_aborted_records_total = 0;
@@ -492,8 +551,10 @@ struct WifiWorkerStateSnapshot {
   bool network_ready = false;
   bool connected = false;
   bool backpressure_active = false;
+  bool pressure_active = false;
   bool live_session_active = false;
   uint32_t backpressure_duration_ms = 0;
+  uint32_t pressure_duration_ms = 0;
   uint32_t stall_event_sequence = 0;
   uint32_t stall_event_duration_ms = 0;
   uint32_t heartbeat_ms = 0;

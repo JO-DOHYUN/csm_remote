@@ -288,7 +288,8 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
   if (backpressure_active_) {
     snapshot.flags |= csm::kTransportDiagnosticFlagBackpressure;
   }
-  if (mailbox_.queuePressureDisconnectLatched()) {
+  if (worker_state_.pressure_active ||
+      mailbox_.queuePressureDisconnectLatched()) {
     snapshot.flags |= csm::kTransportDiagnosticFlagQueuePressureLatched;
   }
   if (counters_.loss_range_valid) {
@@ -349,6 +350,9 @@ void WifiTcpSink::syncWorkerState(const WifiWorkerStateSnapshot& state,
   counters_.would_block_total = worker.would_block_total;
   counters_.backpressure_total = worker.backpressure_total;
   counters_.backpressure_max_duration_ms = worker.backpressure_max_duration_ms;
+  counters_.pressure_enter_total = worker.pressure_enter_total;
+  counters_.pressure_recover_total = worker.pressure_recover_total;
+  counters_.pressure_max_duration_ms = worker.pressure_max_duration_ms;
   counters_.queue_abort_total = worker.queue_abort_total;
   counters_.queue_aborted_bytes_total =
       static_cast<uint32_t>(worker.queue_aborted_bytes_total);

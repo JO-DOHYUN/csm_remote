@@ -165,12 +165,35 @@ void builder_splits_before_compact_delta_overflow() {
   for (uint8_t index = 0; index < csm::kCanRxSegmentMaxFrames; ++index) {
     CanRxSegmentItem item = {};
     item.capture_seq = index;
-    item.mono_us = 1000 + index;
+    item.mono_us = 1000 - index;
     CHECK(builder.push(item, 1000 + index));
   }
   CHECK(capture.emits == 1);
   CHECK(capture.counts[0] == csm::kCanRxSegmentMaxFrames);
   CHECK(builder.pendingCount() == 0);
+}
+
+void regressing_timestamps_use_the_segment_minimum_base() {
+  using csm::board::uplink::CanRxSegmentItem;
+  using csm::board::uplink::encode_can_rx_segment_payload;
+  CanRxSegmentItem items[2] = {};
+  items[0].capture_seq = 20;
+  items[0].mono_us = 2000;
+  items[0].dlc_flags = 8;
+  items[1].capture_seq = 21;
+  items[1].mono_us = 1750;
+  items[1].dlc_flags = 8;
+
+  uint8_t payload[csm::kMaxPayloadLen] = {};
+  CHECK(encode_can_rx_segment_payload(
+            items, 2, 3, 0, 0, payload, sizeof(payload)) == 80);
+  CHECK(read_u64_le(&payload[csm::kCanRxSegmentBaseMonoUsOffset]) == 1750);
+  const uint8_t* first = &payload[csm::kCanRxSegmentEntriesOffset];
+  const uint8_t* second = first + csm::kCanRxSegmentEntryLen;
+  CHECK(csm::rd_u32_le(
+            &first[csm::kCanRxSegmentCompactEntryMonoDeltaUsOffset]) == 250);
+  CHECK(csm::rd_u32_le(
+            &second[csm::kCanRxSegmentCompactEntryMonoDeltaUsOffset]) == 0);
 }
 
 void capability_advertises_the_emitted_segment_schema() {
@@ -217,6 +240,7 @@ void two_bus_queue_selection_preserves_global_capture_order() {
 int main() {
   compact_payload_is_exact_and_bounded();
   builder_splits_before_compact_delta_overflow();
+  regressing_timestamps_use_the_segment_minimum_base();
   capability_advertises_the_emitted_segment_schema();
   two_bus_queue_selection_preserves_global_capture_order();
   if (failures != 0) {

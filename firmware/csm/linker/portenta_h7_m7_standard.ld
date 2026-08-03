@@ -187,11 +187,12 @@ SECTIONS
 
     ASSERT(__csm_dtcm_bss_end__ <= ORIGIN(DTCMRAM) + LENGTH(DTCMRAM),
            "CSM DTCM arena overflow")
-    ASSERT(__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x15FF0,
-           "Wi-Fi reliable journal storage size drift")
-    ASSERT(__wifi_tx_queue_end__ <=
-               ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - 0x8000,
-           "Wi-Fi queue consumed DTCM safety reserve")
+    ASSERT((__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0) ||
+               (__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0xD000),
+           "optional Wi-Fi live FIFO storage size drift")
+    ASSERT(__csm_dtcm_bss_end__ <=
+               ORIGIN(DTCMRAM) + LENGTH(DTCMRAM) - 0x10000,
+           "CSM DTCM arenas consumed safety reserve")
     ASSERT(__csm_lwip_actual_start__ >= __csm_m7_network_d2_start__,
            "M7 network section overlaps M4-owned D2")
     ASSERT(__csm_lwip_actual_end__ <= __csm_m7_network_d2_end__,

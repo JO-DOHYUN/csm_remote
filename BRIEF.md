@@ -1,6 +1,47 @@
 # BRIEF
 
-Updated: 2026-07-31
+Updated: 2026-08-03
+
+## 2026-08-03 Wi-Fi transient-envelope candidate
+
+- D-031 supersedes D-030 only for live FIFO dimensions and close policy. The
+  live-only/no APP ACK/no network replay product identity is unchanged.
+- Product Wi-Fi now uses `256 descriptors / 49,152 encoded bytes`, with
+  `4 descriptors / 2,112 bytes` reserved for critical evidence. The generated
+  135,000 B/s, 686 records/s envelope proves 250 ms transient coverage in both
+  dimensions while leaving a 65,536 B linker-enforced DTCM reserve.
+- USB now uses the same byte-ring/descriptor primitive with `192 descriptors /
+  40,960 encoded bytes`. At the 135,000 B/s, 686 records/s envelope its
+  250 ms requirement is 34,273 B/173 records, so admission is bounded by a
+  declared transient rather than the former eight max-sized record slots.
+- `32,768 B 또는 192 records` high-water and `8,192 B/64 records` low-water
+  form diagnostic hysteresis. High-water and a single `WOULD_BLOCK` no longer
+  close the epoch. Only an actual reserve/full admission miss closes with the
+  legacy numeric reason 6 and exact loss range; five seconds without positive
+  socket progress closes as reason 4.
+- The product Service/HIL M7 build passed: source manifest
+  `a00811b5bf2c83c61814d7d0312aecae8d03cfc012b24dc3112a4b9401cd8f2a`,
+  firmware.bin SHA-256
+  `0C5AC5EB072B61299850D00E420A38857602A871ABF8FFF6FF5536B26526FE8E`,
+  RAM `211,448/523,624 B (40.4%)`, firmware image `368,320/786,432 B`
+  (46.8%; PlatformIO section meter `367,192 B`), D1
+  heap span `311,816 B`, Wi-Fi DTCM storage `53,248 B`, calculated DTCM
+  remainder `77,152 B`.
+- Envelope/architecture guards, uplink/Wi-Fi host contracts and compact
+  `CAN_RX_SEGMENT` schema-2 evidence decoder tests pass. PC USB/Wi-Fi and
+  dual-CAN HIL tools now count compact entries rather than silently ignoring
+  them.
+- This exact artifact was uploaded by DFU to `0x08040000`. The 60 s PC
+  USB+Wi-Fi+dual-CAN gate passed: PCAN 120,000 and Kvaser 120,000 were exact on
+  both sinks; CRC/typed/segment/capture gaps, CAN/FIFO/pool/USB/Wi-Fi loss,
+  close and conservation residual were all 0. Active Wi-Fi accepted/drained
+  100,190/100,207 B/s and ended with 981 B net queue reduction. The
+  boot-cumulative USB high-water was 519 B with overflow 0. Minimum-timestamp
+  segment bases preserved capture order while packing 241,627 frames into
+  10,673 segments (22.64 average). The proof artifact is
+  `C:\WORKS\VS\vsm_android_app\artifacts\hil_dual_usb_highload_2000_2000_20260803_193748\result.json`.
+- Android+Capture, RC+CAN-TX simultaneous I2, separate 120/135 kB/s capacity,
+  reconnect/fault injection and soak remain OPEN.
 
 ## 2026-07-31 feeder Service/HIL tablet gate
 
@@ -319,7 +360,7 @@ contract.
 - typed v1 frame은 유지하면서 `CanonicalPublisher`가 fanout 전에 `publish_seq64`를 배정하고 `seq u16`에 하위 16비트를 기록한다. `STREAM_SESSION`이 full identity를 고정한다.
 - `TypedRecords.h`가 CAN raw/segment와 `BOARD_HEALTH v13` field offset constants를
   제공하며 v13은 v12의 472-byte prefix를 그대로 보존한다.
-- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 8,192 B/128-record live FIFO, 4-record/2,112 B critical reserve, 64% 선제 격리 경계를 사용하며 accepted/sent/aborted는 내부 64-bit 보존식으로 관리한다.
+- `RecordAdmission`, one-encode `CanonicalPublisher`, fixed `UsbCdcSink`, fixed `WifiTcpSink` dual fanout이 구현되어 있다. Wi-Fi sink는 49,152 B/256-descriptor live FIFO, 4-record/2,112 B critical reserve와 32,768 B/192-record 관측 high-water를 사용하며 accepted/sent/aborted는 내부 64-bit 보존식으로 관리한다. high-water는 close 조건이 아니다.
 - 2026-07-30 최종 feeder product M7 build는 RAM 170,848/523,624 B(32.6%), Flash 367,392/786,432 B(46.7%)였고 COM7 DFU 업로드가 성공했다. 15초 USB+PC Wi-Fi gate는 4,098 records, bad CRC/gap 0, Wi-Fi overflow/stall/socket error 0, 보존식 residual 0으로 통과했다.
 - Wi-Fi observer env는 Arduino Mbed Wi-Fi AP direct와 TCP server `192.168.4.1:3333`, client 1개를 사용한다.
 - host fanout contract test, passive M7 build, Wi-Fi observer M7 build, M4 frontend proof/probe와 passive symbol guard가 통과했다.
@@ -341,8 +382,9 @@ contract.
 - USB CDC와 Wi-Fi TCP는 bounded 독립 sink로 fanout한다.
 - Wi-Fi 1차 제품은 Android observer 한 대, live-only, reconnect 시 새 epoch,
   fresh current `STREAM_SESSION`, board backlog replay 없음이다.
-- Wi-Fi는 128-record/8,192-byte FIFO에서 positive send 즉시 release하며
-  overflow/stall에서는 해당 epoch를 close+flush한다.
+- Wi-Fi는 256-descriptor/49,152-byte FIFO에서 positive send 즉시 release하며,
+  실제 reserve/full admission miss 또는 5초 no-progress에서만 해당 epoch를
+  close+flush한다.
 - Android Capture 실패는 앱 내부 PARTIAL/CORRUPT이며 CSM/TCP/Live를
   제어하지 않는다.
 - Wi-Fi는 safety/RC/CAN/USB 뒤에 시작한다.
@@ -354,7 +396,7 @@ contract.
    `STREAM_SESSION`을 검증한다.
 2. queue overflow/socket stall/Capture storage failure를 주입해 Wi-Fi만
    close+flush되고 RC/CAN/USB가 지속되는지 검증한다.
-3. Windows USB + Android Wi-Fi + RC + dual CAN 2,000 fps 동시 HIL과
+3. Windows USB + Android Wi-Fi + RC + CAN0 2,000 fps + CAN1 2,000 fps 동시 HIL과
    1/8/24시간 soak를 수행한다.
 4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
 5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.

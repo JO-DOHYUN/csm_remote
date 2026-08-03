@@ -148,21 +148,6 @@ WifiMailboxOfferResult WifiWorkerMailbox::tryOffer(
     // the gap; the next connection receives a fresh sequence anchor.
     deactivateLiveSession();
     requestQueuePressureDisconnect();
-  } else if (result == WifiMailboxOfferResult::Accepted) {
-    const WifiMailboxQueueSnapshot queued = queueSnapshot();
-    const bool pressure = wifiQueuePressureReached(
-        queued.queued_bytes, queued.queued_records,
-        BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
-        BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT);
-    if (wifiShouldSignalOpaqueSendPressure(
-            pressure, callSnapshot(), now_ms,
-            BOARD_WIFI_CONNECTED_FALLBACK_MS)) {
-      // A non-returning vendor send cannot be isolated by the worker itself.
-      // The producer only signals epoch close; it never waits or touches the
-      // socket, preserving the RC/CAN path.
-      deactivateLiveSession();
-      requestQueuePressureDisconnect();
-    }
   }
   releaseProducerGate();
   if (result == WifiMailboxOfferResult::Accepted &&

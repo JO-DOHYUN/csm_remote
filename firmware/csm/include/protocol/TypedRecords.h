@@ -221,6 +221,9 @@ static constexpr uint8_t kTransportDiagnosticLastSentPublishSeqOffset = 120;
 static constexpr uint8_t kTransportDiagnosticFlagEnabled = 1u << 0;
 static constexpr uint8_t kTransportDiagnosticFlagConnected = 1u << 1;
 static constexpr uint8_t kTransportDiagnosticFlagBackpressure = 1u << 2;
+// The legacy symbol name is wire-compatible. Bit 3 is set while hysteretic
+// high-water pressure is active or while an actual admission-loss close latch
+// is pending; queue_pressure_close_total distinguishes the latter.
 static constexpr uint8_t kTransportDiagnosticFlagQueuePressureLatched = 1u << 3;
 static constexpr uint8_t kTransportDiagnosticFlagLossRangeValid = 1u << 4;
 

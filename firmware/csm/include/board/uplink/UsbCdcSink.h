@@ -2,13 +2,45 @@
 
 #include <stdint.h>
 
-#include "board/uplink/FixedFrameQueue.h"
+#include "board/uplink/FixedFrameByteQueue.h"
+#include "board/uplink/ProductUplinkEnvelope.h"
 
 #ifndef BOARD_USB_SINK_QUEUE_RECORDS
-#define BOARD_USB_SINK_QUEUE_RECORDS 8
+#define BOARD_USB_SINK_QUEUE_RECORDS 192
+#endif
+
+#ifndef BOARD_USB_SINK_QUEUE_BYTES
+#define BOARD_USB_SINK_QUEUE_BYTES 40960
+#endif
+
+#ifndef BOARD_USB_TRANSIENT_COVERAGE_MS
+#define BOARD_USB_TRANSIENT_COVERAGE_MS 250
+#endif
+
+#ifndef BOARD_SERIAL_TX_CHUNK_BYTES
+#define BOARD_SERIAL_TX_CHUNK_BYTES 512
 #endif
 
 namespace csm::board::uplink {
+
+static constexpr uint32_t kUsbTransientIngressBytes =
+    (static_cast<uint64_t>(kProductUplinkDesignBytesPerSecond) *
+         BOARD_USB_TRANSIENT_COVERAGE_MS +
+     999u) /
+    1000u;
+static constexpr uint32_t kUsbTransientIngressRecords =
+    (static_cast<uint64_t>(kProductEnabledRecordsPerSecond) *
+         BOARD_USB_TRANSIENT_COVERAGE_MS +
+     999u) /
+    1000u;
+static_assert(
+    BOARD_USB_SINK_QUEUE_BYTES >=
+        kUsbTransientIngressBytes +
+            csm::encoded_typed_frame_len(csm::kMaxPayloadLen),
+    "USB byte queue does not cover the declared transient envelope");
+static_assert(BOARD_USB_SINK_QUEUE_RECORDS >=
+                  kUsbTransientIngressRecords + 1u,
+              "USB descriptor queue does not cover the declared transient envelope");
 
 struct UsbCdcSinkConfig {
   uint32_t drain_time_budget_us = 0;
@@ -41,8 +73,20 @@ struct UsbCdcSinkCounters {
   bool first_accepted_valid = false;
 };
 
+// A short USB write may finish one or more staged records before stopping in
+// the next record. Completion evidence must be committed independently of
+// whether the whole staged byte batch was accepted.
+inline void applyUsbCompletionEvidence(UsbCdcSinkCounters& counters,
+                                       uint32_t completed_frames,
+                                       uint64_t last_publish_seq) {
+  if (completed_frames == 0) return;
+  counters.frame_sent_total += completed_frames;
+  counters.last_sent_publish_seq = last_publish_seq;
+}
+
 class UsbCdcSink final : public IFrameSink {
  public:
+  UsbCdcSink();
   void begin(const UsbCdcSinkConfig& config);
   bool enabled() const override;
   bool connected() const override;
@@ -56,7 +100,13 @@ class UsbCdcSink final : public IFrameSink {
   const UsbCdcSinkCounters& counters() const { return counters_; }
 
  private:
-  FixedFrameQueue<BOARD_USB_SINK_QUEUE_RECORDS> queue_;
+  using TxQueue = FixedFrameByteQueue<BOARD_USB_SINK_QUEUE_RECORDS,
+                                      BOARD_USB_SINK_QUEUE_BYTES>;
+  using TxStorage = typename TxQueue::Storage;
+
+  TxStorage queue_storage_ = {};
+  TxQueue queue_;
+  uint8_t tx_stage_[BOARD_SERIAL_TX_CHUNK_BYTES] = {};
   UsbCdcSinkConfig config_;
   UsbCdcSinkCounters counters_;
   uint32_t blocked_since_ms_ = 0;

@@ -24,11 +24,15 @@ uint16_t encode_can_rx_segment_payload(const CanRxSegmentItem* items,
   }
 
   const uint64_t first_capture_seq = items[0].capture_seq;
-  const uint64_t base_mono_us = items[0].mono_us;
+  uint64_t base_mono_us = items[0].mono_us;
+  for (uint8_t index = 1; index < count; ++index) {
+    if (items[index].mono_us < base_mono_us) {
+      base_mono_us = items[index].mono_us;
+    }
+  }
   for (uint8_t index = 0; index < count; ++index) {
     if (items[index].capture_seq < first_capture_seq ||
         items[index].capture_seq - first_capture_seq > 0xFFFFULL ||
-        items[index].mono_us < base_mono_us ||
         items[index].mono_us - base_mono_us > 0xFFFFFFFFULL) {
       return 0;
     }
@@ -94,10 +98,21 @@ bool CanRxSegmentBuilder::compactDeltasFit(
     return true;
   }
   const CanRxSegmentItem& first = pending_[0];
-  return item.capture_seq >= first.capture_seq &&
-         item.capture_seq - first.capture_seq <= 0xFFFFULL &&
-         item.mono_us >= first.mono_us &&
-         item.mono_us - first.mono_us <= 0xFFFFFFFFULL;
+  if (item.capture_seq < first.capture_seq ||
+      item.capture_seq - first.capture_seq > 0xFFFFULL) {
+    return false;
+  }
+  uint64_t min_mono_us = item.mono_us;
+  uint64_t max_mono_us = item.mono_us;
+  for (uint8_t index = 0; index < pending_count_; ++index) {
+    if (pending_[index].mono_us < min_mono_us) {
+      min_mono_us = pending_[index].mono_us;
+    }
+    if (pending_[index].mono_us > max_mono_us) {
+      max_mono_us = pending_[index].mono_us;
+    }
+  }
+  return max_mono_us - min_mono_us <= 0xFFFFFFFFULL;
 }
 
 bool CanRxSegmentBuilder::push(const CanRxSegmentItem& item, uint32_t now_us) {

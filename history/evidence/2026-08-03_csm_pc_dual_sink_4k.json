@@ -1,0 +1,117 @@
+{
+  "schema": 1,
+  "gate": "CSM_PC_DUAL_SINK_4000_FPS",
+  "pass": true,
+  "started_local": "2026-08-03T19:37:48+09:00",
+  "duration_seconds": 60.0,
+  "firmware": {
+    "environment": "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi",
+    "source_manifest_sha256": "a00811b5bf2c83c61814d7d0312aecae8d03cfc012b24dc3112a4b9401cd8f2a",
+    "source_id32": "A00811B5",
+    "runtime_contract_id32": "6C9BA4E2",
+    "binary_sha256": "0C5AC5EB072B61299850D00E420A38857602A871ABF8FFF6FF5536B26526FE8E",
+    "binary_bytes": 368320,
+    "elf_sha256": "91208EC7BE278F02E5D2284C634BB214A57545658C8F047E9BD73D63BE91EC03",
+    "ram_bytes": 211448,
+    "flash_image_bytes": 368320,
+    "platformio_section_meter_bytes": 367192,
+    "upload": "DFU 0x08040000"
+  },
+  "injection": {
+    "pcan_bus": 1,
+    "pcan_target_fps": 2000,
+    "pcan_sent": 120000,
+    "pcan_achievement_ratio": 1.0,
+    "kvaser_bus": 0,
+    "kvaser_target_fps": 2000,
+    "kvaser_sent": 120000,
+    "kvaser_achievement_ratio": 1.0,
+    "adapter_and_sync_errors": 0,
+    "id_count_per_source": 64
+  },
+  "exact_sink_comparison": {
+    "usb": {
+      "pcan_received": 120000,
+      "kvaser_received": 120000,
+      "missing": 0,
+      "duplicate": 0,
+      "bad_payload": 0,
+      "wrong_bus": 0
+    },
+    "wifi": {
+      "pcan_received": 120000,
+      "kvaser_received": 120000,
+      "missing": 0,
+      "duplicate": 0,
+      "bad_payload": 0,
+      "wrong_bus": 0
+    }
+  },
+  "canonical": {
+    "can_frames": 241627,
+    "can_rx_segments_usb": 10673,
+    "average_frames_per_segment_usb": 22.6391,
+    "crc_errors": 0,
+    "length_errors": 0,
+    "typed_gaps": 0,
+    "segment_gaps": 0,
+    "capture_gaps": 0,
+    "segment_decode_errors": 0,
+    "capability_seen_on_usb": true,
+    "usb_stream_session_count": 2,
+    "unique_boot_session_count": 1,
+    "wifi_first_record_type": 17,
+    "wifi_stream_session_count": 1,
+    "wifi_connection_epoch": 3,
+    "legacy_record_21_22_publications": 0
+  },
+  "health_delta": {
+    "can_drop": 0,
+    "fifo_overflow": 0,
+    "serial_enqueue_fail": 0,
+    "segment_enqueue_fail": 0,
+    "pool_alloc_fail": 0,
+    "can_truth_pool_fail": 0,
+    "usb_overflow": 0,
+    "usb_backpressure": 67,
+    "usb_sent_records": 23805,
+    "usb_boot_cumulative_high_water_bytes": 519
+  },
+  "wifi_active_window": {
+    "elapsed_seconds": 58.116,
+    "accepted_bytes_per_second": 100189.6,
+    "socket_bytes_per_second": 100206.5,
+    "queue_high_water_bytes": 3030,
+    "queue_high_water_records": 11,
+    "queue_growth_bytes": -981,
+    "queue_growth_records": -1,
+    "rejected_records": 0,
+    "aborted_records": 0,
+    "would_block": 0,
+    "socket_errors": 0,
+    "stall_close": 0,
+    "queue_pressure_close": 0,
+    "byte_conservation_residual": 0,
+    "record_conservation_residual": 0,
+    "note": "The reported loss sequence range was cumulative before this active window; active-window loss deltas and both exact sink streams are zero."
+  },
+  "artifacts": {
+    "directory": "C:/WORKS/VS/vsm_android_app/artifacts/hil_dual_usb_highload_2000_2000_20260803_193748",
+    "result_sha256": "3EAFE3C7B866CB6DC25481D93216859B606D43568725F2512642A64B38F02480",
+    "summary_sha256": "D5C6AFCF2D39C2D3C37F1120B2332D9008D297FB0E5989DF6AC1B7640F5AFA6F",
+    "usb_capture_bytes": 6083341,
+    "usb_capture_sha256": "F10BB8F2D57F06B3463B1CF92BA1018BB262F9DED9A9E58E1BA03E9AC7ABA544",
+    "wifi_capture_bytes": 6082684,
+    "wifi_capture_sha256": "8B35301C76B21BA5864B442BD9EAEA092A8E7D81F120C4965F6918C7363BCB58"
+  },
+  "open_gates": [
+    "Android plus explicit Capture at the same aggregate load",
+    "phone and tablet A4 lifecycle, background, recreate, process-death, Capture and export",
+    "RC plus CAN-TX plus Windows USB plus Android plus Capture simultaneous HIL",
+    "separate deterministic 120/135 kB/s lower-path capacity qualification",
+    "reconnect, blocked-client and fault injection",
+    "1/8/24-hour soak",
+    "production provisioning, signing, update, rollback and field recovery",
+    "external vehicle DBC/controller, autonomy input, D1 hardware gate, production keys and field proof"
+  ]
+}

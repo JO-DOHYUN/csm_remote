@@ -106,6 +106,15 @@ EVENT_NAMES = {
     51: "FEEDER_LINK_STALE",
 }
 
+CAN_RX_SEGMENT_TYPE = 16
+CAN_RX_SEGMENT_SCHEMA_V2 = 2
+CAN_RX_SEGMENT_V2_HEADER_LEN = 40
+CAN_RX_SEGMENT_V2_ENTRY_LEN = 20
+CAN_RX_SEGMENT_LEGACY_HEADER_LEN = 32
+CAN_RX_SEGMENT_LEGACY_ENTRY_LEN = 30
+CAN_RX_SEGMENT_FLAG_CAPTURE_SEQUENCE_VALID = 1 << 0
+CAN_RX_SEGMENT_FLAG_COMPACT_ENTRIES = 1 << 1
+
 
 def crc16_ccitt(data: bytes) -> int:
     crc = 0xFFFF
@@ -141,6 +150,132 @@ def i16(payload: bytes, offset: int) -> int:
 
 def i64(payload: bytes, offset: int) -> int:
     return struct.unpack_from("<q", payload, offset)[0]
+
+
+def decode_can_rx_segment(payload: bytes) -> dict:
+    """Decode the canonical CAN_RX_SEGMENT schema 2 or legacy schema 1.
+
+    This is the Python evidence-tool authority for segment reconstruction.
+    Callers must treat ValueError as an integrity failure rather than silently
+    ignoring a record they cannot interpret.
+    """
+    if len(payload) < CAN_RX_SEGMENT_LEGACY_HEADER_LEN:
+        raise ValueError(f"CAN_RX_SEGMENT header truncated: {len(payload)}")
+
+    segment_sequence = u64(payload, 0)
+    first_capture_sequence = u64(payload, 8)
+    frame_count = u16(payload, 16)
+    entry_size = payload[18]
+    flags = payload[19]
+    dropped_total = u32(payload, 20)
+    fifo_overflow_total = u32(payload, 24)
+    schema = payload[28]
+    declared_header_size = payload[29]
+    compact = bool(flags & CAN_RX_SEGMENT_FLAG_COMPACT_ENTRIES)
+    capture_sequence_valid = bool(
+        flags & CAN_RX_SEGMENT_FLAG_CAPTURE_SEQUENCE_VALID
+    )
+
+    if schema == CAN_RX_SEGMENT_SCHEMA_V2 or compact:
+        if schema != CAN_RX_SEGMENT_SCHEMA_V2:
+            raise ValueError(
+                f"CAN_RX_SEGMENT compact flag with unsupported schema {schema}"
+            )
+        if declared_header_size != CAN_RX_SEGMENT_V2_HEADER_LEN:
+            raise ValueError(
+                "CAN_RX_SEGMENT v2 header size "
+                f"{declared_header_size}, expected {CAN_RX_SEGMENT_V2_HEADER_LEN}"
+            )
+        if entry_size != CAN_RX_SEGMENT_V2_ENTRY_LEN:
+            raise ValueError(
+                "CAN_RX_SEGMENT v2 entry size "
+                f"{entry_size}, expected {CAN_RX_SEGMENT_V2_ENTRY_LEN}"
+            )
+        if not compact or not capture_sequence_valid:
+            raise ValueError(
+                f"CAN_RX_SEGMENT v2 required flags missing: 0x{flags:02X}"
+            )
+        if payload[30:32] != b"\x00\x00":
+            raise ValueError("CAN_RX_SEGMENT v2 reserved header bytes are non-zero")
+        if frame_count > 23:
+            raise ValueError(f"CAN_RX_SEGMENT v2 frame count exceeds 23: {frame_count}")
+        required = declared_header_size + frame_count * entry_size
+        if len(payload) != required:
+            raise ValueError(
+                f"CAN_RX_SEGMENT v2 length mismatch: {len(payload)} != {required}"
+            )
+        base_mono_us = u64(payload, 32)
+        entries_offset = declared_header_size
+        frames = []
+        for index in range(frame_count):
+            offset = entries_offset + index * entry_size
+            capture_delta = u16(payload, offset)
+            mono_delta_us = u32(payload, offset + 2)
+            dlc_flags = payload[offset + 10]
+            if dlc_flags & 0x0F > 8:
+                raise ValueError(
+                    f"CAN_RX_SEGMENT v2 invalid DLC at entry {index}: {dlc_flags & 0x0F}"
+                )
+            frames.append(
+                {
+                    "capture_sequence": (
+                        first_capture_sequence + capture_delta
+                        if capture_sequence_valid
+                        else None
+                    ),
+                    "mono_us": base_mono_us + mono_delta_us,
+                    "can_id_flags": u32(payload, offset + 6),
+                    "dlc_flags": dlc_flags,
+                    "bus": payload[offset + 11],
+                    "data": payload[offset + 12 : offset + 20],
+                }
+            )
+    else:
+        if entry_size < CAN_RX_SEGMENT_LEGACY_ENTRY_LEN:
+            raise ValueError(
+                "CAN_RX_SEGMENT legacy entry size "
+                f"{entry_size}, expected at least {CAN_RX_SEGMENT_LEGACY_ENTRY_LEN}"
+            )
+        if frame_count > 15:
+            raise ValueError(
+                f"CAN_RX_SEGMENT legacy frame count exceeds 15: {frame_count}"
+            )
+        required = CAN_RX_SEGMENT_LEGACY_HEADER_LEN + frame_count * entry_size
+        if len(payload) != required:
+            raise ValueError(
+                f"CAN_RX_SEGMENT legacy length mismatch: {len(payload)} != {required}"
+            )
+        frames = []
+        for index in range(frame_count):
+            offset = CAN_RX_SEGMENT_LEGACY_HEADER_LEN + index * entry_size
+            dlc_flags = payload[offset + 20]
+            if dlc_flags & 0x0F > 8:
+                raise ValueError(
+                    "CAN_RX_SEGMENT legacy invalid DLC at entry "
+                    f"{index}: {dlc_flags & 0x0F}"
+                )
+            frames.append(
+                {
+                    "capture_sequence": u64(payload, offset),
+                    "mono_us": u64(payload, offset + 8),
+                    "can_id_flags": u32(payload, offset + 16),
+                    "dlc_flags": dlc_flags,
+                    "bus": payload[offset + 21],
+                    "data": payload[offset + 22 : offset + 30],
+                }
+            )
+
+    return {
+        "schema": schema,
+        "segment_sequence": segment_sequence,
+        "first_capture_sequence": first_capture_sequence,
+        "frame_count": frame_count,
+        "entry_size": entry_size,
+        "flags": flags,
+        "dropped_total": dropped_total,
+        "fifo_overflow_total": fifo_overflow_total,
+        "frames": frames,
+    }
 
 
 def zstr(payload: bytes, offset: int, size: int) -> str:
@@ -245,30 +380,26 @@ def describe(frame):
             f"dlc={dlc} data={data.hex(' ')} {tail}"
         )
 
-    if rtype == 16 and len(payload) >= 32:
-        segment_seq = u64(payload, 0)
-        first_capture_seq = u64(payload, 8)
-        frame_count = u16(payload, 16)
-        entry_size = payload[18]
-        dropped_before = u32(payload, 20)
-        fifo_before = u32(payload, 24)
+    if rtype == CAN_RX_SEGMENT_TYPE:
+        try:
+            segment = decode_can_rx_segment(payload)
+        except ValueError as exc:
+            return f"[{name}] seq={seq} INVALID {exc}"
         preview = []
-        if entry_size >= 30 and len(payload) >= 32 + frame_count * entry_size:
-            for index in range(min(frame_count, 3)):
-                offset = 32 + index * entry_size
-                capture_seq = u64(payload, offset)
-                mono = u64(payload, offset + 8)
-                can_id_flags = u32(payload, offset + 16)
-                can_id = can_id_flags & 0x1FFFFFFF
-                dlc = payload[offset + 20] & 0x0F
-                bus = payload[offset + 21]
-                data = payload[offset + 22 : offset + 30]
-                preview.append(
-                    f"#{index} cap={capture_seq} t={mono} bus={bus} id=0x{can_id:X} dlc={dlc} data={data.hex(' ')}"
-                )
+        for index, entry in enumerate(segment["frames"][:3]):
+            can_id = entry["can_id_flags"] & 0x1FFFFFFF
+            dlc = entry["dlc_flags"] & 0x0F
+            preview.append(
+                f"#{index} cap={entry['capture_sequence']} t={entry['mono_us']} "
+                f"bus={entry['bus']} id=0x{can_id:X} dlc={dlc} "
+                f"data={entry['data'].hex(' ')}"
+            )
         return (
-            f"[{name}] seq={seq} segment_seq={segment_seq} first_capture_seq={first_capture_seq} "
-            f"frames={frame_count} entry={entry_size} dropped_before={dropped_before} fifo_before={fifo_before} "
+            f"[{name}] seq={seq} segment_seq={segment['segment_sequence']} "
+            f"first_capture_seq={segment['first_capture_sequence']} "
+            f"frames={segment['frame_count']} entry={segment['entry_size']} "
+            f"schema={segment['schema']} dropped_before={segment['dropped_total']} "
+            f"fifo_before={segment['fifo_overflow_total']} "
             + " | ".join(preview)
         )
 
@@ -702,6 +833,7 @@ class GapTracker:
         self.segment_seq_gaps = 0
         self.last_capture_seq = None
         self.capture_seq_gaps = 0
+        self.segment_decode_errors = 0
         self.last_health = {}
 
     @staticmethod
@@ -710,6 +842,12 @@ class GapTracker:
         if cur == expected:
             return 0
         return (cur - expected) & 0xFFFF
+
+    @staticmethod
+    def _seq64_discontinuity(prev: int, cur: int) -> int:
+        if cur == prev + 1:
+            return 0
+        return cur - prev - 1 if cur > prev + 1 else 1
 
     def observe(self, frame):
         if frame.get("bad_crc"):
@@ -722,21 +860,27 @@ class GapTracker:
 
         rtype = frame["type"]
         payload = frame["payload"]
-        if rtype == 16 and len(payload) >= 32:
-            segment_seq = u64(payload, 0)
+        if rtype == CAN_RX_SEGMENT_TYPE:
+            try:
+                segment = decode_can_rx_segment(payload)
+            except ValueError:
+                self.segment_decode_errors += 1
+                return
+            segment_seq = segment["segment_sequence"]
             if self.last_segment_seq is not None and segment_seq != self.last_segment_seq + 1:
-                self.segment_seq_gaps += max(0, segment_seq - self.last_segment_seq - 1)
+                self.segment_seq_gaps += self._seq64_discontinuity(
+                    self.last_segment_seq, segment_seq
+                )
             self.last_segment_seq = segment_seq
-
-            frame_count = u16(payload, 16)
-            entry_size = payload[18]
-            if entry_size >= 30 and len(payload) >= 32 + frame_count * entry_size:
-                for index in range(frame_count):
-                    offset = 32 + index * entry_size
-                    capture_seq = u64(payload, offset)
-                    if self.last_capture_seq is not None and capture_seq != self.last_capture_seq + 1:
-                        self.capture_seq_gaps += max(0, capture_seq - self.last_capture_seq - 1)
-                    self.last_capture_seq = capture_seq
+            for entry in segment["frames"]:
+                capture_seq = entry["capture_sequence"]
+                if capture_seq is None:
+                    continue
+                if self.last_capture_seq is not None and capture_seq != self.last_capture_seq + 1:
+                    self.capture_seq_gaps += self._seq64_discontinuity(
+                        self.last_capture_seq, capture_seq
+                    )
+                self.last_capture_seq = capture_seq
 
         if rtype == 8 and len(payload) >= 192 and payload[52] >= 4:
             self.last_health = {
@@ -884,6 +1028,7 @@ class GapTracker:
             f"typed_seq_gaps={self.typed_seq_gaps}",
             f"segment_seq_gaps={self.segment_seq_gaps}",
             f"capture_seq_gaps={self.capture_seq_gaps}",
+            f"segment_decode_errors={self.segment_decode_errors}",
         ]
         for key in (
             "serial_clear",

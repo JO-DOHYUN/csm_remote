@@ -30,7 +30,7 @@ class FixedFrameByteQueue {
   };
 
   static_assert(sizeof(Descriptor) == 16,
-                "Wi-Fi frame descriptor RAM contract changed");
+                "frame descriptor RAM contract changed");
 
   struct DescriptorSlot {
     alignas(Descriptor) uint8_t bytes[sizeof(Descriptor)];

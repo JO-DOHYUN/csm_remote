@@ -1,20 +1,21 @@
 # CSM Product Envelope
 
-Updated: 2026-07-30
+Updated: 2026-08-03
 
 이 문서는 Portenta H7 + Feather RP2040 CAN feeder 제품의 계산·메모리·검증
-gate다. live-first 구현, host 계약, 제품 build, COM7 upload와 짧은 PC live
-gate는 통과했다. 아래 계산은 최종 동시부하 qualification 입력이며 그 자체가
-release PASS 주장은 아니다.
+gate다. 2026-08-03 transient-envelope 구현은 host 계약, 제품 build, exact
+artifact 업로드와 PC dual-sink 4,000 fps gate까지 통과했다. 아래 계산은 최종
+동시부하 qualification 입력이며 그 자체가 전체 release PASS 주장은 아니다.
 
 ## 제품 데이터율 기준
 
 | Gate | 계산 또는 기존 측정 | 현재 판정 |
 |---|---:|:---:|
-| CAN RX 2,000 fps legacy → compact | 65,762 → 44,437 B/s | 계산 |
-| 2,000 fps 전체 제품 stream | 57,735 B/s | 동시 HIL 필요 |
+| CAN0+CAN1 aggregate 4,000 fps | 88,874 B/s | 계산 |
+| enabled product stream exact | 111,922 B/s | 계산 |
+| qualification minimum | 120,000 B/s | 실기 gate |
+| design envelope | 135,000 B/s | 계산/실기 margin gate |
 | 기존 raw AP 저/고 실측 | 65,083 / 69,413 B/s | 과거 참고 |
-| 4,000 fps 전체 제품 stream | 102,172 B/s | 제품 목표 아님 |
 
 기존 raw AP 결과는 canonical product stream, Android Capture, RC/CAN/USB
 동시부하를 검증하지 않는다. 특히 zero-progress window가 있었으므로 평균
@@ -25,28 +26,49 @@ release PASS 주장은 아니다.
 현재 승인 계약:
 
 ```text
-record capacity: 128
-encoded-byte capacity: 8,192 B
+descriptor capacity: 256 (normal 252, critical reserve 4)
+encoded-byte capacity: 49,152 B (normal 47,040, critical reserve 2,112)
 admission: single nonblocking offer
 release: positive socket send 즉시
 disconnect replay: 없음
 application ACK: 없음
-overflow/stall: close + flush + fresh STREAM_SESSION
+high/low pressure: 32,768/8,192 B and 192/64 records, diagnostic only
+actual admission miss: close reason 6 + exact loss + flush
+continuous no-positive-progress: 5,000 ms close reason 4
 ```
 
-8,192 B는 57,735 B/s 생산량의 약 142 ms에 해당하지만 outage 보존 시간이
-아니다. record와 byte 한계 중 먼저 닿는 경계가 적용된다. queue는 짧은
-scheduling jitter만 흡수하며 실제 TCP 단절 구간은 손실로 종료한다.
+설계 envelope에서 250 ms 유입은 33,750 B/172 records다. 최대 encoded frame
+523 B와 5 ms fallback 유입 675 B/4 records를 더한 `34,948 B/177 records`가
+normal `47,040 B/252 records` 안에 들어옴을 생성 계산과 static assertion으로
+고정한다. byte 기준 normal coverage는 약 348 ms다. 이는 scheduling transient
+계약이며 sustained drain 부족이나 TCP 단절 보존 시간이 아니다.
 
-descriptor는 compile-time 16 B이며 128개는 2,048 B다. 8,192 B encoded
-ring과 합한 정적 DTCM storage는 10,240 B이고 linker assertion과
-`sizeof(WifiTcpSink::TxStorage)` assertion이 이를 고정한다. 기존 90,096 B
-retained journal 대비 79,856 B를 회수하지만, 전체 section 사용량과 여유는
-최종 build map으로 다시 확인한다.
+descriptor는 compile-time 16 B이며 256개는 4,096 B다. 49,152 B encoded
+ring과 합한 정적 DTCM storage는 53,248 B이고 linker assertion과
+`sizeof(WifiTcpSink::TxStorage)` assertion이 이를 고정한다. 현재 link 계산상
+DTCM 잔여는 77,152 B이며 linker가 최소 65,536 B를 강제한다.
+reserve assertion은 Wi-Fi queue 끝이 아니라 최종 `__csm_dtcm_bss_end__`를
+검사하므로 이후 추가되는 모든 명시적 DTCM arena도 이 여유를 침범할 수 없다.
 
-64% pressure 경계는 5,243 B다. normal admission 6,080 B까지 남는 837 B가
-최대 encoded frame 523 B와 5 ms fallback 동안의 계산 유입 289 B 합계
-812 B보다 크다는 것을 source-backed 계산과 static assertion으로 고정한다.
+high-water에서 normal byte reserve까지 14,272 B가 남아 최대 frame+fallback
+1,198 B보다 크다. high-water는 close 조건이 아니다. 실제 reserve/full에서
+처음 수락하지 못한 record만 exact loss/epoch close를 발생시키며, low-water
+두 조건이 모두 만족될 때 pressure 관측 상태가 복구된다.
+
+## USB live FIFO envelope
+
+USB sink도 `FixedFrameByteQueue`를 사용하며 계약은 `192 descriptors / 40,960
+encoded bytes`다. 135,000 B/s, 686 records/s의 250 ms 유입은 33,750 B/172
+records이고 최대 encoded frame 하나를 포함한 요구량은 `34,273 B/173
+records`다. descriptor 3,072 B와 byte arena를 합한 D1 정적 storage는 44,032
+B다. 이 구조는 record마다 523 B를 고정 할당하지 않으면서 USB host scheduling
+transient를 흡수하고, 실제 overflow는 독립 sink loss로 명시한다.
+
+2026-08-03 final 60초 PC gate의 boot-cumulative USB high-water는 519 B였고 overflow,
+`serial_enqueue_fail`, typed/segment/capture gap이 모두 0이었다. 같은 창에서
+Wi-Fi도 두 source의 240,000 frame을 정확히 수신했고 CRC/gap/close/loss가 0이었다.
+timestamp가 capture 순서에서 역행해도 segment base를 구간 최솟값으로 정하므로
+재정렬 없이 241,627 frame을 10,673 segment에 담았다(평균 22.64).
 
 ## overflow와 복구 계약
 
@@ -84,7 +106,7 @@ MSS/SND_BUF/TCP_WND/lwIP heap/D3 linker/MPU/WHD override는 live-first build의
 
 | 영역 | gate |
 |---|---|
-| D1 | app/core data, stack/heap headroom |
+| D1 | app/core data + USB FIFO, static 211,448 B, heap span 311,816 B |
 | DTCM | live FIFO와 CPU-only arena의 실제 사용량 |
 | D2 | M4 window와 M7 network DMA section 비중첩 |
 | D3 | lwIP heap actual size와 MPU attribute |

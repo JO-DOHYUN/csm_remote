@@ -48,6 +48,7 @@ class WifiSocketWorker final {
   uint32_t handled_abort_sequence_ = 0;
   uint32_t handled_disconnect_sequence_ = 0;
   uint32_t handled_queue_pressure_disconnect_sequence_ = 0;
+  WifiQueuePressureTracker queue_pressure_;
   WifiTxProgressTracker tx_progress_;
   uint32_t last_accept_poll_ms_ = 0;
   uint32_t last_state_publish_ms_ = 0;
@@ -78,6 +79,7 @@ class WifiSocketWorker final {
   void serviceReceive(uint32_t now_ms);
   WifiTransmitPumpResult serviceSessionAnchor(uint32_t now_ms);
   WifiTransmitPumpResult serviceTransmit(uint32_t now_ms);
+  void updateQueuePressure(uint32_t now_ms);
   void notePumpResult(const WifiTransmitPumpResult& result);
   bool closePendingIsolationBeforeSocketSend();
   bool closePendingIsolationAfterPositiveSend();

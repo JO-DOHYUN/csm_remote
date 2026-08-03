@@ -99,10 +99,16 @@ if "#define BOARD_WIFI_TX_CHUNK_BYTES 2920" not in contract:
 if "FixedFrameByteQueue<" not in mailbox_header:
     fail("Wi-Fi mailbox must own the bounded live-only byte FIFO")
 for token in (
-    "BOARD_WIFI_SINK_QUEUE_RECORDS=128",
-    "BOARD_WIFI_SINK_QUEUE_BYTES=8192",
+    "BOARD_WIFI_SINK_QUEUE_RECORDS=256",
+    "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
     "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-    "BOARD_WIFI_STALL_TIMEOUT_MS=500",
+    "BOARD_WIFI_TRANSIENT_COVERAGE_MS=250",
+    "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES=32768",
+    "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES=8192",
+    "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS=192",
+    "BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS=64",
+    "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
+    "BOARD_WIFI_CALL_STALL_TIMEOUT_MS=5000",
     "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
 ):
     if token not in platformio:
@@ -131,7 +137,11 @@ for token in (
     "#define BOARD_WIFI_CONNECTED_FALLBACK_MS 5",
     "#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 20",
     "#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 2",
-    "#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 59",
+    "#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 250",
+    "#define BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES 32768",
+    "#define BOARD_WIFI_PRESSURE_LOW_WATER_BYTES 8192",
+    "#define BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS 192",
+    "#define BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS 64",
 ):
     if token not in contract:
         fail(f"worker recovery/evidence contract is missing {token!r}")
@@ -279,9 +289,27 @@ for token in (
     "BOARD_WIFI_QUEUE_PRESSURE_NO_PROGRESS_GRACE_MS",
     "queue_pressure_no_progress_grace_ms",
     "wifiShouldIsolateQueuePressure",
+    "wifiShouldCloseQueuePressure",
+    "wifiShouldSignalOpaqueSendPressure",
+    "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT",
 ):
     if token in contract or token in worker:
         fail(f"legacy high-water timer close remains: found {token!r}")
+
+session_anchor_send = worker[
+    worker.index("WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(") :
+    worker.index("void WifiSocketWorker::serviceReceive(")
+]
+normal_send = worker[
+    worker.index("WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(") :
+    worker.index("void WifiSocketWorker::notePumpResult(")
+]
+for name, body in (
+    ("session anchor", session_anchor_send),
+    ("normal transmit", normal_send),
+):
+    if "closeClient(WifiCloseReason::QueuePressure)" in body:
+        fail(f"{name} still closes an epoch on recoverable queue pressure")
 
 for token in (
     "queued_bytes_",
@@ -317,7 +345,6 @@ for token in (
     "unaccepted_postcommit_bytes_",
     "unaccepted_postcommit_records_",
     "frame.type != csm::RecordType::StreamSession",
-    "wifiShouldSignalOpaqueSendPressure(",
 ):
     if token not in contract + mailbox_header + mailbox_source:
         fail(f"event-driven producer wake boundary is missing {token!r}")
@@ -337,11 +364,13 @@ for token in (
         fail(f"live-FIFO producer isolation boundary is missing {token!r}")
 for token in (
     "wifiQueuePressureReached(",
-    "wifiShouldCloseQueuePressure(",
-    "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT",
-    "kWifiPressureThresholdBytes",
+    "wifiQueuePressureRecovered(",
+    "WifiQueuePressureTracker",
+    "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES",
+    "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES",
+    "kWifiTransientIngressBytes",
     "kWifiFallbackIngressBytes",
-    "pressure boundary cannot protect the critical byte reserve",
+    "does not cover the declared transient envelope",
 ):
     if token not in worker + contract + mailbox_header:
         fail(f"worker batching pressure policy is missing {token!r}")
@@ -383,8 +412,9 @@ linker = (ROOT / "linker" / "portenta_h7_m7_product.ld").read_text(
 main_source = (ROOT / "src" / "main.cpp").read_text(encoding="utf-8")
 for token in (
     ".wifi_tx_queue_dtcm (NOLOAD)",
-    "__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0x2800",
-    "LENGTH(DTCMRAM) - 0x8000",
+    "__wifi_tx_queue_end__ - __wifi_tx_queue_start__ == 0xD000",
+    "__csm_dtcm_bss_end__ <=",
+    "LENGTH(DTCMRAM) - 0x10000",
 ):
     if token not in linker:
         fail(f"DTCM queue ownership guard is missing {token!r}")
@@ -515,7 +545,7 @@ for token in (
     "session_anchor_accounted_offset_",
     "fresh_anchor_pending_bytes",
     "fresh_anchor_pending_records",
-    "current_queue.queued_bytes",
+    "updateQueuePressure",
     "queue_abort_sequence_valid",
     "first_queue_aborted_publish_seq",
     "last_queue_aborted_publish_seq",

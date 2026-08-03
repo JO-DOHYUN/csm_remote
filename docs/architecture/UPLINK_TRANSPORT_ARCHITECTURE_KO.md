@@ -1,15 +1,15 @@
 # CSM Uplink Transport 아키텍처
 
-Updated: 2026-07-30
+Updated: 2026-08-03
 
 이 문서는 현재 CSM 제품 데이터 경계의 권위 문서다. 과거 retained
 journal/APP ACK/replay 실험은
 `history/decisions/DECISION_LEDGER_KO.md`에만 남긴다.
 
-현재 상태는 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다. live-first 구조의
-host 계약, 제품 build, COM7 upload와 짧은 USB+PC Wi-Fi live gate는 통과했지만
-실제 Android, 동시 고부하, fault injection과 soak 전에는 release-qualified로
-표시하지 않는다.
+현재 상태는 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다. 2026-08-03의
+transient-envelope 변경은 host 계약, 제품 build, 정확 artifact 업로드와 PC
+dual-sink 4,000 fps gate까지 통과했다. Android+Capture, RC/CAN-TX 동시 부하,
+fault injection과 soak 전에는 release-qualified로 표시하지 않는다.
 
 ## 제품 우선순위와 시작 순서
 
@@ -39,9 +39,9 @@ J4 FDCAN CAN1 ----------------/                  |
                                         CanonicalPublisher
                                     (identity 1회, encode 1회)
                                        /                  \
-                            UsbCdcSink queue       Wi-Fi live FIFO
-                                                   128 records
-                                                    8,192 B
+                            USB live FIFO          Wi-Fi live FIFO
+                            192 descriptors        256 descriptors
+                              40,960 B                49,152 B
                                                        |
                                              one RTOS socket worker
                                                        |
@@ -60,11 +60,24 @@ J4 FDCAN CAN1 ----------------/                  |
   영향을 주지 않는다.
 - CSM은 network backlog replay나 Android 파일 durability를 제공하지 않는다.
 
+## USB live FIFO 계약
+
+USB는 `192 descriptors / 40,960 encoded bytes`의 byte-ring FIFO를 사용한다.
+기존 8-record queue처럼 모든 slot에 최대 frame 크기를 고정 할당하지 않는다.
+135,000 B/s, 686 records/s 설계 envelope의 250 ms 유입과 최대 frame 하나는
+`34,273 B / 173 records`이며 두 차원 모두 정적으로 검증한다. USB host
+backpressure는 CAN ingest, canonical publisher와 Wi-Fi sink를 막지 않는다.
+실제 overflow는 `BOARD_HEALTH.usb_overflow`, canonical sequence gap과 sink
+counter로 숨김없이 판정한다.
+
 ## Wi-Fi live FIFO 계약
 
-Wi-Fi queue는 `128 records / 8,192 encoded bytes`의 작은 bounded live
-FIFO다. 이 용량은 RTOS와 network scheduling의 짧은 변동을 흡수하기 위한
-것이며 단절 구간을 보존하기 위한 journal이 아니다.
+Wi-Fi queue는 `256 descriptors / 49,152 encoded bytes`의 bounded live
+FIFO다. 그중 `4 descriptors / 2,112 bytes`는 critical evidence에 예약되어
+normal admission은 `252 records / 47,040 bytes`다. 135,000 B/s 및 686 records/s
+설계 envelope에서 최대 encoded frame과 5 ms fallback 유입을 포함하고도
+250 ms transient를 흡수하도록 계산했다. 이는 단절 구간을 보존하는 journal이
+아니며 지속 처리량 부족을 숨기지 않는다.
 
 - producer offer는 단 한 번의 nonblocking 시도만 한다.
 - positive socket return은 해당 byte를 즉시 소비한다. 완성 record는 즉시
@@ -74,8 +87,17 @@ FIFO다. 이 용량은 RTOS와 network scheduling의 짧은 변동을 흡수하�
   snapshot을 발행한다. 진단은 물리 FIFO 즉석값과 이 누계를 섞지 않는다.
 - TCP ACK 외에 CSM RAM 회수를 허가하는 application ACK는 없다.
 - disconnect에서 send cursor를 rewind하거나 과거 record를 replay하지 않는다.
-- queue가 record 또는 byte 한계에 닿거나 socket이 stall하면 해당 sink만
-  one-shot close한다.
+- `32,768 bytes 또는 192 records` high-water는 drain을 재촉하고 계측하는
+  상태일 뿐 close 조건이 아니다. 둘 다 `8,192 bytes 이하 및 64 records 이하`로
+  내려와야 pressure 상태가 해제된다.
+- normal reserve 또는 실제 full에서 첫 record가 수락되지 못하면 그 정확한
+  `publish_seq64`를 loss로 고정하고 해당 sink만 one-shot close한다. 호환성을
+  위해 wire close reason 값 `6 QueuePressure`를 유지하지만 의미는 단순
+  high-water가 아니라 **실제 admission loss**다.
+- positive socket progress가 5초 연속 없으면 `TransmitNoProgress`로 해당
+  sink만 close한다. vendor call 자체가 5초 이상 반환하지 않으면 facade는
+  논리적으로 그 epoch를 격리하지만 같은 MCU의 kernel/WHD hard stall을 취소할
+  수 있다고 주장하지 않는다.
 - close 경로는 이전 epoch의 FIFO와 partial frame을 전부 flush한다.
 - flush된 record와 close 중 거부된 record는 누계와 정확한 sequence loss
   경계로 남기며 정상 전송으로 위장하지 않는다.
@@ -168,14 +190,18 @@ Wi-Fi를 제품 transport로 승인하지 않는다.
 
 구현 후 다음을 순서대로 통과해야 한다.
 
-1. host contract: APP ACK/replay/rewind/retained anchor 부재와 FIFO
-   `128/8192` 확인
-2. startup fault injection: Wi-Fi 실패 중 RC/CAN/USB 정상
-3. idle PC와 실제 Android Live: positive send 즉시 release와 backlog replay 0
-4. queue overflow/socket stall 강제: close, flush, loss evidence, fresh
+1. host contract: APP ACK/replay/rewind/retained anchor 부재, Wi-Fi FIFO
+   `256/49152`, USB FIFO `192/40960`, transient 계산과 high/low hysteresis 확인
+2. build/link: RAM `211,448/523,624 B`, D1 heap span `311,816 B`, Wi-Fi DTCM
+   `53,248 B`, DTCM 잔여 `77,152 B`, 강제 reserve `65,536 B` 확인
+3. startup fault injection: Wi-Fi 실패 중 RC/CAN/USB 정상
+4. idle PC와 실제 Android Live: positive send 즉시 release와 backlog replay 0
+5. 실제 reserve/full 및 5초 no-progress 강제: close, flush, loss evidence, fresh
    `STREAM_SESSION`, 최신 Live 복구
-5. 2,000 fps + J4 RC + CAN0/CAN1 + USB + Android Wi-Fi 동시 HIL
-6. Android Capture open/write/fsync 실패 중 Live/TCP 지속
-7. reconnect 반복과 1시간/8시간/24시간 soak
+6. CAN0 2,000 fps + CAN1 2,000 fps + USB + PC Wi-Fi 소비자 동시 HIL — PASS,
+   양 source sequence exact, 양 sink gap/drop/close 0
+7. 같은 부하의 Android Wi-Fi + Capture 동시 HIL
+8. Android Capture open/write/fsync 실패 중 Live/TCP 지속
+9. reconnect 반복과 1시간/8시간/24시간 soak
 
 현재 내부 Wi-Fi의 판정은 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다.

@@ -1,20 +1,34 @@
 # TRANSPORT_AND_RECORDS_KO
 
-## 2026-07-30 live-first product-link contract
+## 2026-08-03 live-first transient-envelope contract
 
-This section supersedes the 2026-07-28 retained product-link contract and all
-older reconnect/replay statements below.
+This section supersedes the queue dimensions and close-policy statements in
+all older sections. The 2026-07-30 live-only/no-ACK/no-replay decision remains
+active.
 
-- The product Wi-Fi uplink is live-only. It uses a bounded FIFO of 128 records
-  and 8,192 encoded bytes. It is a scheduling-jitter buffer, not a journal.
+- The product Wi-Fi uplink is live-only. It uses 256 descriptors and 49,152
+  encoded bytes. Four descriptors and 2,112 bytes are reserved for critical
+  evidence, leaving a 252-record/47,040-byte normal envelope. It is a
+  scheduling-jitter buffer, not a journal.
+- At the generated 135,000 B/s and 686-record/s design envelope, the normal
+  capacity covers 250 ms plus one maximum encoded frame and one 5 ms fallback
+  interval in both dimensions. This bounded transient claim is not a sustained
+  throughput or outage-retention claim.
+- 32,768 bytes or 192 records enters diagnostic pressure. Pressure recovers
+  only at both 8,192 bytes or less and 64 records or less. High-water pressure
+  changes batching/wake behavior and counters; it never closes a TCP epoch.
 - A positive socket send immediately releases the accepted bytes. A completed
   record is released immediately; a partial write retains only its unsent
   suffix.
 - There is no application receive/commit ACK, reclaim cursor, disconnect
   rewind, or network backlog replay.
-- Queue overflow or socket stall closes only the Wi-Fi epoch, flushes every
-  queued/partial byte from that epoch, and records the exact loss/close
-  evidence. RC, authority, CAN, canonical publication, and USB continue.
+- The first reserve/full admission miss fixes the exact loss sequence and
+  closes only the Wi-Fi epoch. Wire close reason 6 retains the historical
+  `QueuePressure` name but now means actual admission loss, not occupancy.
+  Five seconds without positive socket progress closes as
+  `TransmitNoProgress`. Either close flushes every queued/partial byte from
+  that epoch and records exact loss/close evidence. RC, authority, CAN,
+  canonical publication, and USB continue.
 - A new TCP client receives a fresh current `STREAM_SESSION` before any
   subsequent Live record. No record from the previous TCP epoch is replayed.
 - The sink is not publisher-connected until the facade has observed the
@@ -72,8 +86,11 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   CAN id/flags `u32` at 6, DLC/flags at 10, bus at 11, data[8] at 12.
 - Maximum frame count is 23. Maximum payload is 500 bytes and maximum full
   typed frame is 511 bytes.
-- A delta that cannot fit causes a segment flush before that item; values are
-  never truncated. Producers merge bus queues by the smallest capture sequence.
+- The header base monotonic time is the minimum timestamp in the segment;
+  entries remain in capture-sequence order and may therefore have non-monotonic
+  timestamp deltas. A capture delta or total timestamp span that cannot fit
+  causes a segment flush before that item; values are never truncated.
+  Producers merge bus queues by the smallest capture sequence.
 - Legacy schema 0 (32-byte header, 30-byte entry) remains decode-only for old
   captures. Schema 2 is the only current publication. Unknown/inconsistent
   schema, header, entry size, count, DLC, or length is a visible parser failure.
@@ -103,6 +120,10 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   `120..127 last_sent_publish_seq u64`
 - Flag bit4 means the first/last loss sequence range is valid. A fresh anchor
   never clears this cumulative range.
+- Flag bit0 is enabled, bit1 connected, bit2 socket backpressure, bit3 either
+  active hysteretic high-water pressure or a pending actual-admission-loss
+  close latch, and bit4 valid loss range. `queue_pressure_closes` distinguishes
+  an actual reason-6 loss close from a recoverable bit3 pressure interval.
 - `accepted_records` includes the dedicated current-epoch `STREAM_SESSION`.
   `rejected_records` counts offers that were never admitted, including
   pre-anchor/order violation, Busy, reserve, and full rejection.
@@ -508,10 +529,11 @@ Current board host TX policy:
   uses the existing bounded 20 ms/15-frame segment builder. These are
   identity/throughput controls; Android health/remote freshness thresholds are
   not relaxed.
-- Remote Product uses a 48 KiB byte pool plus 512 frame descriptors, with 2 KiB
-  plus four descriptors reserved for critical evidence. The 75% byte or
-  descriptor mark only bypasses batching and accelerates drain; occupancy is
-  not a close condition. The worker isolates a client after 2.5 s continuous
+- Remote Product uses a 48 KiB byte pool plus 256 frame descriptors, with
+  2,112 bytes plus four descriptors reserved for critical evidence. The
+  32 KiB/192-record high-water only bypasses batching and exposes hysteretic
+  pressure; occupancy is not a close condition. The worker isolates a client
+  after 5 s continuous
   TX no-progress. Peer close, non-`WOULD_BLOCK` socket error, RX overflow, and
   explicit isolation also close only that sink. Reconnect starts a new epoch and
   reports the loss boundary; source truth and RC/CAN execution are unaffected.
@@ -539,13 +561,12 @@ Current board host TX policy:
   in-flight frame but never under-reports reserved storage. Mailbox health reads
   the queue's atomic producer/consumer cursors directly; it does not maintain a
   second cached snapshot that either side could overwrite out of order.
-  The 512-descriptor envelope is based
-  on the actual product mix, including 200 Hz `CAN_TX_RAW`; the former 252-entry
-  envelope reached descriptor pressure at only about 12.2 KiB and closed a
-  progressing low-load client before the byte envelope was relevant. Relative to
-  the former 252 x 24-byte layout, 512 x 16 bytes costs only 2,144 additional
-  static bytes. Neither dimension may be enlarged without a measured production
-  load envelope and memory gate.
+  The 256-descriptor envelope is generated from the actual product mix,
+  including 200 Hz `CAN_TX_RAW`: 250 ms requires 172 records and the declared
+  fallback/maximum-frame guard requires five more, below the 252 normal slots.
+  Descriptor and byte capacity are independent compile/link-time gates.
+  Neither dimension may be enlarged without a measured production load
+  envelope and memory gate.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 

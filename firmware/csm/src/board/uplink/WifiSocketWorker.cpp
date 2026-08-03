@@ -337,6 +337,7 @@ void WifiSocketWorker::serviceRequests() {
 }
 
 void WifiSocketWorker::serviceClient(uint32_t now_ms) {
+  updateQueuePressure(now_ms);
   if (pending_consume_ && !applyPendingConsume()) return;
   // Downlink is sampled before each nonblocking TX pump so Service/HIL control
   // cannot be starved by a saturated telemetry stream.
@@ -344,10 +345,12 @@ void WifiSocketWorker::serviceClient(uint32_t now_ms) {
   if (client_ == nullptr) return;
   const WifiTransmitPumpResult anchor = serviceSessionAnchor(millis());
   if (client_ == nullptr || session_anchor_required_) {
+    updateQueuePressure(millis());
     if (client_ != nullptr && anchor.progressed()) signalWake(WifiWakeTxData);
     return;
   }
   const WifiTransmitPumpResult transmitted = serviceTransmit(millis());
+  updateQueuePressure(millis());
   if (client_ != nullptr && transmitted.progressed() &&
       !transmitted.would_block && !transmitted.zero_write &&
       mailbox_.queueSnapshot().unsent_records != 0) {
@@ -491,14 +494,7 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
     state_.backpressure_active = true;
     state_.backpressure_duration_ms = progress.duration_ms;
     result.no_progress_duration_ms = progress.duration_ms;
-    const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
-    const bool queue_pressure = wifiQueuePressureReached(
-        queued.queued_bytes, queued.queued_records,
-        BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
-        config_.isolate_high_water_percent);
-    if (wifiShouldCloseQueuePressure(queue_pressure, false)) {
-      closeClient(WifiCloseReason::QueuePressure);
-    } else if (progress.close_no_progress) {
+    if (progress.close_no_progress) {
       closeClient(WifiCloseReason::TransmitNoProgress);
     }
     return result;
@@ -540,8 +536,8 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
   if (initial_queue.unsent_records == 0) return result;
   const bool initial_pressure = wifiQueuePressureReached(
       initial_queue.queued_bytes, initial_queue.queued_records,
-      BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
-      config_.isolate_high_water_percent);
+      config_.pressure_high_water_bytes,
+      config_.pressure_high_water_records);
   const uint32_t latency_limit_ms =
       initial_queue.latency_bounded ? config_.latency_bound_max_ms
                                     : config_.batch_max_latency_ms;
@@ -657,16 +653,6 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
       state_.backpressure_active = true;
       state_.backpressure_duration_ms = progress.duration_ms;
       result.no_progress_duration_ms = progress.duration_ms;
-      const WifiMailboxQueueSnapshot current_queue = mailbox_.queueSnapshot();
-      const bool current_pressure = wifiQueuePressureReached(
-          current_queue.queued_bytes, current_queue.queued_records,
-          BOARD_WIFI_SINK_QUEUE_BYTES, BOARD_WIFI_SINK_QUEUE_RECORDS,
-          config_.isolate_high_water_percent);
-      if (wifiShouldCloseQueuePressure(current_pressure, false)) {
-        closeClient(WifiCloseReason::QueuePressure);
-        notePumpResult(result);
-        return result;
-      }
       if (state_.backpressure_duration_ms >
           state_.counters.backpressure_max_duration_ms) {
         state_.counters.backpressure_max_duration_ms =
@@ -690,6 +676,23 @@ void WifiSocketWorker::notePumpResult(
   }
   if (result.writes_attempted > state_.counters.writes_per_wake_max) {
     state_.counters.writes_per_wake_max = result.writes_attempted;
+  }
+}
+
+void WifiSocketWorker::updateQueuePressure(uint32_t now_ms) {
+  const WifiMailboxQueueSnapshot queued = mailbox_.queueSnapshot();
+  const WifiQueuePressureObservation pressure = queue_pressure_.observe(
+      now_ms, queued.queued_bytes, queued.queued_records,
+      config_.pressure_high_water_bytes,
+      config_.pressure_high_water_records,
+      config_.pressure_low_water_bytes,
+      config_.pressure_low_water_records);
+  if (pressure.entered) state_.counters.pressure_enter_total++;
+  if (pressure.recovered) state_.counters.pressure_recover_total++;
+  state_.pressure_active = pressure.active;
+  state_.pressure_duration_ms = pressure.duration_ms;
+  if (pressure.duration_ms > state_.counters.pressure_max_duration_ms) {
+    state_.counters.pressure_max_duration_ms = pressure.duration_ms;
   }
 }
 
@@ -806,8 +809,11 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   state_.connected = false;
   state_.last_close_reason = reason;
   tx_progress_.reset();
+  queue_pressure_.reset();
   state_.backpressure_active = false;
   state_.backpressure_duration_ms = 0;
+  state_.pressure_active = false;
+  state_.pressure_duration_ms = 0;
   pending_consume_ = false;
   session_anchor_ = {};
   session_anchor_offset_ = 0;

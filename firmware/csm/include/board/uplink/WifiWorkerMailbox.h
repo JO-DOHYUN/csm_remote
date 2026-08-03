@@ -10,7 +10,7 @@
 #include "board/uplink/WifiWorkerContract.h"
 
 #ifndef BOARD_WIFI_SINK_QUEUE_RECORDS
-#define BOARD_WIFI_SINK_QUEUE_RECORDS 128
+#define BOARD_WIFI_SINK_QUEUE_RECORDS 256
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS
@@ -18,7 +18,7 @@
 #endif
 
 #ifndef BOARD_WIFI_SINK_QUEUE_BYTES
-#define BOARD_WIFI_SINK_QUEUE_BYTES 8192
+#define BOARD_WIFI_SINK_QUEUE_BYTES 49152
 #endif
 
 #ifndef BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES
@@ -29,26 +29,61 @@
 #define BOARD_WIFI_RX_MAILBOX_BYTES 1024
 #endif
 
-// At the product ingress envelope, the worker must observe pressure early
-// enough for one maximum frame plus one fallback interval to arrive without
-// entering the critical reserve.
-static constexpr uint32_t kWifiPressureThresholdBytes =
-    (static_cast<uint64_t>(BOARD_WIFI_SINK_QUEUE_BYTES) *
-         BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT +
-     99u) /
-    100u;
+static constexpr uint32_t kWifiNormalQueueBytes =
+    BOARD_WIFI_SINK_QUEUE_BYTES - BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES;
+static constexpr uint32_t kWifiNormalQueueRecords =
+    BOARD_WIFI_SINK_QUEUE_RECORDS -
+    BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS;
 static constexpr uint32_t kWifiFallbackIngressBytes =
     (static_cast<uint64_t>(
          csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
          BOARD_WIFI_CONNECTED_FALLBACK_MS +
+    999u) /
+    1000u;
+static constexpr uint32_t kWifiTransientIngressBytes =
+    (static_cast<uint64_t>(
+         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
+         BOARD_WIFI_TRANSIENT_COVERAGE_MS +
      999u) /
     1000u;
+static constexpr uint32_t kWifiFallbackIngressRecords =
+    (static_cast<uint64_t>(
+         csm::board::uplink::kProductEnabledRecordsPerSecond) *
+         BOARD_WIFI_CONNECTED_FALLBACK_MS +
+     999u) /
+    1000u;
+static constexpr uint32_t kWifiTransientIngressRecords =
+    (static_cast<uint64_t>(
+         csm::board::uplink::kProductEnabledRecordsPerSecond) *
+         BOARD_WIFI_TRANSIENT_COVERAGE_MS +
+     999u) /
+    1000u;
+static_assert(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES < kWifiNormalQueueBytes,
+              "Wi-Fi byte high-water must precede the critical reserve");
+static_assert(BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS <
+                  kWifiNormalQueueRecords,
+              "Wi-Fi record high-water must precede the critical reserve");
 static_assert(
-    kWifiPressureThresholdBytes +
+    BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES +
             csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
             kWifiFallbackIngressBytes <=
-        BOARD_WIFI_SINK_QUEUE_BYTES - BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES,
-    "Wi-Fi pressure boundary cannot protect the critical byte reserve");
+        kWifiNormalQueueBytes,
+    "Wi-Fi byte high-water cannot protect the critical reserve");
+static_assert(
+    BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS + 1u +
+            kWifiFallbackIngressRecords <=
+        kWifiNormalQueueRecords,
+    "Wi-Fi record high-water cannot protect the critical reserve");
+static_assert(
+    kWifiTransientIngressBytes +
+            csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
+            kWifiFallbackIngressBytes <=
+        kWifiNormalQueueBytes,
+    "Wi-Fi byte queue does not cover the declared transient envelope");
+static_assert(
+    kWifiTransientIngressRecords + 1u + kWifiFallbackIngressRecords <=
+        kWifiNormalQueueRecords,
+    "Wi-Fi descriptor queue does not cover the declared transient envelope");
 
 namespace csm::board::uplink {
 

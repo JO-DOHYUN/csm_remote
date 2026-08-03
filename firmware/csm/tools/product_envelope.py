@@ -49,6 +49,7 @@ def require(condition: bool, message: str) -> None:
 
 def calculate() -> dict:
     mailbox = ROOT / "include" / "board" / "uplink" / "WifiWorkerMailbox.h"
+    usb_sink = ROOT / "include" / "board" / "uplink" / "UsbCdcSink.h"
     worker = ROOT / "include" / "board" / "uplink" / "WifiWorkerContract.h"
     product_profile = (
         ROOT / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
@@ -65,8 +66,17 @@ def calculate() -> dict:
     queue_bytes = macro(mailbox, "BOARD_WIFI_SINK_QUEUE_BYTES")
     reserve_records = macro(mailbox, "BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS")
     reserve_bytes = macro(mailbox, "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES")
+    usb_queue_records = macro(usb_sink, "BOARD_USB_SINK_QUEUE_RECORDS")
+    usb_queue_bytes = macro(usb_sink, "BOARD_USB_SINK_QUEUE_BYTES")
+    usb_transient_coverage_ms = macro(
+        usb_sink, "BOARD_USB_TRANSIENT_COVERAGE_MS"
+    )
     stall_ms = macro(worker, "BOARD_WIFI_STALL_TIMEOUT_MS")
-    high_water_percent = macro(worker, "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT")
+    transient_coverage_ms = macro(worker, "BOARD_WIFI_TRANSIENT_COVERAGE_MS")
+    high_water_bytes = macro(worker, "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES")
+    low_water_bytes = macro(worker, "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES")
+    high_water_records = macro(worker, "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS")
+    low_water_records = macro(worker, "BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS")
     batch_bytes = macro(worker, "BOARD_WIFI_TX_BATCH_TARGET_BYTES")
     drain_budget_us = macro(worker, "BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US")
     max_writes_per_pump = macro(worker, "BOARD_WIFI_TX_MAX_WRITES_PER_PUMP")
@@ -79,36 +89,55 @@ def calculate() -> dict:
     ap_sta_concur = macro(worker, "BOARD_WIFI_AP_STA_CONCUR")
     can_queue = macro(main, "BOARD_CAN_QUEUE_SIZE")
 
-    require(queue_records == 128, "product Wi-Fi descriptor envelope drift")
-    require(queue_bytes == 8192, "product Wi-Fi byte envelope drift")
+    require(queue_records == 256, "product Wi-Fi descriptor envelope drift")
+    require(queue_bytes == 49152, "product Wi-Fi byte envelope drift")
     require(reserve_records == 4, "critical descriptor reserve drift")
     require(reserve_bytes == 2112, "critical byte reserve drift")
-    require(stall_ms == 500, "no-progress timeout drift")
-    require(high_water_percent == 59, "pre-full isolation threshold drift")
+    require(usb_queue_records == 192, "product USB descriptor envelope drift")
+    require(usb_queue_bytes == 40960, "product USB byte envelope drift")
+    require(usb_transient_coverage_ms == 250,
+            "USB transient queue coverage contract drift")
+    require(stall_ms == 5000, "no-progress timeout drift")
+    require(call_stall_ms == 5000, "socket call-stall boundary drift")
+    require(transient_coverage_ms == 250,
+            "transient queue coverage contract drift")
+    require(high_water_bytes == 32768, "byte high-water drift")
+    require(low_water_bytes == 8192, "byte low-water drift")
+    require(high_water_records == 192, "record high-water drift")
+    require(low_water_records == 64, "record low-water drift")
     require(batch_bytes == 1460, "TCP batch target drift")
     require(tx_chunk_bytes == 2920, "TCP write chunk drift")
     require(drain_budget_us == 2000, "nonblocking worker pump budget drift")
     require(max_writes_per_pump == 4, "worker write budget drift")
     require(max_bytes_per_pump == 11680, "worker byte budget drift")
     require(fallback_ms == 5, "worker fallback interval drift")
-    require(call_stall_ms == 250, "socket call-stall boundary drift")
     require(startup_attempt_limit == 0, "product AP retry policy drift")
     require(startup_retry_ms == 2000, "product AP retry interval drift")
     require(ap_sta_concur == 1, "validated WHD compatibility mode drift")
     require(can_queue == 512, "per-bus CAN ingest envelope drift")
     for token in (
-        "BOARD_WIFI_SINK_QUEUE_RECORDS=128",
-        "BOARD_WIFI_SINK_QUEUE_BYTES=8192",
+        "BOARD_WIFI_SINK_QUEUE_RECORDS=256",
+        "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
         "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-        "BOARD_WIFI_STALL_TIMEOUT_MS=500",
+        "BOARD_WIFI_TRANSIENT_COVERAGE_MS=250",
+        "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES=32768",
+        "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES=8192",
+        "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS=192",
+        "BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS=64",
+        "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
+        "BOARD_WIFI_CALL_STALL_TIMEOUT_MS=5000",
         "BOARD_WIFI_AP_STA_CONCUR=1",
+        "BOARD_USB_SINK_QUEUE_RECORDS=192",
+        "BOARD_USB_SINK_QUEUE_BYTES=40960",
+        "BOARD_USB_TRANSIENT_COVERAGE_MS=250",
     ):
         require(token in platformio, f"product environment missing {token}")
     for token in (
         ".wifi_tx_queue_dtcm (NOLOAD)",
         ".csm_dtcm_bss (NOLOAD)",
-        "0x2800",
-        "LENGTH(DTCMRAM) - 0x8000",
+        "0xD000",
+        "__csm_dtcm_bss_end__ <=",
+        "LENGTH(DTCMRAM) - 0x10000",
     ):
         require(token in linker, f"linker ownership guard missing {token}")
 
@@ -187,7 +216,6 @@ def calculate() -> dict:
     target_rate = design_rate
     live_fifo_min_batches = 4
     live_fifo_required_bytes = batch_bytes * live_fifo_min_batches
-    high_water_bytes = math.ceil(queue_bytes * high_water_percent / 100)
     max_encoded_frame_bytes = 523
     fallback_ingress_bytes = math.ceil(
         target_rate * fallback_ms / 1000
@@ -195,6 +223,23 @@ def calculate() -> dict:
     worker_service_bytes_per_second = max_bytes_per_pump * 1000 // fallback_ms
     pressure_guard_bytes = max_encoded_frame_bytes + fallback_ingress_bytes
     pressure_headroom_bytes = normal_bytes - high_water_bytes
+    transient_ingress_bytes = math.ceil(
+        target_rate * transient_coverage_ms / 1000
+    )
+    fallback_ingress_records = math.ceil(
+        enabled_records * fallback_ms / 1000
+    )
+    transient_ingress_records = math.ceil(
+        enabled_records * transient_coverage_ms / 1000
+    )
+    usb_transient_ingress_bytes = math.ceil(
+        target_rate * usb_transient_coverage_ms / 1000
+    )
+    usb_transient_ingress_records = math.ceil(
+        enabled_records * usb_transient_coverage_ms / 1000
+    )
+    usb_descriptor_bytes = usb_queue_records * 16
+    usb_storage = usb_descriptor_bytes + usb_queue_bytes
     descriptor_bytes = queue_records * 16
     dtcm_storage = descriptor_bytes + queue_bytes
     dtcm_usable = 130408
@@ -211,7 +256,7 @@ def calculate() -> dict:
     require(enabled_records == 686, "enabled product record calculation regression")
     require(compact_total <= minimum_rate, "enabled profile exceeds minimum gate")
     require(minimum_rate < design_rate, "design envelope lacks headroom")
-    require(dtcm_storage == 10240, "DTCM live FIFO calculation regression")
+    require(dtcm_storage == 53248, "DTCM live FIFO calculation regression")
     require(
         normal_bytes >= live_fifo_required_bytes,
         "live FIFO no longer holds four complete batch targets",
@@ -222,7 +267,29 @@ def calculate() -> dict:
         pressure_headroom_bytes >= pressure_guard_bytes,
         "worker pressure threshold cannot absorb one max frame plus fallback ingress",
     )
-    require(dtcm_max_remaining >= 32768, "DTCM safety reserve violated")
+    require(
+        normal_bytes >=
+        transient_ingress_bytes + max_encoded_frame_bytes + fallback_ingress_bytes,
+        "byte queue does not cover the declared transient envelope",
+    )
+    require(
+        normal_records >=
+        transient_ingress_records + 1 + fallback_ingress_records,
+        "descriptor queue does not cover the declared transient envelope",
+    )
+    require(
+        usb_queue_bytes >= usb_transient_ingress_bytes + max_encoded_frame_bytes,
+        "USB byte queue does not cover the declared transient envelope",
+    )
+    require(
+        usb_queue_records >= usb_transient_ingress_records + 1,
+        "USB descriptor queue does not cover the declared transient envelope",
+    )
+    require(low_water_bytes < high_water_bytes < normal_bytes,
+            "byte pressure hysteresis is invalid")
+    require(low_water_records < high_water_records < normal_records,
+            "record pressure hysteresis is invalid")
+    require(dtcm_max_remaining >= 65536, "DTCM safety reserve violated")
     require(
         max_bytes_per_pump >= fallback_ingress_bytes,
         "worker pump byte budget cannot service design-rate fallback ingress",
@@ -243,10 +310,18 @@ def calculate() -> dict:
             "transport_diagnostic_payload_bytes": transport_payload,
             "wifi_queue_records": queue_records,
             "wifi_queue_bytes": queue_bytes,
+            "usb_queue_records": usb_queue_records,
+            "usb_queue_bytes": usb_queue_bytes,
+            "usb_transient_coverage_ms": usb_transient_coverage_ms,
             "critical_reserve_records": reserve_records,
             "critical_reserve_bytes": reserve_bytes,
             "stall_timeout_ms": stall_ms,
-            "isolate_high_water_percent": high_water_percent,
+            "call_stall_timeout_ms": call_stall_ms,
+            "transient_coverage_ms": transient_coverage_ms,
+            "pressure_high_water_bytes": high_water_bytes,
+            "pressure_low_water_bytes": low_water_bytes,
+            "pressure_high_water_records": high_water_records,
+            "pressure_low_water_records": low_water_records,
             "batch_target_bytes": batch_bytes,
             "tx_chunk_bytes": tx_chunk_bytes,
             "drain_time_budget_us": drain_budget_us,
@@ -275,21 +350,38 @@ def calculate() -> dict:
             "byte_coverage_seconds": round(normal_bytes / target_rate, 5),
             "normal_admission_records": normal_records,
             "high_water_bytes": high_water_bytes,
+            "high_water_records": high_water_records,
+            "low_water_bytes": low_water_bytes,
+            "low_water_records": low_water_records,
             "max_encoded_frame_bytes": max_encoded_frame_bytes,
             "fallback_ingress_bytes": fallback_ingress_bytes,
+            "fallback_ingress_records": fallback_ingress_records,
+            "transient_ingress_bytes": transient_ingress_bytes,
+            "transient_ingress_records": transient_ingress_records,
             "pressure_guard_bytes": pressure_guard_bytes,
             "pressure_headroom_bytes": pressure_headroom_bytes,
             "high_water_seconds_at_target": round(high_water_bytes / target_rate, 5),
             "worker_service_bytes_per_second": worker_service_bytes_per_second,
         },
+        "usb_fifo_envelope": {
+            "queue_bytes": usb_queue_bytes,
+            "queue_records": usb_queue_records,
+            "transient_ingress_bytes": usb_transient_ingress_bytes,
+            "transient_ingress_records": usb_transient_ingress_records,
+            "max_encoded_frame_bytes": max_encoded_frame_bytes,
+            "storage_bytes": usb_storage,
+        },
         "memory_bytes": {
             "wifi_descriptors": descriptor_bytes,
             "wifi_byte_arena": queue_bytes,
             "wifi_dtcm_storage": dtcm_storage,
+            "usb_descriptors": usb_descriptor_bytes,
+            "usb_byte_arena": usb_queue_bytes,
+            "usb_d1_storage": usb_storage,
             "dtcm_usable": dtcm_usable,
             "dtcm_alignment_pad_before_queue": dtcm_alignment_pad,
             "dtcm_max_remaining_after_queue": dtcm_max_remaining,
-            "dtcm_linker_reserved_minimum": 32768,
+            "dtcm_linker_reserved_minimum": 65536,
             "can_ingest_queues": can_queue_total,
             "can_ingest_saved_vs_4096": legacy_can_queue_total - can_queue_total,
         },
@@ -311,7 +403,20 @@ def calculate() -> dict:
             >= pressure_guard_bytes,
             "worker_pump_services_design_ingress": max_bytes_per_pump
             >= fallback_ingress_bytes,
-            "dtcm_safety_reserve_32k": dtcm_max_remaining >= 32768,
+            "transient_byte_coverage": normal_bytes
+            >= transient_ingress_bytes + max_encoded_frame_bytes
+            + fallback_ingress_bytes,
+            "transient_record_coverage": normal_records
+            >= transient_ingress_records + 1 + fallback_ingress_records,
+            "usb_transient_byte_coverage": usb_queue_bytes
+            >= usb_transient_ingress_bytes + max_encoded_frame_bytes,
+            "usb_transient_record_coverage": usb_queue_records
+            >= usb_transient_ingress_records + 1,
+            "pressure_hysteresis_valid": (
+                low_water_bytes < high_water_bytes < normal_bytes
+                and low_water_records < high_water_records < normal_records
+            ),
+            "dtcm_safety_reserve_64k": dtcm_max_remaining >= 65536,
         },
     }
 
@@ -319,6 +424,7 @@ def calculate() -> dict:
 def markdown(report: dict) -> str:
     throughput = report["throughput_bytes_per_second"]
     live_fifo = report["live_fifo_envelope"]
+    usb_fifo = report["usb_fifo_envelope"]
     memory = report["memory_bytes"]
     gates = report["gates"]
     rows = [
@@ -346,12 +452,42 @@ def markdown(report: dict) -> str:
             "PASS" if gates["live_fifo_holds_four_batches"] else "FAIL",
         ),
         (
+            "250 ms byte transient / normal live FIFO",
+            f"{live_fifo['transient_ingress_bytes'] + live_fifo['max_encoded_frame_bytes'] + live_fifo['fallback_ingress_bytes']:,} / "
+            f"{live_fifo['normal_admission_bytes']:,} B",
+            "PASS" if gates["transient_byte_coverage"] else "FAIL",
+        ),
+        (
+            "250 ms record transient / normal descriptors",
+            f"{live_fifo['transient_ingress_records'] + 1 + live_fifo['fallback_ingress_records']:,} / "
+            f"{live_fifo['normal_admission_records']:,}",
+            "PASS" if gates["transient_record_coverage"] else "FAIL",
+        ),
+        (
+            "USB 250 ms byte transient / byte FIFO",
+            f"{usb_fifo['transient_ingress_bytes'] + usb_fifo['max_encoded_frame_bytes']:,} / "
+            f"{usb_fifo['queue_bytes']:,} B",
+            "PASS" if gates["usb_transient_byte_coverage"] else "FAIL",
+        ),
+        (
+            "USB 250 ms record transient / descriptors",
+            f"{usb_fifo['transient_ingress_records'] + 1:,} / "
+            f"{usb_fifo['queue_records']:,}",
+            "PASS" if gates["usb_transient_record_coverage"] else "FAIL",
+        ),
+        (
             "Pressure headroom / max-frame + fallback ingress",
             f"{live_fifo['pressure_headroom_bytes']:,} / "
             f"{live_fifo['pressure_guard_bytes']:,} B",
             "PASS"
             if gates["worker_pressure_protects_reserve"]
             else "FAIL",
+        ),
+        (
+            "Pressure byte/record hysteresis",
+            f"{live_fifo['low_water_bytes']:,}/{live_fifo['high_water_bytes']:,} B, "
+            f"{live_fifo['low_water_records']}/{live_fifo['high_water_records']} records",
+            "PASS" if gates["pressure_hysteresis_valid"] else "FAIL",
         ),
         (
             "Worker service capacity / design envelope",
@@ -362,10 +498,10 @@ def markdown(report: dict) -> str:
             else "FAIL",
         ),
         (
-            "Wi-Fi DTCM / usable",
-            f"{memory['wifi_dtcm_storage']:,} / "
-            f"{memory['dtcm_usable']:,} B",
-            "PASS" if gates["dtcm_safety_reserve_32k"] else "FAIL",
+            "DTCM remaining / enforced reserve",
+            f"{memory['dtcm_max_remaining_after_queue']:,} / "
+            f"{memory['dtcm_linker_reserved_minimum']:,} B",
+            "PASS" if gates["dtcm_safety_reserve_64k"] else "FAIL",
         ),
     ]
     lines = [

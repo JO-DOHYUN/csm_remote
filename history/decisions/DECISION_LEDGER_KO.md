@@ -543,3 +543,86 @@
   failures, 2,000 fps + RC + dual CAN + USB + Wi-Fi, and 1/8/24-hour soak.
   Build, PC surrogate, or short idle success alone cannot promote release
   status.
+
+## D-031 Size the live FIFO from a declared transient and close only on real loss
+
+- Date: 2026-08-03
+- Status: Approved source candidate; host/build verified, device/HIL open.
+  Supersedes D-030 only for FIFO dimensions, pressure semantics and timeout
+  values. Live-only transport, no APP ACK, no network replay, independent
+  sinks and Android-local Capture remain unchanged.
+- Corrected fact: the prior 59% policy closed at about 4,834 B after a single
+  no-progress result. The observed 5,093 B high-water therefore proved the
+  policy trigger, not the Mbed/lwIP/WHD sustainable ceiling. Repeated tests of
+  that policy could not qualify or reject the lower transport.
+- Envelope: use 256 x 16-byte descriptors and a 49,152-byte DTCM byte arena.
+  Reserve four descriptors and 2,112 bytes for critical evidence, leaving
+  252 records and 47,040 bytes for normal admission. At 135,000 B/s and
+  686 records/s, 250 ms plus one maximum record and one 5 ms fallback requires
+  34,948 bytes and 177 records. Both dimensions fit by construction.
+- Pressure: enter diagnostic pressure at 32,768 bytes or 192 records and
+  recover only when both occupancy values are at or below 8,192 bytes and
+  64 records. Pressure may accelerate drain/bypass batching and is observable;
+  it never closes a TCP epoch.
+- Loss boundary: the first actual reserve/full rejection deactivates the live
+  epoch, fixes the exact loss range, closes once and aborts accepted unsent
+  bytes. Numeric close reason 6 remains wire-compatible but now denotes actual
+  admission loss. Five seconds without positive send progress closes as reason
+  4; a five-second opaque vendor call can be quarantined logically but cannot
+  be cancelled inside the same MCU.
+- Memory: Wi-Fi queue storage is exactly 53,248 B in CPU-only DTCM. Current
+  calculation leaves 77,152 B and the product linker enforces at least
+  65,536 B. D2 network DMA ownership and the 41,984 B D3 lwIP envelope do not
+  move in this decision.
+- Proof boundary: source calculation, static assertions, linker assertions,
+  native contracts, architecture guard and product build are sufficient for
+  allocation/ownership claims. Sustained socket rate, queue residence,
+  reconnect behavior, RC/CAN/USB coexistence and resets require the exact
+  artifact on PC and Android under aggregate 4,000 fps, fault injection and
+  soak. Queue growth under that gate is a throughput failure, not a reason to
+  enlarge RAM again.
+
+## D-032 Give USB the same declared transient boundary and close the PC dual-sink gate
+
+- Date: 2026-08-03
+- Status: Approved and implemented; exact build/upload and PC I1b passed.
+  Android/RC/CAN-TX I2, 120/135 kB/s capacity, fault injection and soak remain
+  release blockers.
+- Evidence correction: the first 60 s dual-CAN run proved source/canonical/Wi-Fi
+  integrity but USB missed 69 canonical records. `usb_overflow` and
+  `serial_enqueue_fail` increased by exactly 69 while Wi-Fi contained every
+  injected PCAN/Kvaser sequence. The same run's 97,590 B/s Wi-Fi failure was a
+  harness error caused by including the 5 s read-tail in the rate denominator.
+- Decision: replace USB's eight max-frame slots with the generic byte-ring queue,
+  `192 descriptors / 40,960 bytes`. At 135,000 B/s and 686 records/s, 250 ms plus
+  one maximum frame requires 34,273 B/173 records. The 44,032 B queue storage
+  remains in D1; the exact build leaves a 311,816 B heap span.
+- Harness: throughput uses complete transport diagnostics inside the injector
+  active interval. The tail remains for drain/conservation only. PCAN/Kvaser
+  bus identity comes from injected source plus `CAPABILITY`, not adapter brand.
+- Proof: source manifest
+  `a00811b5bf2c83c61814d7d0312aecae8d03cfc012b24dc3112a4b9401cd8f2a`,
+  firmware SHA-256
+  `0C5AC5EB072B61299850D00E420A38857602A871ABF8FFF6FF5536B26526FE8E`.
+  The final rerun captured PCAN 120,000 and Kvaser 120,000 exactly on USB and Wi-Fi;
+  all CRC/sequence/source/CAN/FIFO/pool/sink loss and close counters were zero.
+  Boot-cumulative USB high-water was 519 B; Wi-Fi active accepted/drain was
+  100,190/100,207 B/s with 981 B net queue reduction.
+- Segment correction: capture order spans independent timestamp domains, so a
+  segment uses its minimum timestamp as the compact delta base and never sorts
+  entries. Native regression tests and exact HIL preserved source/capture order
+  while packing 241,627 frames into 10,673 segments (22.64 average).
+- Harness correction: USB is opened and cleared before Wi-Fi/session creation.
+  This prevents the test itself from discarding the required USB `CAPABILITY`
+  anchor; the corrected final run passed that identity gate.
+- Evidence hardening: each injector must reach at least 99.9% of
+  `rate * duration` with no adapter/sync errors. The measured Wi-Fi epoch must
+  start with one `STREAM_SESSION`, keep one boot identity and one transport
+  epoch, and publish no current record 21/22. The final run reached both exact
+  120,000-frame targets and passed every strengthened predicate.
+- Evidence-counter correction: a partial USB batch can complete earlier
+  records. Completion count/watermark is now committed before the short-write
+  branch and is covered by a deterministic cross-record test.
+- Linker correction: the 64 KiB DTCM reserve assertion now checks the final
+  `__csm_dtcm_bss_end__`, not only the Wi-Fi queue end, so a future explicit
+  DTCM arena cannot silently consume the declared reserve.
