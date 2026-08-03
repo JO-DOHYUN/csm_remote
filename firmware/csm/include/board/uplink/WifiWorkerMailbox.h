@@ -38,7 +38,8 @@ static constexpr uint32_t kWifiPressureThresholdBytes =
      99u) /
     100u;
 static constexpr uint32_t kWifiFallbackIngressBytes =
-    (static_cast<uint64_t>(BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND) *
+    (static_cast<uint64_t>(
+         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
          BOARD_WIFI_CONNECTED_FALLBACK_MS +
      999u) /
     1000u;

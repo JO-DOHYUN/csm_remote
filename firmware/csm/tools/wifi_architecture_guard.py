@@ -35,6 +35,9 @@ publisher_source = (
     ROOT / "src" / "board" / "uplink" / "CanonicalPublisher.cpp"
 ).read_text(encoding="utf-8")
 platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
+product_envelope = (
+    ROOT / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
+).read_text(encoding="utf-8")
 
 
 def env_section(name: str) -> str:
@@ -90,7 +93,7 @@ for token in ("sleep_for(", "BOARD_WIFI_WORKER_PERIOD_MS"):
     if token in worker or token in contract:
         fail(f"periodic polling remains the primary Wi-Fi trigger: found {token!r}")
 
-if "#define BOARD_WIFI_TX_CHUNK_BYTES 2920" not in worker_header:
+if "#define BOARD_WIFI_TX_CHUNK_BYTES 2920" not in contract:
     fail("Wi-Fi TX chunk must match the measured 2920-byte MSS envelope")
 
 if "FixedFrameByteQueue<" not in mailbox_header:
@@ -128,11 +131,23 @@ for token in (
     "#define BOARD_WIFI_CONNECTED_FALLBACK_MS 5",
     "#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 20",
     "#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 2",
-    "#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 64",
-    "#define BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND 57735",
+    "#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 59",
 ):
     if token not in contract:
         fail(f"worker recovery/evidence contract is missing {token!r}")
+
+for token in (
+    "kProductEnabledWireBytesPerSecond == 111922",
+    "kProductEnabledRecordsPerSecond == 686",
+    "kProductUplinkMinimumBytesPerSecond = 120000",
+    "kProductUplinkDesignBytesPerSecond = 135000",
+    "productSegmentWireBytesPerSecond",
+    "csm::kControlAckPayloadLen",
+):
+    if token not in product_envelope:
+        fail(f"schema-derived product envelope is missing {token!r}")
+if "BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND" in contract + mailbox_header:
+    fail("superseded hand-written Wi-Fi product rate remains in firmware")
 
 for token in (
     "wifiStartupAttemptsExhausted(",

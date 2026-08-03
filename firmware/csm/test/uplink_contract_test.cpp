@@ -9,6 +9,7 @@
 #include "board/uplink/CanRxSegmentBuilder.h"
 #include "board/uplink/FixedFrameQueue.h"
 #include "board/uplink/FixedFrameByteQueue.h"
+#include "board/uplink/RecordAdmission.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 #include "protocol/HostCommands.h"
@@ -207,6 +208,56 @@ void disconnected_sink_preserves_admitted_record() {
   CHECK(!result.record_consumed);
   CHECK(publisher.hasQueuedRecords());
   CHECK(publisher.nextPublishSeq() == 0);
+}
+
+void can_truth_quota_preserves_large_blocks_for_critical_evidence() {
+  using csm::board::uplink::RecordAdmission;
+  RecordAdmission admission;
+  admission.begin();
+  uint8_t large_payload[csm::kMaxPayloadLen] = {};
+  RecordAdmission::Record held_can_truth[BOARD_UPLINK_POOL_LARGE_BLOCKS] = {};
+  constexpr uint32_t kCanTruthQuota =
+      BOARD_UPLINK_POOL_LARGE_BLOCKS -
+      BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE;
+
+  // Pop descriptors without releasing their payloads so the test isolates the
+  // large-pool quota from the independent CAN-truth descriptor capacity.
+  for (uint32_t index = 0; index < kCanTruthQuota; ++index) {
+    CHECK(admission.enqueue(RecordType::CanRxSegment, large_payload,
+                            sizeof(large_payload), UplinkPriority::CanTruth));
+    CHECK(admission.popNext(held_can_truth[index]));
+  }
+  CHECK(admission.poolLargeUsed() == kCanTruthQuota);
+  CHECK(!admission.enqueue(RecordType::CanRxSegment, large_payload,
+                           sizeof(large_payload), UplinkPriority::CanTruth));
+  CHECK(admission.poolLargeCriticalReserveUsed() == 0);
+
+  CHECK(admission.enqueue(RecordType::RemoteControlState, large_payload,
+                          csm::kRemoteControlStatePayloadLen,
+                          UplinkPriority::Critical));
+  CHECK(admission.enqueue(RecordType::BoardHealth, large_payload,
+                          csm::kBoardHealthV13PayloadLen,
+                          UplinkPriority::Critical));
+  CHECK(admission.enqueue(RecordType::Capability, large_payload,
+                          csm::kCapabilityV6PayloadLen,
+                          UplinkPriority::Critical));
+  CHECK(admission.enqueue(RecordType::BoardHealth, large_payload,
+                          csm::kBoardHealthV13PayloadLen,
+                          UplinkPriority::Critical));
+  CHECK(admission.poolLargeUsed() == BOARD_UPLINK_POOL_LARGE_BLOCKS);
+  CHECK(admission.poolLargeCriticalReserveUsed() ==
+        BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE);
+  CHECK(admission.counters().pool_large_critical_reserve_used_high_water ==
+        BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE);
+
+  for (auto& record : held_can_truth) {
+    if (record.payload.pool_class != RecordAdmission::PoolClass::None) {
+      admission.release(record);
+    }
+  }
+  RecordAdmission::Record record;
+  while (admission.popNext(record)) admission.release(record);
+  CHECK(admission.poolLargeUsed() == 0);
 }
 
 void fixed_queue_batches_without_losing_frame_boundaries() {
@@ -1027,6 +1078,7 @@ int main() {
   explicit_session_refresh_precedes_queued_handshake_records();
   one_sink_overflow_does_not_block_other_sink();
   disconnected_sink_preserves_admitted_record();
+  can_truth_quota_preserves_large_blocks_for_critical_evidence();
   fixed_queue_batches_without_losing_frame_boundaries();
   byte_queue_wraps_without_losing_frame_boundaries();
   byte_queue_distinguishes_exact_byte_full_from_empty();

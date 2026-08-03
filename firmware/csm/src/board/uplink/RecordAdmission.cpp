@@ -12,6 +12,12 @@ constexpr uint8_t can_reserve() {
              ? BOARD_UPLINK_POOL_LARGE_BLOCKS
              : BOARD_UPLINK_POOL_LARGE_CAN_RESERVE;
 }
+constexpr uint8_t critical_reserve() {
+  return BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE >
+          BOARD_UPLINK_POOL_LARGE_BLOCKS
+      ? BOARD_UPLINK_POOL_LARGE_BLOCKS
+      : BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE;
+}
 }  // namespace
 
 void RecordAdmission::begin() {
@@ -115,6 +121,12 @@ uint32_t RecordAdmission::poolLargeCanReserveUsed() const {
   return free_large >= reserve ? 0 : reserve - free_large;
 }
 
+uint32_t RecordAdmission::poolLargeCriticalReserveUsed() const {
+  const uint8_t reserve = critical_reserve();
+  const uint8_t free_large = BOARD_UPLINK_POOL_LARGE_BLOCKS - large_used_count_;
+  return free_large >= reserve ? 0 : reserve - free_large;
+}
+
 void RecordAdmission::noteEncodeFailure(UplinkPriority priority) {
   noteDrop(priority, true);
 }
@@ -206,17 +218,22 @@ void RecordAdmission::noteHighWater() {
 bool RecordAdmission::allocate(UplinkPriority priority, uint16_t length, PayloadRef& ref) {
   ref = {};
   if (length == 0) return true;
-  if (priority == UplinkPriority::CanTruth) return allocateLarge(length, true, ref);
+  if (priority == UplinkPriority::CanTruth) {
+    return allocateLarge(length, priority, ref);
+  }
   if (length <= kSmallPayloadBytes) {
     if (allocateSmall(length, ref)) return true;
     if (priority != UplinkPriority::Diagnostic && allocateMedium(length, ref)) return true;
-    return priority == UplinkPriority::Critical && allocateLarge(length, false, ref);
+    return priority == UplinkPriority::Critical &&
+        allocateLarge(length, priority, ref);
   }
   if (length <= kMediumPayloadBytes) {
     if (allocateMedium(length, ref)) return true;
-    return priority == UplinkPriority::Critical && allocateLarge(length, false, ref);
+    return priority == UplinkPriority::Critical &&
+        allocateLarge(length, priority, ref);
   }
-  return priority != UplinkPriority::Diagnostic && allocateLarge(length, false, ref);
+  return priority != UplinkPriority::Diagnostic &&
+      allocateLarge(length, priority, ref);
 }
 
 bool RecordAdmission::allocateSmall(uint16_t length, PayloadRef& ref) {
@@ -249,10 +266,21 @@ bool RecordAdmission::allocateMedium(uint16_t length, PayloadRef& ref) {
   return false;
 }
 
-bool RecordAdmission::allocateLarge(uint16_t length, bool can_truth, PayloadRef& ref) {
+bool RecordAdmission::allocateLarge(uint16_t length, UplinkPriority priority,
+                                    PayloadRef& ref) {
   if (length > csm::kMaxPayloadLen) return false;
-  const uint8_t reserve = can_reserve();
-  if (!can_truth && BOARD_UPLINK_POOL_LARGE_BLOCKS - large_used_count_ <= reserve) return false;
+  const uint8_t free_large = BOARD_UPLINK_POOL_LARGE_BLOCKS - large_used_count_;
+  if (priority == UplinkPriority::CanTruth) {
+    // CAN truth has a large quota, but it may never consume the blocks needed
+    // by current Critical records (REMOTE_CONTROL_STATE, BOARD_HEALTH and
+    // CAPABILITY). This is the inverse boundary missing from the old CAN-only
+    // reserve.
+    if (free_large <= critical_reserve()) return false;
+  } else if (priority != UplinkPriority::Critical) {
+    // Normal traffic may consume neither protected class. Critical is allowed
+    // to borrow the CAN reserve because it is the higher-priority evidence.
+    if (free_large <= can_reserve() + critical_reserve()) return false;
+  }
   for (uint8_t i = 0; i < BOARD_UPLINK_POOL_LARGE_BLOCKS; ++i) {
     if (!pool_large_used_[i]) {
       pool_large_used_[i] = true;
@@ -263,6 +291,12 @@ bool RecordAdmission::allocateLarge(uint16_t length, bool can_truth, PayloadRef&
       const uint32_t reserve_used = poolLargeCanReserveUsed();
       if (reserve_used > counters_.pool_large_can_reserve_used_high_water)
         counters_.pool_large_can_reserve_used_high_water = reserve_used;
+      const uint32_t critical_reserve_used = poolLargeCriticalReserveUsed();
+      if (critical_reserve_used >
+          counters_.pool_large_critical_reserve_used_high_water) {
+        counters_.pool_large_critical_reserve_used_high_water =
+            critical_reserve_used;
+      }
       return true;
     }
   }

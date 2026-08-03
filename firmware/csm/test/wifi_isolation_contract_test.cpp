@@ -218,14 +218,28 @@ void testFreshAnchorPartialCompletionBoundary() {
 
 void testPressureThresholdProtectsCriticalReserve() {
   using namespace csm::board::uplink;
-  CHECK(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT == 64);
-  CHECK(kWifiPressureThresholdBytes == 5243);
-  CHECK(kWifiFallbackIngressBytes == 289);
+  CHECK(kProductEnabledWireBytesPerSecond == 111922);
+  CHECK(kProductEnabledRecordsPerSecond == 686);
+  CHECK(kProductUplinkMinimumBytesPerSecond == 120000);
+  CHECK(kProductUplinkDesignBytesPerSecond == 135000);
+  CHECK(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT == 59);
+  CHECK(kWifiPressureThresholdBytes == 4834);
+  CHECK(kWifiFallbackIngressBytes == 675);
   CHECK(kWifiPressureThresholdBytes +
             csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
             kWifiFallbackIngressBytes <=
         BOARD_WIFI_SINK_QUEUE_BYTES -
             BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES);
+  const uint32_t normal_bytes = BOARD_WIFI_SINK_QUEUE_BYTES -
+      BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES;
+  const uint32_t normal_records = BOARD_WIFI_SINK_QUEUE_RECORDS -
+      BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS;
+  CHECK((static_cast<uint64_t>(normal_bytes) * 1000u) /
+            kProductUplinkDesignBytesPerSecond >= 40u);
+  CHECK((static_cast<uint64_t>(normal_records) * 1000u) /
+            kProductEnabledRecordsPerSecond >= 180u);
+  CHECK(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP >=
+        kWifiDesignIngressBytesPerFallback);
 }
 
 void testOpaqueSendPressureSignalsAtFallbackBoundary() {

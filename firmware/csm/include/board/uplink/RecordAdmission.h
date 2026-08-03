@@ -23,6 +23,9 @@
 #ifndef BOARD_UPLINK_POOL_LARGE_CAN_RESERVE
 #define BOARD_UPLINK_POOL_LARGE_CAN_RESERVE 28
 #endif
+#ifndef BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE
+#define BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE 4
+#endif
 #ifndef BOARD_UPLINK_POOL_MEDIUM_BLOCKS
 #define BOARD_UPLINK_POOL_MEDIUM_BLOCKS 16
 #endif
@@ -31,6 +34,11 @@
 #endif
 
 namespace csm::board::uplink {
+
+static_assert(BOARD_UPLINK_POOL_LARGE_CAN_RESERVE +
+                      BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE <=
+                  BOARD_UPLINK_POOL_LARGE_BLOCKS,
+              "large-payload reserves exceed pool capacity");
 
 struct AdmissionCounters {
   uint32_t record_accept_total = 0;
@@ -52,6 +60,7 @@ struct AdmissionCounters {
   uint32_t pool_medium_used_high_water = 0;
   uint32_t pool_small_used_high_water = 0;
   uint32_t pool_large_can_reserve_used_high_water = 0;
+  uint32_t pool_large_critical_reserve_used_high_water = 0;
   uint32_t descriptor_high_water_total = 0;
   uint32_t payload_release_total = 0;
 };
@@ -93,6 +102,7 @@ class RecordAdmission {
   uint32_t poolUsedBytes() const;
   uint32_t poolLargeUsed() const { return large_used_count_; }
   uint32_t poolLargeCanReserveUsed() const;
+  uint32_t poolLargeCriticalReserveUsed() const;
   const AdmissionCounters& counters() const { return counters_; }
   void noteEncodeFailure(UplinkPriority priority);
 
@@ -138,7 +148,7 @@ class RecordAdmission {
   bool allocate(UplinkPriority priority, uint16_t length, PayloadRef& ref);
   bool allocateSmall(uint16_t length, PayloadRef& ref);
   bool allocateMedium(uint16_t length, PayloadRef& ref);
-  bool allocateLarge(uint16_t length, bool can_truth, PayloadRef& ref);
+  bool allocateLarge(uint16_t length, UplinkPriority priority, PayloadRef& ref);
   void releasePayload(PayloadRef& ref);
   uint8_t* payloadPtr(const PayloadRef& ref);
   const uint8_t* payloadPtr(const PayloadRef& ref) const;

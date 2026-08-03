@@ -841,7 +841,9 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   CHECK(auxiliary_negative.command.steer_permille == 0);
   CHECK(auxiliary_negative.command.auxiliary_permille == -1000);
   CHECK(auxiliary_negative.frames[0].data[1] == control::kRemoteDriveStopMode);
-  for (uint8_t index = 0; index < 7; ++index) {
+  CHECK(auxiliary_negative.frames[1].data[0] ==
+        control::kRemoteSteeringCenter);
+  for (uint8_t index = 1; index < 7; ++index) {
     CHECK(auxiliary_negative.frames[1].data[index] == 0);
   }
   CHECK(auxiliary_negative.frames[1].data[7] == control::kRemoteAuxiliaryNegative);
@@ -851,7 +853,9 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   auto auxiliary_positive = orchestrator.tick(80, inputs, deps);
   CHECK(auxiliary_positive.accepted);
   CHECK(auxiliary_positive.command.auxiliary_permille == 1000);
-  for (uint8_t index = 0; index < 7; ++index) {
+  CHECK(auxiliary_positive.frames[1].data[0] ==
+        control::kRemoteSteeringCenter);
+  for (uint8_t index = 1; index < 7; ++index) {
     CHECK(auxiliary_positive.frames[1].data[index] == 0);
   }
   CHECK(auxiliary_positive.frames[1].data[7] == control::kRemoteAuxiliaryPositive);
@@ -889,10 +893,58 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   inputs.mailbox_snapshot.sample.ch[4] = 1000;
   auto auxiliary_precedence = orchestrator.tick(180, inputs, deps);
   CHECK(auxiliary_precedence.accepted);
-  for (uint8_t index = 0; index < 7; ++index) {
+  CHECK(auxiliary_precedence.frames[1].data[0] ==
+        control::kRemoteSteeringCenter);
+  for (uint8_t index = 1; index < 7; ++index) {
     CHECK(auxiliary_precedence.frames[1].data[index] == 0);
   }
   CHECK(auxiliary_precedence.frames[1].data[7] == control::kRemoteAuxiliaryPositive);
+}
+
+void serviceCenterGuardBoundsHoldAndRequiresReleaseBeforeRetrigger() {
+  using namespace csm::board::control;
+  ServiceSteeringCenterGuard guard;
+  guard.reset();
+
+  auto decision = guard.apply(100, kRemoteSteeringMaximum,
+                              kRemoteAuxiliaryNegative);
+  CHECK(decision.steering == kRemoteSteeringMaximum);
+  CHECK(decision.auxiliary == kRemoteAuxiliaryNegative);
+  CHECK(!decision.timeout_release);
+  CHECK(guard.active());
+
+  decision = guard.apply(
+      100 + kServiceSteeringCenterMaxHoldMs - 1u,
+      kRemoteSteeringMinimum, kRemoteAuxiliaryNegative);
+  CHECK(decision.steering == kRemoteSteeringMinimum);
+  CHECK(decision.auxiliary == kRemoteAuxiliaryNegative);
+
+  uint8_t release_steering = 0;
+  CHECK(guard.pollTimeoutRelease(
+      100 + kServiceSteeringCenterMaxHoldMs, &release_steering));
+  CHECK(release_steering == kRemoteSteeringMinimum);
+  CHECK(!guard.active());
+  CHECK(guard.timedOut());
+
+  // A stuck host button cannot begin another four-second window. An explicit
+  // zero overlay, or an external session/authority/disarm reset, is required.
+  decision = guard.apply(5000, kRemoteSteeringCenter,
+                         kRemoteAuxiliaryNegative);
+  CHECK(decision.auxiliary == 0);
+  CHECK(decision.timeout_release);
+  decision = guard.apply(5001, kRemoteSteeringCenter, 0);
+  CHECK(decision.auxiliary == 0);
+  CHECK(!guard.timedOut());
+  decision = guard.apply(5002, 0, kRemoteAuxiliaryNegative);
+  CHECK(decision.steering == kRemoteSteeringMinimum);
+  CHECK(decision.auxiliary == kRemoteAuxiliaryNegative);
+
+  guard.reset();
+  CHECK(!guard.active());
+  CHECK(!guard.timedOut());
+  decision = guard.apply(6000, 255, kRemoteAuxiliaryNegative);
+  CHECK(decision.steering == kRemoteSteeringMaximum);
+  CHECK(decision.auxiliary == kRemoteAuxiliaryNegative);
 }
 
 void absoluteReleaseSchedulePreservesPhaseAndCountsMisses() {
@@ -1516,6 +1568,7 @@ int main() {
   frozenMailboxCannotRemainFresh();
   drivePayloadMatchesVehicleBenchGoldenFrames();
   remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11();
+  serviceCenterGuardBoundsHoldAndRequiresReleaseBeforeRetrigger();
   absoluteReleaseSchedulePreservesPhaseAndCountsMisses();
   absoluteReleaseSchedulePreventsLateCatchupBurst();
   absoluteReleaseScheduleSurvivesWraparound();

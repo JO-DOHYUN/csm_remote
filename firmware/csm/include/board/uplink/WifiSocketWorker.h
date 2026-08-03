@@ -13,10 +13,6 @@
 #include <rtos/Thread.h>
 #endif
 
-#ifndef BOARD_WIFI_TX_CHUNK_BYTES
-#define BOARD_WIFI_TX_CHUNK_BYTES 2920
-#endif
-
 #ifndef BOARD_WIFI_SOCKET_WORKER_STACK_BYTES
 #define BOARD_WIFI_SOCKET_WORKER_STACK_BYTES 16384
 #endif

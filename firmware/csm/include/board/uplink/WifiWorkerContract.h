@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "board/uplink/ProductUplinkEnvelope.h"
+
 #ifndef BOARD_WIFI_STALL_TIMEOUT_MS
 #define BOARD_WIFI_STALL_TIMEOUT_MS 500
 #endif
@@ -32,6 +34,10 @@
 
 #ifndef BOARD_WIFI_TX_MAX_BYTES_PER_PUMP
 #define BOARD_WIFI_TX_MAX_BYTES_PER_PUMP 11680
+#endif
+
+#ifndef BOARD_WIFI_TX_CHUNK_BYTES
+#define BOARD_WIFI_TX_CHUNK_BYTES 2920
 #endif
 
 #ifndef BOARD_WIFI_CONNECTED_FALLBACK_MS
@@ -66,6 +72,9 @@ static_assert(BOARD_WIFI_TX_MAX_WRITES_PER_PUMP > 0,
               "Wi-Fi worker write budget must be non-zero");
 static_assert(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP > 0,
               "Wi-Fi worker byte budget must be non-zero");
+static_assert(BOARD_WIFI_TX_MAX_WRITES_PER_PUMP * BOARD_WIFI_TX_CHUNK_BYTES >=
+                  BOARD_WIFI_TX_MAX_BYTES_PER_PUMP,
+              "Wi-Fi worker write count cannot cover its byte budget");
 static_assert(BOARD_WIFI_CONNECTED_FALLBACK_MS > 0,
               "Wi-Fi connected fallback must be non-zero");
 static_assert(BOARD_WIFI_STATE_PUBLISH_PERIOD_MS > 0,
@@ -77,16 +86,25 @@ static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
               "Wi-Fi startup retry interval must be non-zero");
 
 #ifndef BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT
-#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 64
+#define BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT 59
 #endif
 
 static_assert(BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT > 0 &&
                   BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT < 100,
               "Wi-Fi isolation high-water percent must be in (0, 100)");
 
-#ifndef BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND
-#define BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND 57735
-#endif
+static constexpr uint32_t kWifiDesignIngressBytesPerFallback =
+    (static_cast<uint64_t>(
+         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
+         BOARD_WIFI_CONNECTED_FALLBACK_MS +
+     999u) /
+    1000u;
+static_assert(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP >=
+                  kWifiDesignIngressBytesPerFallback,
+              "Wi-Fi worker pump cannot service the product design envelope");
+static_assert(BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US <
+                  BOARD_WIFI_CONNECTED_FALLBACK_MS * 1000u,
+              "Wi-Fi worker pump may monopolize its fallback interval");
 
 namespace csm::board::uplink {
 

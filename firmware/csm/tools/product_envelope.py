@@ -50,7 +50,10 @@ def require(condition: bool, message: str) -> None:
 def calculate() -> dict:
     mailbox = ROOT / "include" / "board" / "uplink" / "WifiWorkerMailbox.h"
     worker = ROOT / "include" / "board" / "uplink" / "WifiWorkerContract.h"
-    socket_worker = ROOT / "include" / "board" / "uplink" / "WifiSocketWorker.h"
+    product_profile = (
+        ROOT / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
+    )
+    typed_frame = ROOT / "include" / "protocol" / "TypedFrame.h"
     typed_records = ROOT / "include" / "protocol" / "TypedRecords.h"
     main = ROOT / "src" / "main.cpp"
     platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
@@ -66,10 +69,13 @@ def calculate() -> dict:
     high_water_percent = macro(worker, "BOARD_WIFI_ISOLATE_HIGH_WATER_PERCENT")
     batch_bytes = macro(worker, "BOARD_WIFI_TX_BATCH_TARGET_BYTES")
     drain_budget_us = macro(worker, "BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US")
+    max_writes_per_pump = macro(worker, "BOARD_WIFI_TX_MAX_WRITES_PER_PUMP")
+    max_bytes_per_pump = macro(worker, "BOARD_WIFI_TX_MAX_BYTES_PER_PUMP")
+    fallback_ms = macro(worker, "BOARD_WIFI_CONNECTED_FALLBACK_MS")
     call_stall_ms = macro(worker, "BOARD_WIFI_CALL_STALL_TIMEOUT_MS")
     startup_attempt_limit = macro(worker, "BOARD_WIFI_STARTUP_ATTEMPT_LIMIT")
     startup_retry_ms = macro(worker, "BOARD_WIFI_STARTUP_RETRY_MS")
-    tx_chunk_bytes = macro(socket_worker, "BOARD_WIFI_TX_CHUNK_BYTES")
+    tx_chunk_bytes = macro(worker, "BOARD_WIFI_TX_CHUNK_BYTES")
     ap_sta_concur = macro(worker, "BOARD_WIFI_AP_STA_CONCUR")
     can_queue = macro(main, "BOARD_CAN_QUEUE_SIZE")
 
@@ -78,10 +84,13 @@ def calculate() -> dict:
     require(reserve_records == 4, "critical descriptor reserve drift")
     require(reserve_bytes == 2112, "critical byte reserve drift")
     require(stall_ms == 500, "no-progress timeout drift")
-    require(high_water_percent == 64, "pre-full isolation threshold drift")
+    require(high_water_percent == 59, "pre-full isolation threshold drift")
     require(batch_bytes == 1460, "TCP batch target drift")
     require(tx_chunk_bytes == 2920, "TCP write chunk drift")
     require(drain_budget_us == 2000, "nonblocking worker pump budget drift")
+    require(max_writes_per_pump == 4, "worker write budget drift")
+    require(max_bytes_per_pump == 11680, "worker byte budget drift")
+    require(fallback_ms == 5, "worker fallback interval drift")
     require(call_stall_ms == 250, "socket call-stall boundary drift")
     require(startup_attempt_limit == 0, "product AP retry policy drift")
     require(startup_retry_ms == 2000, "product AP retry interval drift")
@@ -103,14 +112,11 @@ def calculate() -> dict:
     ):
         require(token in linker, f"linker ownership guard missing {token}")
 
-    typed_overhead = 11
+    typed_overhead = constexpr(typed_frame, "kTypedFrameOverheadLen")
     compact_schema = constexpr(typed_records, "kCanRxSegmentSchema")
     compact_header = constexpr(typed_records, "kCanRxSegmentHeaderLen")
     compact_entry = constexpr(typed_records, "kCanRxSegmentEntryLen")
     compact_max = constexpr(typed_records, "kCanRxSegmentMaxFrames")
-    legacy_header = constexpr(typed_records, "kCanRxSegmentLegacyHeaderLen")
-    legacy_entry = constexpr(typed_records, "kCanRxSegmentLegacyEntryLen")
-    legacy_max = constexpr(typed_records, "kCanRxSegmentLegacyMaxFrames")
     transport_schema = constexpr(typed_records, "kTransportDiagnosticSchema")
     transport_payload = constexpr(
         typed_records, "kTransportDiagnosticPayloadLen"
@@ -118,7 +124,28 @@ def calculate() -> dict:
     require(compact_schema == 2, "compact CAN RX schema drift")
     require(transport_schema == 3, "transport diagnostic schema drift")
     require(transport_payload == 128, "transport diagnostic payload drift")
-    rx_fps = 2000
+    rx_fps = (
+        constexpr(product_profile, "kProductCanBusCount")
+        * constexpr(product_profile, "kProductCanRxFramesPerSecondPerBus")
+    )
+    control_fps = constexpr(
+        product_profile, "kProductControlCommandsPerSecond"
+    )
+    remote_state_fps = constexpr(
+        product_profile, "kProductRemoteStateRecordsPerSecond"
+    )
+    board_health_fps = constexpr(
+        product_profile, "kProductBoardHealthRecordsPerSecond"
+    )
+    transport_diagnostic_fps = constexpr(
+        product_profile, "kProductTransportDiagnosticRecordsPerSecond"
+    )
+    minimum_rate = constexpr(
+        product_profile, "kProductUplinkMinimumBytesPerSecond"
+    )
+    design_rate = constexpr(
+        product_profile, "kProductUplinkDesignBytesPerSecond"
+    )
 
     def segmented_rate(
         fps: int, header: int, entry: int, frames_per_segment: int
@@ -129,37 +156,43 @@ def calculate() -> dict:
             total += typed_overhead + header + entry * remainder
         return total
 
-    legacy_rx = segmented_rate(
-        rx_fps, legacy_header, legacy_entry, legacy_max
-    )
     compact_rx = segmented_rate(
         rx_fps, compact_header, compact_entry, compact_max
     )
-    compact_rx_4000 = segmented_rate(
-        4000, compact_header, compact_entry, compact_max
+    can_tx = control_fps * (typed_overhead + constexpr(typed_records, "kCanRawPayloadLen"))
+    control_ack = control_fps * (
+        typed_overhead + constexpr(typed_records, "kControlAckPayloadLen")
+    )
+    remote_state = remote_state_fps * (
+        typed_overhead + constexpr(typed_records, "kRemoteControlStatePayloadLen")
+    )
+    board_health = board_health_fps * (
+        typed_overhead + constexpr(typed_records, "kBoardHealthV13PayloadLen")
+    )
+    transport_diagnostic = transport_diagnostic_fps * (
+        typed_overhead + transport_payload
+    )
+    fixed_product = (
+        can_tx + control_ack + remote_state + board_health + transport_diagnostic
+    )
+    compact_total = compact_rx + fixed_product
+    compact_records = math.ceil(rx_fps / compact_max)
+    enabled_records = (
+        compact_records + 2 * control_fps + remote_state_fps
+        + board_health_fps + transport_diagnostic_fps
     )
 
-    can_tx = 250 * 41
-    remote_state = 10 * 239
-    board_health = 519
-    transport_diagnostic = 139
-    fixed_product = can_tx + remote_state + board_health + transport_diagnostic
-    legacy_total = legacy_rx + fixed_product
-    compact_total = compact_rx + fixed_product
-    compact_total_4000 = compact_rx_4000 + fixed_product
-
-    measured_raw_low = 65083
-    measured_raw_high = 69413
     normal_bytes = queue_bytes - reserve_bytes
     normal_records = queue_records - reserve_records
-    target_rate = compact_total
+    target_rate = design_rate
     live_fifo_min_batches = 4
     live_fifo_required_bytes = batch_bytes * live_fifo_min_batches
     high_water_bytes = math.ceil(queue_bytes * high_water_percent / 100)
     max_encoded_frame_bytes = 523
     fallback_ingress_bytes = math.ceil(
-        target_rate * macro(worker, "BOARD_WIFI_CONNECTED_FALLBACK_MS") / 1000
+        target_rate * fallback_ms / 1000
     )
+    worker_service_bytes_per_second = max_bytes_per_pump * 1000 // fallback_ms
     pressure_guard_bytes = max_encoded_frame_bytes + fallback_ingress_bytes
     pressure_headroom_bytes = normal_bytes - high_water_bytes
     descriptor_bytes = queue_records * 16
@@ -173,9 +206,11 @@ def calculate() -> dict:
     can_queue_total = 2 * can_queue * can_item_bytes
     legacy_can_queue_total = 2 * 4096 * can_item_bytes
 
-    require(legacy_rx == 65762, "legacy wire calculation regression")
-    require(compact_rx == 44437, "compact wire calculation regression")
-    require(compact_total == 57735, "product wire calculation regression")
+    require(compact_rx == 88874, "aggregate CAN wire calculation regression")
+    require(compact_total == 111922, "enabled product wire calculation regression")
+    require(enabled_records == 686, "enabled product record calculation regression")
+    require(compact_total <= minimum_rate, "enabled profile exceeds minimum gate")
+    require(minimum_rate < design_rate, "design envelope lacks headroom")
     require(dtcm_storage == 10240, "DTCM live FIFO calculation regression")
     require(
         normal_bytes >= live_fifo_required_bytes,
@@ -188,6 +223,14 @@ def calculate() -> dict:
         "worker pressure threshold cannot absorb one max frame plus fallback ingress",
     )
     require(dtcm_max_remaining >= 32768, "DTCM safety reserve violated")
+    require(
+        max_bytes_per_pump >= fallback_ingress_bytes,
+        "worker pump byte budget cannot service design-rate fallback ingress",
+    )
+    require(
+        max_writes_per_pump * tx_chunk_bytes >= max_bytes_per_pump,
+        "worker write count cannot cover its byte budget",
+    )
 
     return {
         "schema": 1,
@@ -207,6 +250,9 @@ def calculate() -> dict:
             "batch_target_bytes": batch_bytes,
             "tx_chunk_bytes": tx_chunk_bytes,
             "drain_time_budget_us": drain_budget_us,
+            "max_writes_per_pump": max_writes_per_pump,
+            "max_bytes_per_pump": max_bytes_per_pump,
+            "connected_fallback_ms": fallback_ms,
             "call_stall_timeout_ms": call_stall_ms,
             "startup_attempt_limit": startup_attempt_limit,
             "startup_retry_ms": startup_retry_ms,
@@ -214,20 +260,11 @@ def calculate() -> dict:
             "can_queue_per_bus": can_queue,
         },
         "throughput_bytes_per_second": {
-            "legacy_can_rx_2000fps": legacy_rx,
-            "compact_can_rx_2000fps": compact_rx,
-            "fixed_product_records": fixed_product,
-            "legacy_product_total_2000fps": legacy_total,
-            "compact_product_total_2000fps": compact_total,
-            "compact_product_total_4000fps": compact_total_4000,
-            "measured_raw_low": measured_raw_low,
-            "measured_raw_high": measured_raw_high,
-            "compact_margin_low_percent": round(
-                (measured_raw_low - compact_total) * 100 / measured_raw_low, 2
-            ),
-            "compact_margin_high_percent": round(
-                (measured_raw_high - compact_total) * 100 / measured_raw_high, 2
-            ),
+            "aggregate_can_rx_4000fps": compact_rx,
+            "enabled_profile_exact": compact_total,
+            "qualification_minimum": minimum_rate,
+            "design_envelope": design_rate,
+            "enabled_records_per_second": enabled_records,
         },
         "live_fifo_envelope": {
             "target_rate_bytes_per_second": target_rate,
@@ -243,6 +280,7 @@ def calculate() -> dict:
             "pressure_guard_bytes": pressure_guard_bytes,
             "pressure_headroom_bytes": pressure_headroom_bytes,
             "high_water_seconds_at_target": round(high_water_bytes / target_rate, 5),
+            "worker_service_bytes_per_second": worker_service_bytes_per_second,
         },
         "memory_bytes": {
             "wifi_descriptors": descriptor_bytes,
@@ -264,15 +302,15 @@ def calculate() -> dict:
             ),
         },
         "gates": {
-            "compact_2000fps_fits_measured_raw_low": compact_total
-            < measured_raw_low,
-            "compact_4000fps_fits_measured_raw_high": compact_total_4000
-            < measured_raw_high,
+            "enabled_profile_fits_minimum": compact_total <= minimum_rate,
+            "minimum_fits_design": minimum_rate < design_rate,
             "live_fifo_holds_four_batches": normal_bytes
             >= live_fifo_required_bytes,
             "worker_pressure_precedes_reserve": high_water_bytes < normal_bytes,
             "worker_pressure_protects_reserve": pressure_headroom_bytes
             >= pressure_guard_bytes,
+            "worker_pump_services_design_ingress": max_bytes_per_pump
+            >= fallback_ingress_bytes,
             "dtcm_safety_reserve_32k": dtcm_max_remaining >= 32768,
         },
     }
@@ -285,22 +323,21 @@ def markdown(report: dict) -> str:
     gates = report["gates"]
     rows = [
         (
-            "CAN RX 2,000fps legacy -> compact",
-            f"{throughput['legacy_can_rx_2000fps']:,} -> "
-            f"{throughput['compact_can_rx_2000fps']:,} B/s",
+            "Aggregate CAN RX 4,000fps",
+            f"{throughput['aggregate_can_rx_4000fps']:,} B/s",
             "PASS",
         ),
         (
-            "2,000fps product total / raw low",
-            f"{throughput['compact_product_total_2000fps']:,} / "
-            f"{throughput['measured_raw_low']:,} B/s",
-            "PASS" if gates["compact_2000fps_fits_measured_raw_low"] else "FAIL",
+            "Enabled profile exact / minimum",
+            f"{throughput['enabled_profile_exact']:,} / "
+            f"{throughput['qualification_minimum']:,} B/s",
+            "PASS" if gates["enabled_profile_fits_minimum"] else "FAIL",
         ),
         (
-            "4,000fps product total / raw high",
-            f"{throughput['compact_product_total_4000fps']:,} / "
-            f"{throughput['measured_raw_high']:,} B/s",
-            "PASS" if gates["compact_4000fps_fits_measured_raw_high"] else "GATE",
+            "Qualification minimum / design envelope",
+            f"{throughput['qualification_minimum']:,} / "
+            f"{throughput['design_envelope']:,} B/s",
+            "PASS" if gates["minimum_fits_design"] else "FAIL",
         ),
         (
             "Four TCP batches / normal live FIFO",
@@ -314,6 +351,14 @@ def markdown(report: dict) -> str:
             f"{live_fifo['pressure_guard_bytes']:,} B",
             "PASS"
             if gates["worker_pressure_protects_reserve"]
+            else "FAIL",
+        ),
+        (
+            "Worker service capacity / design envelope",
+            f"{live_fifo['worker_service_bytes_per_second']:,} / "
+            f"{throughput['design_envelope']:,} B/s",
+            "PASS"
+            if gates["worker_pump_services_design_ingress"]
             else "FAIL",
         ),
         (

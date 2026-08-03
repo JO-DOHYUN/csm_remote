@@ -190,6 +190,12 @@ runtime_header = (
 runtime_source = (
     root / "src" / "board" / "control" / "RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
+mapper_header = (
+    root / "include" / "board" / "control" / "VehicleCommandMapper.h"
+).read_text(encoding="utf-8")
+mapper_source = (
+    root / "src" / "board" / "control" / "VehicleCommandMapper.cpp"
+).read_text(encoding="utf-8")
 if "noteCanTxEnqueueResult(" not in runtime_header:
     fail("runtime enqueue result API missing")
 if "noteCanTxCompletion(" not in runtime_header:
@@ -255,5 +261,20 @@ for required in (
 ):
     if required not in payload_policy:
         fail(f"Service/HIL steering CENTER payload policy missing {required}")
+
+for required in (
+    "frame.data[0] = mapSteering(command.steer_permille);",
+    "kServiceSteeringCenterMaxHoldMs = 4000",
+    "class ServiceSteeringCenterGuard",
+    "ServiceSteeringCenterGuard::pollTimeoutRelease",
+    "service_steering_center_guard.apply(now_ms, data[0], data[7])",
+    "service_steering_center_guard.pollTimeoutRelease(now_ms, &steering)",
+    "service_steering_center_guard.reset();",
+    "service_steering_center_timeout();",
+):
+    if required not in mapper_header + mapper_source + main:
+        fail(f"bounded Service/HIL steering overlay missing {required}")
+if "if (command.auxiliary_permille != 0) {\n    frame.data[7]" not in mapper_source:
+    fail("RC auxiliary is not an overlay on the mapped steering command")
 
 print("Control execution guard passed.")
