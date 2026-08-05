@@ -199,6 +199,7 @@ Record types:
 - `21 APP_RX_COMMIT_ACK` legacy reserved; current board decode-ignore only
 - `22 LINK_RELIABILITY_DIAGNOSTIC` legacy schema 1 decode-only; not currently
   published
+- `23 CONTROL_TX_EVIDENCE` terminal Service/HIL command-to-driver evidence
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -454,6 +455,21 @@ Arduino CAN API accepts the write. Future queued control lanes may keep the same
 payload size while refining status wording, but must preserve the rule that
 `CAN_TX_RAW` is the actual-send evidence.
 
+`CONTROL_TX_EVIDENCE` payload, 40 bytes:
+- `0..7 mono_us u64`
+- `8..11 command_id u32`
+- `12..15 submission_sequence u32`
+- `16 outcome u8`: `1` terminal driver success, `0` terminal driver failure
+- `17 origin u8`
+- `18 bus u8`, `19 dlc u8`
+- `20..23 can_id_flags u32`, `24..31 data[8]`
+- `32..35 driver_result i32`, `36..39 request_mask u32`
+
+Service/HIL의 실제 송신 판정은 같은 bus/ID/DLC/data를 가진 `CAN_TX_RAW`와
+`CONTROL_TX_EVIDENCE`가 일치할 때만 command_id에 귀속한다. ACK만으로 송신
+성공을 표시하지 않으며, terminal evidence가 없는 구형 펌웨어에서만 제한된
+FIFO 상관관계를 호환 경로로 사용한다.
+
 Current `CONTROL_ACK` reasons:
 - `0` ok
 - `1` bad payload length
@@ -504,6 +520,10 @@ Current board host TX policy:
   Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
   bounded steering overlay are validated before authority/safety admission. The removed
   `0x100/0x200` adapter is not accepted.
+- Service/HIL에서 이 레코드는 wire 호환 envelope일 뿐 direct raw-CAN 권한이
+  아니다. 보드는 `0x005/0x007`을 operator intent로 해석한 뒤 공통
+  `CommandLimiter`와 `VehicleCommandMapper`를 통과시켜 cadence, deadband,
+  ramp, reversal-to-zero와 neutral을 적용하고 새 CAN frame을 생성한다.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
@@ -1254,6 +1274,7 @@ RP2040 feeder successor profile major `4`:
 - `7 BOARD_EVENT`
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
+- `23 CONTROL_TX_EVIDENCE`
 
 ## 금지
 - board direct sensor 값을 가짜 CAN frame으로 위장

@@ -40,12 +40,12 @@ bool captureFrame(void* context, const FeederCanFrame& frame) {
 }
 
 constexpr uint8_t kGoldenCanPacket[] = {
-    0x03, 0x01, 0x01, 0x07, 0x18, 0x44, 0x33, 0x22, 0x11,
+    0x03, 0x02, 0x01, 0x07, 0x18, 0x44, 0x33, 0x22, 0x11,
     0x07, 0x01, 0x01, 0x02, 0x18, 0x06, 0x01, 0x18, 0xA0,
-    0x86, 0x01, 0x06, 0x31, 0x52, 0x57, 0x46, 0x2A, 0x01,
+    0x86, 0x01, 0x06, 0x32, 0x52, 0x57, 0x46, 0x2A, 0x01,
     0x01, 0x04, 0x3C, 0x86, 0x01, 0x03, 0x23, 0x01, 0x01,
     0x02, 0x08, 0x01, 0x01, 0x0D, 0x01, 0x02, 0x03, 0x04,
-    0x05, 0x06, 0x07, 0x08, 0xC7, 0x57, 0x86, 0x1D, 0x00,
+    0x05, 0x06, 0x07, 0x08, 0x66, 0x9B, 0x2F, 0xDA, 0x00,
 };
 
 void writeU16(uint8_t* output, uint16_t value) {
@@ -153,6 +153,11 @@ std::vector<uint8_t> makeStatusPacket(
   uint8_t* payload = &raw[csm::board::feeder::kFeederWireHeaderSize];
   writeU32(&payload[0], uptime_ms);
   writeU32(&payload[8], ring_overflow);
+  writeU32(&payload[52], csm::board::feeder::kFeederWireContractId);
+  writeU32(&payload[56],
+           csm::board::feeder::kFeederFirmwareProfileProduct);
+  writeU32(&payload[60], 0x10203040U);
+  writeU32(&payload[64], 0x50607080U);
 
   const uint32_t crc =
       FeederWireDecoder::crc32c(raw.data(), raw.size() - sizeof(uint32_t));
@@ -318,22 +323,34 @@ void dma_cursor_reconciles_only_one_pending_wrap() {
 }
 
 void feeder_source_health_is_fail_closed_for_loss_and_mcp_faults() {
-  FeederStatus status;
+  const auto healthy_status = [] {
+    FeederStatus value;
+    value.runtime_contract_id = csm::board::feeder::kFeederWireContractId;
+    value.firmware_profile_id =
+        csm::board::feeder::kFeederFirmwareProfileProduct;
+    value.firmware_source_id = 1U;
+    value.firmware_build_id = 1U;
+    return value;
+  };
+  FeederStatus status = healthy_status();
   CHECK(feederSourceHealthy(status));
 
   status.ring_overflow = 1U;
   CHECK(!feederSourceHealthy(status));
-  status = {};
+  status = healthy_status();
   status.mcp_overflow_events = 1U;
   CHECK(!feederSourceHealthy(status));
-  status = {};
+  status = healthy_status();
   status.mcp_error_irq_events = 1U;
   CHECK(!feederSourceHealthy(status));
-  status = {};
+  status = healthy_status();
   status.mcp_bus_off_events = 1U;
   CHECK(!feederSourceHealthy(status));
-  status = {};
+  status = healthy_status();
   status.eflg_or = 1U;
+  CHECK(!feederSourceHealthy(status));
+  status = healthy_status();
+  status.firmware_build_id = 0U;
   CHECK(!feederSourceHealthy(status));
 }
 

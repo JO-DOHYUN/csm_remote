@@ -41,6 +41,9 @@ enum class RecordType : uint8_t {
   AppRxCommitAck = 21,
   // Release-retained conservation evidence for the Required Product HMI Link.
   LinkReliabilityDiagnostic = 22,
+  // Terminal hardware completion correlated to the originating control
+  // command. CAN_TX_RAW remains the independent raw on-bus truth.
+  ControlTxEvidence = 23,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

@@ -9,6 +9,7 @@
 #include "board/control/ControlReleaseSchedule.h"
 #include "board/control/RemoteControlOrchestrator.h"
 #include "board/control/RemoteControlRuntime.h"
+#include "board/control/ServiceHilIntentRuntime.h"
 #include "board/control/VehicleCommandMapper.h"
 #include "board/remote/CrsfParser.h"
 #include "board/remote/M4RemoteMailboxReader.h"
@@ -1663,6 +1664,35 @@ void runtimeHandoffLossAndFaultPolicy() {
   CHECK(runtime.status().cycle_deadline_misses == 0);
 }
 
+void serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper() {
+  using csm::board::control::ServiceHilIntentRuntime;
+  ServiceHilIntentRuntime runtime;
+  CHECK(runtime.begin(0, 1, 0x4849u));
+
+  uint8_t forward[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 0, 0, 0};
+  auto result = runtime.accept(0, 1, 0x005, 8, forward);
+  CHECK(result.accepted);
+  CHECK(result.frame.can_id_flags == 0x005);
+  CHECK(result.frame.data[2] == 0xE8 && result.frame.data[3] == 0x03);
+
+  CHECK(!runtime.accept(1, 2, 0x005, 8, forward).accepted);
+  uint8_t reverse[8] = {0xAA, 0x52, 0xE8, 0x03, 0x60, 0, 0, 0};
+  result = runtime.accept(5, 3, 0x005, 8, reverse);
+  CHECK(result.accepted);
+  CHECK(result.frame.data[4] != 0x60);
+  CHECK((static_cast<uint16_t>(result.frame.data[2]) |
+         (static_cast<uint16_t>(result.frame.data[3]) << 8u)) < 1000u);
+
+  uint8_t steering[8] = {250, 0, 0, 0, 0, 0, 0, 0};
+  result = runtime.accept(20, 4, 0x007, 8, steering);
+  CHECK(result.accepted);
+  CHECK(result.frame.data[0] < 250);
+  CHECK(result.frame.data[0] >= 130);
+
+  uint8_t invalid[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 1, 0, 0};
+  CHECK(!runtime.accept(25, 5, 0x005, 8, invalid).accepted);
+}
+
 }  // namespace
 
 int main() {
@@ -1685,6 +1715,7 @@ int main() {
   runtimeReleasePhasesSurviveCooperativeLoopGap();
   runtimeImmediateStopRespectsSafetyAndWraparound();
   runtimeHandoffLossAndFaultPolicy();
+  serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper();
   if (failures != 0) {
     std::fprintf(stderr, "%d remote control contract checks failed\n", failures);
     return 1;

@@ -5,14 +5,15 @@
 
 namespace csm::board::feeder {
 
-static constexpr uint8_t kFeederWireVersion = 1;
+static constexpr uint8_t kFeederWireVersion = 2;
 static constexpr uint8_t kFeederWireTypeCanBatch = 1;
 static constexpr uint8_t kFeederWireTypeStatus = 2;
 static constexpr uint8_t kFeederWireHeaderSize = 24;
 static constexpr uint8_t kFeederWireCanItemSize = 24;
 static constexpr uint8_t kFeederWireMaxCanItems = 15;
-static constexpr uint16_t kFeederWireStatusPayloadSize = 52;
-static constexpr uint32_t kFeederWireContractId = 0x46575231U;
+static constexpr uint16_t kFeederWireStatusPayloadSize = 68;
+static constexpr uint32_t kFeederWireContractId = 0x46575232U;
+static constexpr uint32_t kFeederFirmwareProfileProduct = 1U;
 static constexpr size_t kFeederWireMaxRawPacket =
     kFeederWireHeaderSize +
     kFeederWireCanItemSize * kFeederWireMaxCanItems + sizeof(uint32_t);
@@ -42,13 +43,21 @@ struct FeederStatus {
   uint32_t tx_packet_total = 0;
   uint32_t tx_bytes_total = 0;
   uint32_t ring_high_water = 0;
+  uint32_t runtime_contract_id = 0;
+  uint32_t firmware_profile_id = 0;
+  uint32_t firmware_source_id = 0;
+  uint32_t firmware_build_id = 0;
 };
 
 // These counters are cumulative within one feeder boot session. Any non-zero
 // value means the source CAN lane has observed a loss or controller fault and
 // must not be advertised as operational again until a new, healthy epoch.
 constexpr bool feederSourceHealthy(const FeederStatus& status) {
-  return status.ring_overflow == 0U &&
+  return status.runtime_contract_id == kFeederWireContractId &&
+         status.firmware_profile_id == kFeederFirmwareProfileProduct &&
+         status.firmware_source_id != 0U &&
+         status.firmware_build_id != 0U &&
+         status.ring_overflow == 0U &&
          status.mcp_overflow_events == 0U &&
          status.mcp_error_irq_events == 0U &&
          status.mcp_bus_off_events == 0U &&

@@ -7,6 +7,7 @@ Import("env")
 BENCH_ENV = "env:portenta_h7_m7_mid_mcp2515_j4_remote_product_mdps_bench_wifi"
 BASE_ENV = "env:portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi"
 PRODUCT_ENV = "env:portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi"
+SERVICE_ENV = "env:portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi"
 
 
 def fail(message):
@@ -50,6 +51,22 @@ for item in (
     if item not in product_flags:
         fail(f"product RC contract missing {item}")
 
+for forbidden in (
+    "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH=1",
+    "BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE=1",
+):
+    if forbidden in product_flags:
+        fail(f"production RC contract contains unsupported evidence: {forbidden}")
+
+service_flags = parser.get(SERVICE_ENV, "build_flags", fallback="")
+for item in (
+    "BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS=1",
+    "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH=1",
+    "BOARD_ALLOW_LAB_SHARED_CREDENTIAL=1",
+):
+    if item not in service_flags:
+        fail(f"Service/HIL lab artifact missing {item}")
+
 base_flags = parser.get(BASE_ENV, "build_flags", fallback="")
 for item in (
     "BOARD_CSM_PROFILE_REMOTE_PRODUCT=1",
@@ -73,6 +90,9 @@ for item in (
     "AutonomyAuthorityState::InactiveConfirmed;",
     "inputs.local_tx_inhibit_latched = true;",
     "AutonomyAuthorityState::Unknown;",
+    "BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE",
+    "BOARD_CAN_TX_GATE_READBACK_SUPPORTED",
+    "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH",
     "VehicleCommandMapping::VehicleMdps0x007Only",
 ):
     if item not in main_source:

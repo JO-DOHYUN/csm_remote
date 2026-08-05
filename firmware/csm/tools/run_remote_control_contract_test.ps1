@@ -25,6 +25,7 @@ $sources = @(
   (Join-Path $project "src\board\control\ControlReleaseSchedule.cpp"),
   (Join-Path $project "src\board\control\RemoteControlOrchestrator.cpp"),
   (Join-Path $project "src\board\control\RemoteControlRuntime.cpp"),
+  (Join-Path $project "src\board\control\ServiceHilIntentRuntime.cpp"),
   (Join-Path $project "src\board\control\VehicleCommandMapper.cpp"),
   (Join-Path $project "src\board\remote\CrsfParser.cpp"),
   (Join-Path $project "src\board\remote\M4RemoteMailboxContract.cpp"),

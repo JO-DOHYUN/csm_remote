@@ -9,6 +9,7 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
       return UplinkPriority::CanTruth;
     case csm::RecordType::CanTxRaw:
     case csm::RecordType::ControlAck:
+    case csm::RecordType::ControlTxEvidence:
     case csm::RecordType::RemoteControlState:
       return UplinkPriority::Critical;
     case csm::RecordType::Capability:
@@ -62,6 +63,7 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
 UplinkDeliveryClass default_delivery_for_record(csm::RecordType type) {
   switch (type) {
     case csm::RecordType::ControlAck:
+    case csm::RecordType::ControlTxEvidence:
     case csm::RecordType::StreamSession:
     case csm::RecordType::BoardEvent:
       return UplinkDeliveryClass::LatencyBounded;

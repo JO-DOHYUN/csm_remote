@@ -17,6 +17,7 @@
 #include "board/can/BuiltinFdcanDiagnostics.h"
 #include "board/can/BuiltinCanTxOwner.h"
 #include "board/control/RemoteControlRuntime.h"
+#include "board/control/ServiceHilIntentRuntime.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
@@ -134,6 +135,9 @@
 
 #ifndef BOARD_FEEDER_CAN_BUS_ID
 #define BOARD_FEEDER_CAN_BUS_ID 0
+#endif
+#ifndef BOARD_FEEDER_CAN_BUS_ROLE
+#define BOARD_FEEDER_CAN_BUS_ROLE 2
 #endif
 
 #ifndef BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -526,6 +530,28 @@
 
 #ifndef BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
 #define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+#endif
+
+// These are evidence inputs, not feature switches. A production artifact must
+// remain unable to release motion unless both claims are backed by a runtime
+// source/readback. Explicit bench artifacts may opt into the virtual adapters;
+// CAPABILITY must never advertise those adapters as production evidence.
+#ifndef BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
+#define BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE 0
+#endif
+#ifndef BOARD_CAN_TX_GATE_READBACK_SUPPORTED
+#define BOARD_CAN_TX_GATE_READBACK_SUPPORTED 0
+#endif
+#ifndef BOARD_CAN_TX_GATE_READBACK_PIN
+#define BOARD_CAN_TX_GATE_READBACK_PIN -1
+#endif
+#ifndef BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
+#define BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH 0
+#endif
+
+#if BOARD_CSM_PROFILE_REMOTE_PRODUCT && !BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
+    BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
+#error "RemoteProduct may not use virtual autonomy/gate evidence"
 #endif
 
 #if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING && \
@@ -1078,6 +1104,9 @@ static SafetyState safety_state = SafetyState::MonitorOnly;
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
 static csm::board::control::ServiceSteeringCenterGuard
     service_steering_center_guard;
+static csm::board::control::ServiceHilIntentRuntime
+    service_hil_intent_runtime;
+static bool service_hil_intent_runtime_ok = false;
 #endif
 #if BOARD_ENABLE_REMOTE_CONTROL
 static csm::board::control::RemoteControlRuntime remote_control_runtime;
@@ -1101,7 +1130,7 @@ static uint32_t can_init_retry_count = 0;
 #if BOARD_ENABLE_MCP2515
 static bool mcp2515_listen_only_mode = false;
 #endif
-static bool ack_observe_enabled = false;
+static bool __attribute__((unused)) ack_observe_enabled = false;
 static bool usb_host_was_connected = false;
 static bool uplink_session_was_open = false;
 static uint32_t usb_disconnected_since_ms = 0;
@@ -1238,14 +1267,14 @@ static uint32_t pre_session_payload_replay_total = 0;
 static uint32_t passive_readback_total = 0;
 static uint32_t passive_readback_violation_total = 0;
 static uint32_t txreq_violation_total = 0;
-static uint32_t last_passive_readback_ms = 0;
+static uint32_t __attribute__((unused)) last_passive_readback_ms = 0;
 static bool can_frontend_session_arm_pending = false;
 static bool can_frontend_session_ready = false;
-static uint32_t can_frontend_session_arm_after_ms = 0;
-static uint32_t can_frontend_presession_hold_total = 0;
-static uint32_t can_frontend_session_ready_total = 0;
-static uint32_t can_frontend_session_init_fail_total = 0;
-static uint32_t last_can_frontend_init_attempt_ms = 0;
+static uint32_t __attribute__((unused)) can_frontend_session_arm_after_ms = 0;
+static uint32_t __attribute__((unused)) can_frontend_presession_hold_total = 0;
+static uint32_t __attribute__((unused)) can_frontend_session_ready_total = 0;
+static uint32_t __attribute__((unused)) can_frontend_session_init_fail_total = 0;
+static uint32_t __attribute__((unused)) last_can_frontend_init_attempt_ms = 0;
 
 static constexpr uint32_t kRuntimeBreadcrumbMagic = 0x43534D42u;  // "CSMB"
 static constexpr uint32_t kRuntimeBreadcrumbChecksumSeed = 0xA53C91E7u;
@@ -2224,9 +2253,11 @@ static void service_builtin_can_tx_completions() {
 static csm::board::can::BuiltinCanTxOutcome submit_builtin_can_frame(
     uint8_t bus, uint32_t can_id_flags, uint8_t dlc, const uint8_t* data,
     csm::board::can::BuiltinCanTxOrigin origin,
-    const csm::board::can::CanBackendState& backend) {
+    const csm::board::can::CanBackendState& backend,
+    uint32_t command_id = 0) {
   service_builtin_can_tx_completions();
   csm::board::can::BuiltinCanTxFrame frame;
+  frame.command_id = command_id;
   frame.bus = bus;
   frame.can_id_flags = can_id_flags;
   frame.dlc = dlc;
@@ -2547,6 +2578,8 @@ using csm::ControlReasonHostTimeout;
 using csm::ControlReasonNotArmed;
 using csm::ControlReasonOk;
 using csm::ControlReasonQueueFull;
+using csm::ControlReasonRateLimited;
+using csm::ControlReasonTxBusy;
 using csm::ControlReasonSafetyLockout;
 using csm::ControlReasonAuthorityDenied;
 using csm::ControlReasonUnsupportedFrame;
@@ -2695,7 +2728,8 @@ static void emit_capability() {
 #if BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
-      (1u << static_cast<uint8_t>(RecordType::ControlAck));
+      (1u << static_cast<uint8_t>(RecordType::ControlAck)) |
+      (1u << static_cast<uint8_t>(RecordType::ControlTxEvidence));
 #endif
 #if BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
   config.supported_uplink_records |=
@@ -2745,6 +2779,12 @@ static void emit_capability() {
   config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
   config.control_path = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED ? 2 :
       (BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0);
+  if (!(BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) ||
+      !(BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)) {
+    config.control_path = 0;
+  }
   config.usb_backpressure_isolated = 1;
   config.dtr_reset_sensitive = BOARD_USB_CDC_RECONNECT_RESET_MS != 0 ? 1 : 0;
   config.passive_acceptance_allowed = passive_acceptance_allowed();
@@ -2788,7 +2828,7 @@ static void emit_capability() {
       (mcp_tx_runtime_supported && BOARD_MCP2515_CONTROL_TX_ALLOWED) ? 1 : 0;
   config.buses[0] = make_capability_bus_descriptor(
       BOARD_MCP2515_BUS_ID,
-      0,
+      BOARD_MCP2515_BUS_ROLE,
       1,
       1,
       mcp_runtime_ready,
@@ -2805,13 +2845,17 @@ static void emit_capability() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
-      0,
+      BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
+       (BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
+       (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
         BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
       0,
@@ -2832,7 +2876,7 @@ static void emit_capability() {
       feeder_source_operational(mono64_us());
   config.buses[0] = make_capability_bus_descriptor(
       BOARD_FEEDER_CAN_BUS_ID,
-      0,
+      BOARD_FEEDER_CAN_BUS_ROLE,
       5,  // RP2040 feeder over internal UART
       4,  // MCP25625 integrated transceiver/controller
       feeder_operational ? 1 : 0,
@@ -2847,13 +2891,17 @@ static void emit_capability() {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
-      0,
+      BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
       BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
+       (BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
+       (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
+        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
         BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
       0,
@@ -3428,6 +3476,30 @@ static void builtin_can_tx_completion(
     emit_board_event(EventBuiltinCanTxFailed, detail,
                      builtin_can_tx_failed_total);
   }
+  if (completion.frame.origin ==
+      csm::board::can::BuiltinCanTxOrigin::HostControl) {
+    uint8_t payload[csm::kControlTxEvidencePayloadLen] = {};
+    wr_u64_le(&payload[csm::kControlTxEvidenceMonoUsOffset], mono64_us());
+    wr_u32_le(&payload[csm::kControlTxEvidenceCommandIdOffset],
+              completion.frame.command_id);
+    wr_u32_le(&payload[csm::kControlTxEvidenceSubmissionSequenceOffset],
+              completion.submission_sequence);
+    payload[csm::kControlTxEvidenceOutcomeOffset] =
+        completion.transmitted() ? 1u : 0u;
+    payload[csm::kControlTxEvidenceOriginOffset] =
+        static_cast<uint8_t>(completion.frame.origin);
+    payload[csm::kControlTxEvidenceBusOffset] = completion.frame.bus;
+    payload[csm::kControlTxEvidenceDlcOffset] = completion.frame.dlc;
+    wr_u32_le(&payload[csm::kControlTxEvidenceCanIdFlagsOffset],
+              completion.frame.can_id_flags);
+    memcpy(&payload[csm::kControlTxEvidenceDataOffset], completion.frame.data,
+           sizeof(completion.frame.data));
+    wr_i32_le(&payload[csm::kControlTxEvidenceDriverResultOffset],
+              completion.driver_result);
+    wr_u32_le(&payload[csm::kControlTxEvidenceRequestMaskOffset],
+              completion.request_mask);
+    emit_record(RecordType::ControlTxEvidence, payload, sizeof(payload));
+  }
 
   // DeadlineExceededPending is not a terminal result: TXBTO can still prove
   // that the frame won arbitration while cancellation was requested.
@@ -3958,7 +4030,8 @@ static void begin_passive_can_frontend_session_quarantine(uint32_t now_ms) {
 #endif
 }
 
-static void enter_passive_can_frontend_fault_hold(uint16_t detail, uint32_t counter) {
+static void __attribute__((unused)) enter_passive_can_frontend_fault_hold(
+    uint16_t detail, uint32_t counter) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   can_frontend_session_ready = false;
   can_frontend_session_arm_pending = false;
@@ -3993,7 +4066,7 @@ static void enter_passive_can_frontend_fault_hold(uint16_t detail, uint32_t coun
 #endif
 }
 
-static bool ensure_passive_can_frontend_session_ready(uint32_t now_ms) {
+static bool __attribute__((unused)) ensure_passive_can_frontend_session_ready(uint32_t now_ms) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (!uplink_host_session_open()) {
     return false;
@@ -4249,7 +4322,7 @@ static bool any_control_backend_ready() {
   return ready;
 }
 
-static bool recover_builtin_can_tx_for_deliberate_arm(uint8_t bus) {
+static bool __attribute__((unused)) recover_builtin_can_tx_for_deliberate_arm(uint8_t bus) {
 #if BOARD_ENABLE_BUILTIN_CAN_LANE && \
     (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL)
   if (bus != BOARD_BUILTIN_CAN_BUS_ID) return true;
@@ -4279,7 +4352,7 @@ static bool recover_builtin_can_tx_for_deliberate_arm(uint8_t bus) {
 #endif
 }
 
-static bool host_control_authority_allowed() {
+static bool __attribute__((unused)) host_control_authority_allowed() {
 #if BOARD_ENABLE_REMOTE_AUTHORITY
   return remote_control_runtime_ok &&
       remote_control_runtime.status().host_control_allowed;
@@ -4358,18 +4431,21 @@ static void service_remote_control() {
       !inputs.fault_lockout;
   inputs.hardware_gate_allows =
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
-      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
+      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0) &&
+#if BOARD_CAN_TX_GATE_READBACK_SUPPORTED
+      (digitalRead(BOARD_CAN_TX_GATE_READBACK_PIN) != 0);
+#else
+      (BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH != 0);
+#endif
   inputs.host_service_active = safety_supervisor.leaseAlive(now_ms);
-#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING
-  // This product profile owns the feeder/J4 RC path and intentionally has no
-  // upstream autonomy runtime. The compile-time profile contract is the
-  // positive evidence that releases the otherwise fail-closed authority input.
+#if BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
+  // The provider owns freshness and positive inactive evidence. Until the
+  // final vehicle adapter is bound this branch is intentionally unavailable.
   inputs.local_tx_inhibit_latched = false;
   inputs.autonomy_state =
       csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
-#elif BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
-  // This isolated bench has no upstream autonomy runtime. Only its explicit
-  // build profile may positively release the otherwise fail-closed boundary.
+#elif BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
+  // Explicit engineering bench only; never valid as production evidence.
   inputs.local_tx_inhibit_latched = false;
   inputs.autonomy_state =
       csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
@@ -4409,6 +4485,7 @@ static void service_remote_control() {
       safety_state = safety_supervisor.state();
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
       service_steering_center_guard.reset();
+      service_hil_intent_runtime.reset(millis());
 #endif
     }
 #endif
@@ -5331,6 +5408,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   if (!host_control_authority_allowed()) {
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
     service_steering_center_guard.reset();
+    service_hil_intent_runtime.reset(millis());
 #endif
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonAuthorityDenied,
@@ -5357,6 +5435,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   if (!safety_supervisor.canAcceptTx(now_ms, control_backend_ready_for_bus(bus), &safety_reason)) {
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
     service_steering_center_guard.reset();
+    service_hil_intent_runtime.reset(now_ms);
 #endif
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, safety_reason, bus, can_id_flags, dlc,
@@ -5372,6 +5451,31 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     data[0] = center.steering;
     data[7] = center.auxiliary;
   }
+  if (!service_hil_intent_runtime_ok) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected,
+                     ControlReasonSafetyLockout, bus, can_id_flags, dlc,
+                     host_can_tx_request_total);
+    return;
+  }
+  const csm::board::control::ServiceHilIntentResult normalized =
+      service_hil_intent_runtime.accept(now_ms, command_id, can_id, dlc, data);
+  if (!normalized.accepted) {
+    host_can_tx_rejected_total++;
+    const uint8_t reason =
+        normalized.decision ==
+                csm::board::authority::ControlDecisionCode::RejectedRateLimit
+            ? ControlReasonRateLimited
+            : ControlReasonUnsupportedFrame;
+    emit_control_ack(command_id, ControlAckRejected, reason, bus,
+                     can_id_flags, dlc, host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, reason,
+                     host_can_tx_rejected_total);
+    return;
+  }
+  can_id_flags = normalized.frame.can_id_flags;
+  dlc = normalized.frame.dlc;
+  memcpy(data, normalized.frame.data, sizeof(data));
 #endif
 
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
@@ -5427,7 +5531,8 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   const csm::board::can::BuiltinCanTxOutcome tx_outcome =
       submit_builtin_can_frame(
           bus, can_id_flags, dlc, data,
-          csm::board::can::BuiltinCanTxOrigin::HostControl, backend);
+          csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
+          command_id);
   if (!tx_outcome.fifoEnqueueAccepted()) {
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
     if (can_id == csm::board::control::kRemoteSteeringCanId) {
@@ -5496,13 +5601,23 @@ static void service_steering_center_timeout() {
 
   uint8_t data[8] = {};
   data[0] = steering;
+  const csm::board::control::ServiceHilIntentResult normalized =
+      service_hil_intent_runtime.accept(
+          now_ms, host_can_tx_request_total + 1U,
+          csm::board::control::kRemoteSteeringCanId, 8, data);
+  if (!normalized.accepted) {
+    service_steering_center_guard.reset();
+    return;
+  }
   csm::board::can::CanBackendState backend;
   backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
   const csm::board::can::BuiltinCanTxOutcome tx_outcome =
       submit_builtin_can_frame(
           BOARD_BUILTIN_CAN_BUS_ID,
-          csm::board::control::kRemoteSteeringCanId, 8, data,
-          csm::board::can::BuiltinCanTxOrigin::HostControl, backend);
+          normalized.frame.can_id_flags, normalized.frame.dlc,
+          normalized.frame.data,
+          csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
+          host_can_tx_request_total + 1U);
   if (!tx_outcome.fifoEnqueueAccepted()) {
     increment_builtin_can_counter(&builtin_can_tx_failed_total);
     builtin_can_tx_inhibit_latched = true;
@@ -5570,6 +5685,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
       safety_supervisor.disarm(millis());
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
       service_steering_center_guard.reset();
+      service_hil_intent_runtime.reset(millis());
 #endif
       break;
     case csm::HostControlArm:
@@ -6177,6 +6293,14 @@ void setup() {
 #endif
   } else {
     emit_board_event(EventRemoteControlInitFailed, 1, 1);
+  }
+#endif
+
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+  service_hil_intent_runtime_ok = service_hil_intent_runtime.begin(
+      millis(), BOARD_BUILTIN_CAN_BUS_ID, 0x4849u);
+  if (!service_hil_intent_runtime_ok) {
+    emit_board_event(EventRemoteControlInitFailed, 2, 1);
   }
 #endif
 

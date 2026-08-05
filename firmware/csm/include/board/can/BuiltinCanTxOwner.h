@@ -14,6 +14,7 @@ enum class BuiltinCanTxOrigin : uint8_t {
 };
 
 struct BuiltinCanTxFrame {
+  uint32_t command_id = 0;
   uint8_t bus = 0xFFu;
   uint32_t can_id_flags = 0;
   uint8_t dlc = 0;
