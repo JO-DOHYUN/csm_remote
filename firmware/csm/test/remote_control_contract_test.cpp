@@ -101,6 +101,7 @@ void builtinCanTxOwnerHasExplicitEnqueueOutcome() {
 
   BuiltinCanTxOutcome outcome = owner.submit(frame, backend, 0);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedNotConfigured);
+  CHECK(outcome.terminalFailure());
   CHECK(!outcome.driver_called);
 
   FakeBuiltinCanDriver driver;
@@ -111,9 +112,17 @@ void builtinCanTxOwnerHasExplicitEnqueueOutcome() {
   backend.ready = false;
   outcome = owner.submit(frame, backend, 0);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedBackend);
+  CHECK(outcome.terminalFailure());
   CHECK(driver.calls == 0);
 
   backend.ready = true;
+  backend.tx_busy = true;
+  outcome = owner.submit(frame, backend, 0);
+  CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedBackend);
+  CHECK(outcome.transientAdmissionFailure());
+  CHECK(driver.calls == 0);
+
+  backend.tx_busy = false;
   frame.bus = 0;
   outcome = owner.submit(frame, backend, 0);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedBus);
@@ -136,6 +145,7 @@ void builtinCanTxOwnerHasExplicitEnqueueOutcome() {
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::DriverRejected);
   CHECK(outcome.driver_called);
   CHECK(!outcome.fifoEnqueueAccepted());
+  CHECK(outcome.transientAdmissionFailure());
   CHECK(driver.calls == 1);
 
   driver.next_result = 1;
@@ -145,6 +155,7 @@ void builtinCanTxOwnerHasExplicitEnqueueOutcome() {
   CHECK(outcome.driver_called);
   CHECK(outcome.fifoEnqueueAccepted());
   CHECK(outcome.completion_tracked);
+  CHECK(!outcome.terminalFailure());
   CHECK(driver.calls == 2);
   CHECK(driver.last_frame.data[0] == 0xAA);
   CHECK(owner.activeJournalSlots() == 1);
@@ -163,8 +174,8 @@ void builtinCanTxOwnerHasExplicitEnqueueOutcome() {
   CHECK(completions.items[0].write_duration_us == 7);
 
   const BuiltinCanTxOwnerCounters& counters = owner.counters();
-  CHECK(counters.submissions == 6);
-  CHECK(counters.backend_rejects == 1);
+  CHECK(counters.submissions == 7);
+  CHECK(counters.backend_rejects == 2);
   CHECK(counters.contract_rejects == 3);
   CHECK(counters.driver_rejects == 1);
   CHECK(counters.fifo_enqueue_accepts == 1);
@@ -266,6 +277,7 @@ void builtinCanTxJournalCoversAllTerminalPaths() {
   driver.next_request_mask = 1;
   outcome = owner.submit(frame, backend, 100);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedJournalFull);
+  CHECK(outcome.transientAdmissionFailure());
   CHECK(!outcome.driver_called);
   CHECK(driver.calls == calls_before_full);
   CHECK(owner.activeJournalSlots() == 3);
@@ -287,6 +299,7 @@ void builtinCanTxJournalCoversAllTerminalPaths() {
   const uint32_t calls_before_tracking_reject = driver.calls;
   outcome = owner.submit(frame, backend, 121);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedTrackingFault);
+  CHECK(outcome.terminalFailure());
   CHECK(!outcome.driver_called);
   CHECK(!outcome.fifoEnqueueAccepted());
   CHECK(driver.calls == calls_before_tracking_reject);
@@ -497,6 +510,39 @@ void hostTransportEpochInvalidatesHeartbeatAndLease() {
   CHECK(supervisor.state() == SafetyState::Estop);
 }
 
+void serviceArmKeyIsDebouncedAndFailClosed() {
+  using namespace csm::board;
+  SafetySupervisor supervisor;
+  SafetySupervisorConfig config;
+  config.require_arm_key = true;
+  config.arm_key_debounce_ms = 20;
+  supervisor.begin(0, config);
+  SafetyInputs inputs;
+  inputs.field_power_ok = true;
+  inputs.control_backend_ready = true;
+  supervisor.update(0, inputs);
+  CHECK(supervisor.heartbeat(1) == csm::ControlReasonOk);
+  CHECK(supervisor.arm(1, 500, true) == csm::ControlReasonNotArmed);
+  inputs.arm_key = true;
+  supervisor.update(10, inputs);
+  CHECK(!supervisor.armKeyReady());
+  supervisor.update(29, inputs);
+  CHECK(!supervisor.armKeyReady());
+  supervisor.update(30, inputs);
+  CHECK(supervisor.armKeyReady());
+  CHECK(supervisor.arm(30, 500, true) == csm::ControlReasonOk);
+  uint8_t reason = csm::ControlReasonOk;
+  CHECK(supervisor.canAcceptTx(31, true, &reason));
+  CHECK(supervisor.renewLease(31, 500) == csm::ControlReasonOk);
+  inputs.arm_key = false;
+  supervisor.update(32, inputs);
+  CHECK(!supervisor.armKeyReady());
+  CHECK(!supervisor.canDriveTxGate());
+  CHECK(!supervisor.canAcceptTx(32, true, &reason));
+  CHECK(reason == csm::ControlReasonNotArmed);
+  CHECK(supervisor.renewLease(32, 500) == csm::ControlReasonNotArmed);
+}
+
 void packChannels(const uint16_t channels[16], uint8_t payload[22]) {
   std::memset(payload, 0, 22);
   uint32_t bit_offset = 0;
@@ -542,6 +588,7 @@ void crsfChannelsDecodeAndNormalize() {
   RcNormalizer normalizer;
   RcNormalizerConfig config;
   config.configured = true;
+  config.required_channel_mask = kRemoteRequiredRcChannelMask;
   CHECK(normalizer.configure(config));
   const RcNormalizeResult normalized =
       normalizer.normalizeCrsfChannels(100, 7, decoded, 96, 42, 0);
@@ -549,6 +596,20 @@ void crsfChannelsDecodeAndNormalize() {
   CHECK(normalized.sample.ch[1] == 1000);
   CHECK(normalized.sample.ch[3] == -1000);
   CHECK(normalized.sample.ch[0] == 0);
+
+  decoded.raw[15] = 0;
+  const RcNormalizeResult unused_out_of_range =
+      normalizer.normalizeCrsfChannels(101, 8, decoded, 96, 42, 0);
+  CHECK(unused_out_of_range.accepted);
+  CHECK(unused_out_of_range.sample.ch[15] == -1000);
+  decoded.raw[4] = 0;
+  CHECK(!normalizer.normalizeCrsfChannels(102, 9, decoded, 96, 42, 0)
+             .accepted);
+
+  RcNormalizer invalid_normalizer;
+  RcNormalizerConfig invalid_config;
+  invalid_config.configured = true;
+  CHECK(!invalid_normalizer.configure(invalid_config));
 
   bytes[length - 1u] ^= 0x01u;
   parseFrame(bytes, length, &parse_status);
@@ -709,6 +770,31 @@ void drivePayloadMatchesVehicleBenchGoldenFrames() {
   check(1000, forward_100);
   check(-800, reverse_80);
   check(-1000, reverse_100);
+
+  const control::VehicleCommandMapResult full_stop = mapper.mapSafetyStop(40);
+  CHECK(full_stop.mapped);
+  CHECK(full_stop.frame_count == 2);
+  CHECK(full_stop.frames[0].can_id_flags == control::kRemoteDriveCanId);
+  CHECK(full_stop.frames[1].can_id_flags == control::kRemoteSteeringCanId);
+  CHECK(full_stop.frames[1].data[0] == control::kRemoteSteeringCenter);
+  CHECK(full_stop.frames[1].data[7] == 0);
+
+  profile.mapping = control::VehicleCommandMapping::VehicleMdps0x007Only;
+  CHECK(mapper.configure(profile));
+  control::OperatorCommand mdps_command;
+  mdps_command.source = authority::ControlSourceId::Remote;
+  mdps_command.throttle_permille = 1000;
+  mdps_command.steer_permille = -1000;
+  const control::VehicleCommandMapResult mdps = mapper.map(mdps_command);
+  CHECK(mdps.mapped);
+  CHECK(mdps.frame_count == 1);
+  CHECK(mdps.frames[0].can_id_flags == control::kRemoteSteeringCanId);
+  const control::VehicleCommandMapResult mdps_stop = mapper.mapSafetyStop(41);
+  CHECK(mdps_stop.mapped);
+  CHECK(mdps_stop.frame_count == 1);
+  CHECK(mdps_stop.frames[0].can_id_flags == control::kRemoteSteeringCanId);
+  CHECK(mdps_stop.frames[0].data[0] == control::kRemoteSteeringCenter);
+  CHECK(mdps_stop.frames[0].data[7] == 0);
 }
 
 void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
@@ -1171,7 +1257,7 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   publish(0);
   drain(0, &drive_frames, &steering_frames);
   CHECK(drive_frames == 1);
-  CHECK(steering_frames == 0);
+  CHECK(steering_frames == 1);
   CHECK(runtime.status().handoff_qualified);
 
   sample.ch[1] = 1000;
@@ -1217,6 +1303,15 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
       {0xAA, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   CHECK(std::memcmp(immediate_stop.frame.data, expected_stop,
                     sizeof(expected_stop)) == 0);
+  runtime.noteCanTxEnqueueResult(42, true);
+  runtime.noteCanTxCompletion(42, true);
+  const auto immediate_steering_stop = runtime.service(42, inputs);
+  CHECK(immediate_steering_stop.frame_ready);
+  CHECK((immediate_steering_stop.frame.can_id_flags & 0x7FFu) ==
+        control::kRemoteSteeringCanId);
+  CHECK(immediate_steering_stop.frame.data[0] ==
+        control::kRemoteSteeringCenter);
+  CHECK(immediate_steering_stop.frame.data[7] == 0);
   runtime.noteCanTxEnqueueResult(42, true);
   runtime.noteCanTxCompletion(42, true);
   CHECK(!runtime.service(42, inputs).frame_ready);
@@ -1317,6 +1412,11 @@ void runtimeImmediateStopRespectsSafetyAndWraparound() {
         m4_boot_id, ++heartbeat, mailbox, diagnostics));
     CHECK(exactStop(runtime.service(0, inputs)));
     runtime.noteCanTxEnqueueResult(0, true);
+    const auto initial_steering_stop = runtime.service(0, inputs);
+    CHECK(initial_steering_stop.frame_ready);
+    CHECK((initial_steering_stop.frame.can_id_flags & 0x7FFu) ==
+          control::kRemoteSteeringCanId);
+    runtime.noteCanTxEnqueueResult(0, true);
 
     sample.sample_state = remote::RcSampleState::Stale;
     ++sample.seq;
@@ -1353,6 +1453,11 @@ void runtimeImmediateStopRespectsSafetyAndWraparound() {
         m4_boot_id, ++heartbeat, mailbox, diagnostics));
     CHECK(exactStop(runtime.service(phase_ms, inputs)));
     runtime.noteCanTxEnqueueResult(phase_ms, true);
+    const auto initial_steering_stop = runtime.service(phase_ms, inputs);
+    CHECK(initial_steering_stop.frame_ready);
+    CHECK((initial_steering_stop.frame.can_id_flags & 0x7FFu) ==
+          control::kRemoteSteeringCanId);
+    runtime.noteCanTxEnqueueResult(phase_ms, true);
 
     sample.sample_state = remote::RcSampleState::Stale;
     ++sample.seq;
@@ -1361,6 +1466,11 @@ void runtimeImmediateStopRespectsSafetyAndWraparound() {
     CHECK(remote::publishRemoteSharedSample(
         m4_boot_id, ++heartbeat, mailbox, diagnostics));
     CHECK(exactStop(runtime.service(UINT32_MAX, inputs)));
+    runtime.noteCanTxEnqueueResult(UINT32_MAX, true);
+    const auto wrapped_steering_stop = runtime.service(UINT32_MAX, inputs);
+    CHECK(wrapped_steering_stop.frame_ready);
+    CHECK((wrapped_steering_stop.frame.can_id_flags & 0x7FFu) ==
+          control::kRemoteSteeringCanId);
     runtime.noteCanTxEnqueueResult(UINT32_MAX, true);
     CHECK(!runtime.service(1, inputs).frame_ready);
     CHECK(exactStop(runtime.service(6, inputs)));
@@ -1471,10 +1581,9 @@ void runtimeHandoffLossAndFaultPolicy() {
     return emitted_frames;
   };
 
-  // Until RC is qualified, the released bench emits only the explicit 0x005
-  // stop contract at 200 Hz. Qualification at the absolute 500 ms steering
-  // phase releases both the 0x005 and 0x007 slots.
-  CHECK(serviceRange(0, 499, true) == 100);
+  // Until RC is qualified, drive neutral is released at 200 Hz and steering
+  // neutral at its independent 50 Hz phase.
+  CHECK(serviceRange(0, 499, true) == 125);
   CHECK(serviceRange(500, 500, true) == 2);
   CHECK(runtime.status().frontend_alive);
   CHECK(runtime.status().remote_reserved);
@@ -1563,6 +1672,7 @@ int main() {
   builtinCanDuplicateMaskLatchesTrackingFault();
   builtinCanCancelFailureAndIdentityWrapFailClosed();
   hostTransportEpochInvalidatesHeartbeatAndLease();
+  serviceArmKeyIsDebouncedAndFailClosed();
   crsfChannelsDecodeAndNormalize();
   upstreamAutonomyPrecedesRemoteReservation();
   frozenMailboxCannotRemainFresh();

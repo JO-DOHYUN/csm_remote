@@ -9,9 +9,11 @@
 
 using csm::board::feeder::FeederCanFrame;
 using csm::board::feeder::FeederStatus;
+using csm::board::feeder::FeederDmaErrorEvent;
 using csm::board::feeder::FeederWireDecoder;
 using csm::board::feeder::feederSourceHealthy;
 using csm::board::feeder::reconcileFeederDmaCursor;
+using csm::board::feeder::saturatingFeederCounterAdd;
 
 namespace {
 
@@ -335,6 +337,19 @@ void feeder_source_health_is_fail_closed_for_loss_and_mcp_faults() {
   CHECK(!feederSourceHealthy(status));
 }
 
+void dma_error_isr_handoff_is_atomic_and_main_owned() {
+  FeederDmaErrorEvent event;
+  event.publishFromIsr();
+  event.publishFromIsr();
+  event.publishFromIsr();
+  CHECK(event.consume() == 3U);
+  CHECK(event.consume() == 0U);
+  event.publishFromIsr();
+  event.reset();
+  CHECK(event.consume() == 0U);
+  CHECK(saturatingFeederCounterAdd(UINT32_MAX - 1U, 8U) == UINT32_MAX);
+}
+
 void corruption_does_not_publish_or_advance_sequence() {
   Capture capture;
   FeederWireDecoder decoder;
@@ -362,6 +377,7 @@ int main() {
   boot_change_invalidates_prior_status_epoch();
   dma_cursor_reconciles_only_one_pending_wrap();
   feeder_source_health_is_fail_closed_for_loss_and_mcp_faults();
+  dma_error_isr_handoff_is_atomic_and_main_owned();
   corruption_does_not_publish_or_advance_sequence();
   if (failures != 0) {
     std::fprintf(stderr, "feeder wire contract failures=%d\n", failures);

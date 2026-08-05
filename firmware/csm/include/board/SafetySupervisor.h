@@ -23,9 +23,15 @@ struct SafetyInputs {
   bool control_backend_ready = false;
 };
 
+struct SafetySupervisorConfig {
+  bool require_arm_key = false;
+  uint16_t arm_key_debounce_ms = 50;
+};
+
 class SafetySupervisor {
  public:
-  void begin(uint32_t now_ms);
+  void begin(uint32_t now_ms,
+             const SafetySupervisorConfig& config = SafetySupervisorConfig{});
   void update(uint32_t now_ms, const SafetyInputs& inputs);
 
   uint8_t heartbeat(uint32_t now_ms);
@@ -51,6 +57,8 @@ class SafetySupervisor {
   uint32_t leaseRemainingMs(uint32_t now_ms) const;
   uint32_t transitionCounter() const { return transition_counter_; }
   uint8_t faultBits() const;
+  bool armKeyRequired() const { return arm_key_required_; }
+  bool armKeyReady() const { return arm_key_ready_; }
 
  private:
   void setState(SafetyState state);
@@ -66,6 +74,11 @@ class SafetySupervisor {
   uint32_t lease_until_ms_ = 0;
   uint32_t last_control_tx_ms_ = 0;
   uint32_t transition_counter_ = 0;
+  bool arm_key_required_ = false;
+  bool arm_key_ready_ = true;
+  bool arm_key_high_seen_ = false;
+  uint16_t arm_key_debounce_ms_ = 50;
+  uint32_t arm_key_high_since_ms_ = 0;
 };
 
 }  // namespace csm::board

@@ -4209,7 +4209,7 @@ static void init_safety_pins() {
   digitalWrite(BoardPins::SafetyWatchdogToggle, LOW);
 
   pinMode(BoardPins::EstopInN, INPUT_PULLUP);
-  pinMode(BoardPins::ArmKeyIn, INPUT);
+  pinMode(BoardPins::ArmKeyIn, INPUT_PULLDOWN);
   pinMode(BoardPins::FieldPowerOk, INPUT_PULLUP);
   pinMode(BoardPins::EncoderFaultN, INPUT_PULLUP);
   pinMode(BoardPins::SpareServiceGpio, INPUT);
@@ -4423,9 +4423,12 @@ static void service_remote_control() {
     const bool success = tx_outcome.fifoEnqueueAccepted();
     if (!success) {
       increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    }
+    remote_control_runtime.noteCanTxEnqueueResult(
+        now_ms, success, tx_outcome.terminalFailure());
+    if (remote_control_runtime.status().can_tx_inhibit_latched) {
       builtin_can_tx_inhibit_latched = true;
     }
-    remote_control_runtime.noteCanTxEnqueueResult(now_ms, success);
     if (!success) break;
   }
 
@@ -5432,9 +5435,17 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     }
 #endif
     increment_builtin_can_counter(&builtin_can_tx_failed_total);
-    builtin_can_tx_inhibit_latched = true;
+    if (tx_outcome.terminalFailure()) {
+      builtin_can_tx_inhibit_latched = true;
+    }
     host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonCanWriteFailed, bus, can_id_flags, dlc,
+    const uint8_t reject_reason = tx_outcome.transientAdmissionFailure()
+        ? (tx_outcome.code == csm::board::can::BuiltinCanTxOutcomeCode::
+                                   RejectedJournalFull
+               ? ControlReasonQueueFull
+               : ControlReasonTxBusy)
+        : ControlReasonCanWriteFailed;
+    emit_control_ack(command_id, ControlAckRejected, reject_reason, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
     emit_board_event(
         EventBuiltinCanTxFailed,
@@ -6029,7 +6040,9 @@ void setup() {
   }
 #endif
 
-  safety_supervisor.begin(millis());
+  csm::board::SafetySupervisorConfig safety_config;
+  safety_config.require_arm_key = BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS != 0;
+  safety_supervisor.begin(millis(), safety_config);
   safety_state = safety_supervisor.state();
   voltage_adc_ok = init_voltage_adc_lane();
 
@@ -6122,9 +6135,15 @@ void setup() {
   remote_config.configured = true;
   remote_config.local_can_tx_enabled =
       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED != 0;
-  remote_config.mapping = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
-      ? csm::board::control::VehicleCommandMapping::Vehicle0x005And0x007
-      : csm::board::control::VehicleCommandMapping::None;
+#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING
+  remote_config.mapping =
+      csm::board::control::VehicleCommandMapping::Vehicle0x005And0x007;
+#elif BOARD_ENABLE_MDPS_BENCH_MAPPING
+  remote_config.mapping =
+      csm::board::control::VehicleCommandMapping::VehicleMdps0x007Only;
+#else
+  remote_config.mapping = csm::board::control::VehicleCommandMapping::None;
+#endif
   remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
   remote_config.policy_id = 0x5243u;
   remote_config.cycle_period_ms = 5;

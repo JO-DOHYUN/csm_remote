@@ -181,6 +181,13 @@ owner_header = (
 ).read_text(encoding="utf-8")
 if "bool failure_previously_reported = false;" not in owner_header:
     fail("completion failure identity metadata missing")
+for required in (
+    "BuiltinCanTxDisposition::TransientRejected",
+    "bool transientAdmissionFailure() const",
+    "bool terminalFailure() const",
+):
+    if required not in owner_header + owner_source:
+        fail(f"CAN admission outcome classification missing {required}")
 if "slot->failure_reported = true;" not in owner_source:
     fail("owner must remember the first reported failure")
 
@@ -206,6 +213,8 @@ if "noteDriveDispatch(" not in (
     fail("asynchronous safety stop must participate in drive release spacing")
 enqueue_begin = runtime_source.find("void RemoteControlRuntime::noteCanTxEnqueueResult(")
 enqueue_end = runtime_source.find("\n}", enqueue_begin)
+if "terminal_failure || safety_neutral" not in runtime_source[enqueue_begin:enqueue_end]:
+    fail("runtime must latch transient admission failure only for safety neutral")
 if "can_tx_success" in runtime_source[enqueue_begin:enqueue_end]:
     fail("FIFO enqueue must not increment CAN TX success")
 completion_runtime_begin = runtime_source.find(
@@ -276,5 +285,33 @@ for required in (
         fail(f"bounded Service/HIL steering overlay missing {required}")
 if "if (command.auxiliary_permille != 0) {\n    frame.data[7]" not in mapper_source:
     fail("RC auxiliary is not an overlay on the mapped steering command")
+
+for required in (
+    "VehicleMdps0x007Only",
+    "result.frames[result.frame_count++] = makeSteeringFrame(command, profile_);",
+    "mapSafetyStop(cycle_sequence_)",
+):
+    if required not in mapper_header + mapper_source + runtime_source + main:
+        fail(f"profile-scoped neutral/mapping contract missing {required}")
+
+safety_header = (root / "include" / "board" / "SafetySupervisor.h").read_text(encoding="utf-8")
+safety_source = (root / "src" / "board" / "SafetySupervisor.cpp").read_text(encoding="utf-8")
+for required in (
+    "require_arm_key",
+    "arm_key_debounce_ms",
+    "if (!arm_key_ready_)",
+    "safety_config.require_arm_key = BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS != 0;",
+):
+    if required not in safety_header + safety_source + main:
+        fail(f"Service/HIL ArmKey interlock missing {required}")
+
+feeder_header = (root / "include" / "board" / "feeder" / "FeederUartIngress.h").read_text(encoding="utf-8")
+feeder_source = (root / "src" / "board" / "feeder" / "FeederUartIngress.cpp").read_text(encoding="utf-8")
+if "std::atomic<uint32_t> pending_" not in feeder_header:
+    fail("Feeder DMA ISR error event must be atomic")
+note_error = feeder_source[feeder_source.find("void FeederUartIngress::noteDmaError") :]
+note_error = note_error[: note_error.find("\n}")]
+if "publishFromIsr()" not in note_error or "ingress_stats_" in note_error:
+    fail("Feeder DMA ISR must publish only an event; main owns stats")
 
 print("Control execution guard passed.")

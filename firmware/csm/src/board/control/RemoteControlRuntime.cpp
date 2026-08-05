@@ -106,6 +106,9 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
     gateway.allowlist_count = 2;
     gateway.allowlist_ids[0] = kRemoteDriveCanId;
     gateway.allowlist_ids[1] = kRemoteSteeringCanId;
+  } else if (config.mapping == VehicleCommandMapping::VehicleMdps0x007Only) {
+    gateway.allowlist_count = 1;
+    gateway.allowlist_ids[0] = kRemoteSteeringCanId;
   }
   if (!can_tx_gateway_.configure(gateway)) return false;
 
@@ -180,7 +183,7 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
   // stop in this service call when the periodic lane is not already releasing.
   // The periodic phase remains absolute; only the adjacent slot is suppressed.
   if (immediate_stop_pending_ && !releases.drive.due &&
-      scheduleSafetyStop(now_ms, inputs)) {
+      scheduleSafetyStop(now_ms, inputs, true)) {
     immediate_stop_pending_ = false;
     require_silent_cycle_ = false;
     release_schedule_.noteDriveDispatch(now_ms);
@@ -205,7 +208,8 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
 }
 
 void RemoteControlRuntime::noteCanTxEnqueueResult(uint32_t now_ms,
-                                                  bool accepted) {
+                                                  bool accepted,
+                                                  bool terminal_failure) {
   if (pending_frame_index_ >= pending_frame_count_) return;
   if (accepted) {
     ++pending_frame_index_;
@@ -218,7 +222,14 @@ void RemoteControlRuntime::noteCanTxEnqueueResult(uint32_t now_ms,
 
   saturatingAdd(1u, &status_.can_tx_failed);
   saturatingAdd(1u, &status_.cycle_deadline_misses);
-  latchCanTxInhibit(now_ms);
+  const bool safety_neutral =
+      pending_frames_[pending_frame_index_].source ==
+      authority::ControlSourceId::SafetyNeutral;
+  if (terminal_failure || safety_neutral) {
+    latchCanTxInhibit(now_ms);
+  } else {
+    requestImmediateSilence(now_ms);
+  }
 }
 
 void RemoteControlRuntime::noteCanTxCompletion(uint32_t now_ms,
@@ -326,7 +337,8 @@ void RemoteControlRuntime::beginCycle(
 
   cycle_sequence_ = drive_release_sequence;
   if (require_silent_cycle_) {
-    if (scheduleSafetyStop(now_ms, inputs)) {
+    if (scheduleSafetyStop(now_ms, inputs,
+                           immediate_stop_pending_ || steering_release_due)) {
       require_silent_cycle_ = false;
       immediate_stop_pending_ = false;
     }
@@ -372,7 +384,7 @@ void RemoteControlRuntime::beginCycle(
       return;
     }
   }
-  scheduleSafetyStop(now_ms, inputs);
+  scheduleSafetyStop(now_ms, inputs, steering_release_due);
 }
 
 bool RemoteControlRuntime::scheduleMappedFrames(
@@ -397,13 +409,25 @@ bool RemoteControlRuntime::scheduleMappedFrames(
 }
 
 bool RemoteControlRuntime::scheduleSafetyStop(
-    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs) {
+    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs,
+    bool steering_release_due) {
   if (inputs.local_tx_inhibit_latched || status_.can_tx_inhibit_latched ||
       inputs.autonomy_state != authority::AutonomyAuthorityState::InactiveConfirmed) {
     return false;
   }
-  const VehicleCommandMapResult mapped =
+  VehicleCommandMapResult mapped =
       vehicle_mapper_.mapSafetyStop(cycle_sequence_);
+  if (!steering_release_due && mapped.mapped) {
+    uint8_t retained = 0;
+    for (uint8_t i = 0; i < mapped.frame_count; ++i) {
+      if ((mapped.frames[i].can_id_flags & 0x7FFu) == kRemoteSteeringCanId) {
+        continue;
+      }
+      mapped.frames[retained++] = mapped.frames[i];
+    }
+    mapped.frame_count = retained;
+    mapped.mapped = retained != 0;
+  }
   CanTxGatewayInputs gateway_inputs;
   gateway_inputs.authority_decision.code = authority::ControlDecisionCode::Accepted;
   gateway_inputs.authority_decision.source = authority::ControlSourceId::SafetyNeutral;

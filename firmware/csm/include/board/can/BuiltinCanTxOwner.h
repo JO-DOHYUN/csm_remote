@@ -33,6 +33,12 @@ enum class BuiltinCanTxOutcomeCode : uint8_t {
   FifoEnqueueUntracked = 8,
 };
 
+enum class BuiltinCanTxDisposition : uint8_t {
+  TerminalRejected = 0,
+  TransientRejected = 1,
+  Accepted = 2,
+};
+
 struct BuiltinCanTxOutcome {
   BuiltinCanTxOutcomeCode code =
       BuiltinCanTxOutcomeCode::RejectedNotConfigured;
@@ -41,8 +47,16 @@ struct BuiltinCanTxOutcome {
   bool driver_called = false;
   bool fifo_enqueue_accepted = false;
   bool completion_tracked = false;
+  BuiltinCanTxDisposition disposition =
+      BuiltinCanTxDisposition::TerminalRejected;
 
   bool fifoEnqueueAccepted() const { return fifo_enqueue_accepted; }
+  bool transientAdmissionFailure() const {
+    return disposition == BuiltinCanTxDisposition::TransientRejected;
+  }
+  bool terminalFailure() const {
+    return disposition == BuiltinCanTxDisposition::TerminalRejected;
+  }
 };
 
 struct BuiltinCanTxOwnerCounters {

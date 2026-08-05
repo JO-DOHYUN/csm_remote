@@ -11,6 +11,7 @@ constexpr uint32_t kHardwareTxSlotMask = 0x07u;
 
 BuiltinCanTxOutcome makeOutcome(BuiltinCanTxOutcomeCode code,
                                 uint32_t submission_sequence,
+                                BuiltinCanTxDisposition disposition,
                                 bool driver_called = false,
                                 int32_t driver_result = 0,
                                 bool fifo_enqueue_accepted = false,
@@ -22,6 +23,7 @@ BuiltinCanTxOutcome makeOutcome(BuiltinCanTxOutcomeCode code,
   outcome.driver_result = driver_result;
   outcome.fifo_enqueue_accepted = fifo_enqueue_accepted;
   outcome.completion_tracked = completion_tracked;
+  outcome.disposition = disposition;
   return outcome;
 }
 
@@ -73,30 +75,38 @@ BuiltinCanTxOutcome BuiltinCanTxOwner::submit(
   if (!configured_) {
     increment(&counters_.contract_rejects);
     return makeOutcome(BuiltinCanTxOutcomeCode::RejectedNotConfigured,
-                       sequence);
+                       sequence, BuiltinCanTxDisposition::TerminalRejected);
   }
   if (tracking_fault_latched_) {
     increment(&counters_.tracking_fault_rejects);
     return makeOutcome(BuiltinCanTxOutcomeCode::RejectedTrackingFault,
-                       sequence);
+                       sequence, BuiltinCanTxDisposition::TerminalRejected);
   }
-  if (!backend.ready || backend.bus_off || backend.error_passive ||
-      backend.tx_busy) {
+  if (!backend.ready || backend.bus_off || backend.error_passive) {
     increment(&counters_.backend_rejects);
-    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedBackend, sequence);
+    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedBackend, sequence,
+                       BuiltinCanTxDisposition::TerminalRejected);
+  }
+  if (backend.tx_busy) {
+    increment(&counters_.backend_rejects);
+    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedBackend, sequence,
+                       BuiltinCanTxDisposition::TransientRejected);
   }
   if (frame.bus != owned_bus_) {
     increment(&counters_.contract_rejects);
-    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedBus, sequence);
+    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedBus, sequence,
+                       BuiltinCanTxDisposition::TerminalRejected);
   }
   if (!validFrame(frame)) {
     increment(&counters_.contract_rejects);
-    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedFrame, sequence);
+    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedFrame, sequence,
+                       BuiltinCanTxDisposition::TerminalRejected);
   }
   JournalSlot* const journal_slot = freeJournalSlot();
   if (journal_slot == nullptr) {
     increment(&counters_.journal_full_rejects);
-    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedJournalFull, sequence);
+    return makeOutcome(BuiltinCanTxOutcomeCode::RejectedJournalFull, sequence,
+                       BuiltinCanTxDisposition::TransientRejected);
   }
 
   const BuiltinCanTxDriverResult write_result =
@@ -104,7 +114,8 @@ BuiltinCanTxOutcome BuiltinCanTxOwner::submit(
   if (write_result.driver_result <= 0) {
     increment(&counters_.driver_rejects);
     return makeOutcome(BuiltinCanTxOutcomeCode::DriverRejected, sequence,
-                       true, write_result.driver_result);
+                       BuiltinCanTxDisposition::TransientRejected, true,
+                       write_result.driver_result);
   }
   increment(&counters_.fifo_enqueue_accepts);
   if (!validRequestMask(write_result.request_mask) ||
@@ -118,7 +129,8 @@ BuiltinCanTxOutcome BuiltinCanTxOwner::submit(
                     write_result.driver_result, 0,
                     write_result.write_duration_us);
     return makeOutcome(BuiltinCanTxOutcomeCode::FifoEnqueueUntracked, sequence,
-                       true, write_result.driver_result, true, false);
+                       BuiltinCanTxDisposition::TerminalRejected, true,
+                       write_result.driver_result, true, false);
   }
 
   journal_slot->active = true;
@@ -134,7 +146,8 @@ BuiltinCanTxOutcome BuiltinCanTxOwner::submit(
   journal_slot->identity_compromised = false;
   journal_slot->frame = frame;
   return makeOutcome(BuiltinCanTxOutcomeCode::FifoEnqueueTracked, sequence,
-                     true, write_result.driver_result, true, true);
+                     BuiltinCanTxDisposition::Accepted, true,
+                     write_result.driver_result, true, true);
 }
 
 void BuiltinCanTxOwner::serviceCompletions(

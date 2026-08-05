@@ -77,6 +77,7 @@ RcNormalizeResult RcNormalizer::normalizeCrsfChannels(uint32_t now_ms,
 
 bool RcNormalizer::isValidConfig(const RcNormalizerConfig& config) {
   return config.configured &&
+         config.required_channel_mask != 0 &&
          config.raw_min < config.raw_mid &&
          config.raw_mid < config.raw_max &&
          config.raw_max <= kCrsfRawChannelMax &&
@@ -86,7 +87,9 @@ bool RcNormalizer::isValidConfig(const RcNormalizerConfig& config) {
 
 bool RcNormalizer::isWithinRawRange(const CrsfRcChannels& channels) const {
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
-    if (channels.raw[i] < config_.raw_min || channels.raw[i] > config_.raw_max) {
+    if ((config_.required_channel_mask & (1u << i)) != 0 &&
+        (channels.raw[i] < config_.raw_min ||
+         channels.raw[i] > config_.raw_max)) {
       return false;
     }
   }

@@ -19,6 +19,7 @@ bool runM4RemoteFrontendBuildProof() {
   RcNormalizer normalizer;
   RcNormalizerConfig config;
   config.configured = true;
+  config.required_channel_mask = kRemoteRequiredRcChannelMask;
   if (!normalizer.configure(config)) {
     return false;
   }

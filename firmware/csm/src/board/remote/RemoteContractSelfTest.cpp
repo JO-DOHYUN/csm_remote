@@ -170,6 +170,7 @@ RemoteContractSelfTestResult runRemoteContractSelfTest() {
   RcNormalizer normalizer;
   RcNormalizerConfig config;
   config.configured = true;
+  config.required_channel_mask = kRemoteRequiredRcChannelMask;
   if (!normalizer.configure(config)) {
     return fail(RemoteContractSelfTestDetail::NormalizeRejected,
                 parse_result.malformed_total);

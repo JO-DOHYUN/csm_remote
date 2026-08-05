@@ -161,6 +161,8 @@ void handleFrame(uint32_t now_ms,
 void setup() {
   RcNormalizerConfig config;
   config.configured = true;
+  config.required_channel_mask =
+      csm::board::remote::kRemoteRequiredRcChannelMask;
   g_normalizer.configure(config);
   g_parser.reset();
   g_mailbox_writer.reset();

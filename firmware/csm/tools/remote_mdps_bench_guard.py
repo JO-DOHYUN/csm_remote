@@ -73,8 +73,18 @@ for item in (
     "AutonomyAuthorityState::InactiveConfirmed;",
     "inputs.local_tx_inhibit_latched = true;",
     "AutonomyAuthorityState::Unknown;",
+    "VehicleCommandMapping::VehicleMdps0x007Only",
 ):
     if item not in main_source:
         fail(f"main wiring missing {item}")
+
+mapper_source = (root / "src" / "board" / "control" / "VehicleCommandMapper.cpp").read_text(encoding="utf-8")
+for item in (
+    "case VehicleCommandMapping::VehicleMdps0x007Only:",
+    "profile_.mapping == VehicleCommandMapping::Vehicle0x005And0x007",
+    "makeSteeringFrame(command, profile_)",
+):
+    if item not in mapper_source:
+        fail(f"MDPS mapper contract missing {item}")
 
 print("Remote MDPS bench profile guard passed.")

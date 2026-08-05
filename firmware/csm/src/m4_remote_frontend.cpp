@@ -224,6 +224,7 @@ void serviceTelemetry(uint32_t now_ms) {
 void setup() {
   RcNormalizerConfig config;
   config.configured = true;
+  config.required_channel_mask = kRemoteRequiredRcChannelMask;
   normalizer.configure(config);
   parser.reset();
   mailbox_writer.reset();

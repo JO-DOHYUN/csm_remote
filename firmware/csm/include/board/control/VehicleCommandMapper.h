@@ -57,6 +57,7 @@ class ServiceSteeringCenterGuard {
 enum class VehicleCommandMapping : uint8_t {
   None = 0,
   Vehicle0x005And0x007 = 1,
+  VehicleMdps0x007Only = 2,
   // Wire-compatible legacy spelling retained for qualified bench artifacts.
   VehicleBench0x005And0x007 = Vehicle0x005And0x007,
 };

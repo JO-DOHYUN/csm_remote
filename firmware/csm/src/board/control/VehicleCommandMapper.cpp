@@ -184,6 +184,13 @@ VehicleCommandMapResult VehicleCommandMapper::map(const OperatorCommand& command
       result.detail = 0;
       return result;
     }
+    case VehicleCommandMapping::VehicleMdps0x007Only: {
+      result.frames[result.frame_count++] = makeSteeringFrame(command, profile_);
+      result.mapped = true;
+      result.decision = authority::ControlDecisionCode::Accepted;
+      result.detail = 0;
+      return result;
+    }
     case VehicleCommandMapping::None:
     default:
       result.decision = authority::ControlDecisionCode::RejectedFramePolicy;
@@ -196,7 +203,8 @@ VehicleCommandMapResult VehicleCommandMapper::mapSafetyStop(
     uint32_t command_seq) const {
   VehicleCommandMapResult result;
   if (!profile_.configured || !profile_.output_enabled ||
-      profile_.mapping != VehicleCommandMapping::Vehicle0x005And0x007) {
+      (profile_.mapping != VehicleCommandMapping::Vehicle0x005And0x007 &&
+       profile_.mapping != VehicleCommandMapping::VehicleMdps0x007Only)) {
     result.decision = authority::ControlDecisionCode::RejectedFramePolicy;
     result.detail = kDetailProfileNotConfigured;
     return result;
@@ -204,7 +212,10 @@ VehicleCommandMapResult VehicleCommandMapper::mapSafetyStop(
   OperatorCommand command;
   command.source = authority::ControlSourceId::SafetyNeutral;
   command.command_seq = command_seq;
-  result.frames[result.frame_count++] = makeDriveFrame(command, profile_);
+  if (profile_.mapping == VehicleCommandMapping::Vehicle0x005And0x007) {
+    result.frames[result.frame_count++] = makeDriveFrame(command, profile_);
+  }
+  result.frames[result.frame_count++] = makeSteeringFrame(command, profile_);
   result.mapped = true;
   result.decision = authority::ControlDecisionCode::Accepted;
   return result;
@@ -215,7 +226,8 @@ bool VehicleCommandMapper::isValidProfile(const VehicleCommandProfile& profile) 
     return false;
   }
   if (profile.mapping != VehicleCommandMapping::None &&
-      profile.mapping != VehicleCommandMapping::Vehicle0x005And0x007) {
+      profile.mapping != VehicleCommandMapping::Vehicle0x005And0x007 &&
+      profile.mapping != VehicleCommandMapping::VehicleMdps0x007Only) {
     return false;
   }
   return profile.throttle_limit_permille >= 0 &&

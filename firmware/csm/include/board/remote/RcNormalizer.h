@@ -10,6 +10,8 @@ namespace csm::board::remote {
 static constexpr uint16_t kCrsfRawDefaultMin = 172;
 static constexpr uint16_t kCrsfRawDefaultMid = 992;
 static constexpr uint16_t kCrsfRawDefaultMax = 1811;
+static constexpr uint16_t kRemoteRequiredRcChannelMask =
+    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 9) | (1u << 10);
 
 enum class RcNormalizeRejectDetail : uint16_t {
   None = 0,
@@ -25,6 +27,7 @@ struct RcNormalizerConfig {
   uint16_t raw_mid = kCrsfRawDefaultMid;
   uint16_t raw_max = kCrsfRawDefaultMax;
   int16_t deadband_permille = 0;
+  uint16_t required_channel_mask = 0;
 };
 
 struct RcNormalizeResult {

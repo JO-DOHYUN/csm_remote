@@ -110,6 +110,7 @@ def main():
             "decodeCrsfRcChannelsPacked",
             "normalizeCrsfChannels",
             "publishSample",
+            "kRemoteRequiredRcChannelMask",
         ]
         for pattern in required_patterns:
             if pattern not in probe_text:
@@ -141,6 +142,13 @@ def main():
         hits = _contains_any(probe_text, forbidden_patterns)
         if hits:
             errors.append(f"src/{PROBE_SOURCE}: forbidden pattern found: {', '.join(hits)}")
+
+    normalizer_header = _read(csm_root / "include" / "board" / "remote" / "RcNormalizer.h")
+    normalizer_source = _read(csm_root / "src" / "board" / "remote" / "RcNormalizer.cpp")
+    if "required_channel_mask" not in normalizer_header:
+        errors.append("RcNormalizerConfig missing profile required-channel mask")
+    if "config_.required_channel_mask & (1u << i)" not in normalizer_source:
+        errors.append("RcNormalizer must range-check only required profile channels")
 
     if errors:
         print("Remote Phase 2B guard failed:")

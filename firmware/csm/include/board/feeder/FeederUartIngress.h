@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -33,6 +34,32 @@ struct FeederDmaCursorResult {
   uint64_t produced_total = 0;
   bool valid = false;
   bool reconciled_pending_wrap = false;
+};
+
+constexpr uint32_t saturatingFeederCounterAdd(uint32_t value,
+                                               uint32_t increment) {
+  return increment > UINT32_MAX - value ? UINT32_MAX : value + increment;
+}
+
+class FeederDmaErrorEvent {
+ public:
+  void reset() { pending_.store(0, std::memory_order_relaxed); }
+
+  void publishFromIsr() {
+    uint32_t observed = pending_.load(std::memory_order_relaxed);
+    while (observed != UINT32_MAX &&
+           !pending_.compare_exchange_weak(observed, observed + 1U,
+                                           std::memory_order_release,
+                                           std::memory_order_relaxed)) {
+    }
+  }
+
+  uint32_t consume() {
+    return pending_.exchange(0, std::memory_order_acquire);
+  }
+
+ private:
+  std::atomic<uint32_t> pending_{0};
 };
 
 // DMA circular mode reloads NDTR before the transfer-complete callback updates
@@ -87,7 +114,7 @@ class FeederUartIngress {
 
  private:
   bool initialized_ = false;
-  bool restart_pending_ = false;
+  FeederDmaErrorEvent dma_error_events_;
   uint32_t stale_timeout_ms_ = 250;
   uint32_t service_time_budget_us_ = 750;
   uint64_t consumed_total_ = 0;

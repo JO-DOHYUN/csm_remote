@@ -52,6 +52,7 @@ bool FeederUartIngress::begin(const FeederUartIngressConfig& config) {
   service_time_budget_us_ = config.service_time_budget_us;
   consumed_total_ = 0;
   ingress_stats_ = {};
+  dma_error_events_.reset();
   decoder_.begin(nullptr, nullptr);
 
   // Mid Carrier J14 RX2 is Portenta HD SERIAL2_RX on PG9/USART6_RX.
@@ -206,8 +207,10 @@ void FeederUartIngress::service(size_t byte_budget,
   ++ingress_stats_.service_calls;
   pollUartErrors();
 
-  if (restart_pending_) {
-    restart_pending_ = false;
+  const uint32_t dma_error_events = dma_error_events_.consume();
+  if (dma_error_events != 0U) {
+    ingress_stats_.dma_transfer_errors = saturatingFeederCounterAdd(
+        ingress_stats_.dma_transfer_errors, dma_error_events);
     HAL_UART_DMAStop(&g_uart);
     decoder_.resetFraming();
     if (startDma()) {
@@ -294,8 +297,7 @@ void FeederUartIngress::handleDmaIrq() { HAL_DMA_IRQHandler(&g_dma); }
 void FeederUartIngress::noteDmaComplete() { ++g_dma_wraps; }
 
 void FeederUartIngress::noteDmaError() {
-  ++ingress_stats_.dma_transfer_errors;
-  restart_pending_ = true;
+  dma_error_events_.publishFromIsr();
 }
 
 }  // namespace csm::board::feeder

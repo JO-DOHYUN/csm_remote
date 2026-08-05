@@ -98,7 +98,8 @@ class RemoteControlRuntime {
                                      const RemoteControlRuntimeInputs& inputs);
   // FIFO enqueue acceptance advances the bounded frame batch, but it is not
   // physical CAN transmission evidence.
-  void noteCanTxEnqueueResult(uint32_t now_ms, bool accepted);
+  void noteCanTxEnqueueResult(uint32_t now_ms, bool accepted,
+                              bool terminal_failure = true);
   // Only the built-in CAN owner's hardware completion journal calls this.
   void noteCanTxCompletion(uint32_t now_ms, bool transmitted);
   // A deliberate, disarmed Service/HIL ARM retry may clear a terminal CAN
@@ -122,7 +123,8 @@ class RemoteControlRuntime {
                             const VehicleCommandMapResult& mapped,
                             const CanTxGatewayInputs& gateway_inputs);
   bool scheduleSafetyStop(uint32_t now_ms,
-                          const RemoteControlRuntimeInputs& inputs);
+                          const RemoteControlRuntimeInputs& inputs,
+                          bool steering_release_due);
   void latchCanTxInhibit(uint32_t now_ms);
   void publishTelemetry(uint32_t now_ms);
   bool isNeutralSample(const remote::M4RemoteMailboxSnapshot& snapshot) const;
