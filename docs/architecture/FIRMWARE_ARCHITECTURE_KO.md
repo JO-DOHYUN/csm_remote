@@ -28,7 +28,9 @@ M4는 CAN ID, 차량 payload, authority, safety, CAN driver를 알지 않는다.
 ```text
 R16SM -> M4 UART/parser/normalizer
       -> fixed latest-sample mailbox
-      -> M7 RemoteControlSource
+      -> M7 RemoteControlSource ----\
+ServiceHil authenticated intent -----+-> RealtimeCoordinator
+Autonomy runtime provider ----------/
       -> SafetySupervisor
       -> upstream AutonomyAuthorityMonitor
       -> AuthorityManager
@@ -61,6 +63,22 @@ Production Remote profile의 mapper 기본값은 `None`이고 local CAN TX capab
 제품의 5-ID 차량 mapping이 아니다. 실제 vehicle mapping, autonomy runtime wiring,
 D1 hardware gate 의미, completion-correlated TX evidence가 승인되기 전에는 이
 profile을 차량 제어 release artifact로 판정하지 않는다.
+
+compile-time `InactiveConfirmed`와 control-enable flag는 runtime evidence가 아니다.
+RemoteProduct는 실제 autonomy provider가 fresh `InactiveConfirmed`를 제공하고,
+approved vehicle profile과 독립 hardware gate evidence가 모두 유효할 때만 local
+motion authority를 검토한다. 입력이 없는 경우 `Unknown/inhibit`가 정상 제품
+동작이다. bench-only release adapter는 capability/profile에 별도로 표시한다.
+
+ServiceHil의 wire request는 direct CAN frame permission이 아니다. adapter가
+허용된 payload를 semantic drive/steering/CENTER intent로 변환한 뒤 같은
+RealtimeCoordinator, authority, limiter, mapper와 absolute release schedule을
+통과한다. host가 CAN backend를 직접 호출하는 경로는 금지한다.
+
+ArmKey는 debounced physical ServiceHil ARM interlock이다. key OFF에서는 ARM/renew를
+거부하고, 이미 armed이면 가능한 neutral transition 뒤 disarm/inhibit한다.
+`CanTxEnable` 출력값이나 build flag는 별도 gate readback이 아니다. 승인된
+readback 입력이 없는 board/profile은 vehicle-control release를 광고하지 않는다.
 
 vehicle 벤치에는 별도 `remote_product_mdps_bench_wifi` artifact를 사용한다. 이
 artifact도 제품 authority/safety/limiter와 canonical USB/Wi-Fi 경계를 그대로
@@ -175,6 +193,9 @@ FDCAN RX ISR ring / feeder UART DMA ring
   transfer-complete callback 사이 race는 pending TC가 증명하는 한 번의 wrap만
   보정한다. 그 밖의 역행 cursor는 byte replay를 하지 않고 ingress epoch를
   fail-closed로 중단한다.
+- DMA error ISR은 atomic error event/count만 release-publish한다. restart state,
+  parser reset과 ingress statistics는 main owner가 acquire/exchange 후 처리한다.
+  ISR과 main이 plain mutable state를 함께 쓰지 않는다.
 - Wi-Fi worker는 설정된 write/byte budget 안에서 먼저 배수한다. 실제
   `WOULD_BLOCK` 또는 무진행 시간/고수위가 함께 성립할 때만 해당 client를
   격리하고 새 sink epoch로 재연결한다.
@@ -193,3 +214,17 @@ fault-injection, soak gate를 새로 통과하기 전까지 제품 계약이 아
 6. legacy direct path를 제거하고 `main.cpp`를 composition root로 축소한다.
 7. 동시 RC + feeder 2,000 frame/s + USB + Wi-Fi fault/soak를 통과한 뒤 제품
    readiness를 주장한다.
+
+## artifact compatibility
+
+M7, M4와 feeder는 protocol version 외에 release bundle contract ID, build ID,
+profile ID를 함께 제공한다. M7은 현재 boot에서 fresh한 identity가 모두 일치하기
+전까지 해당 source를 ready로 승격하지 않는다. exact binary SHA-256와 build
+manifest는 release tooling이 생성하며 filename이나 build 시각만으로 pair를
+추정하지 않는다.
+
+HNO1 Rev 0 workbook은 Driving Line 1 Mbit/s와 System Line 500 kbit/s의 draft
+provenance다. 현재 `BENCH_005_007_V1` payload와 같은 ID의 의미가 충돌하므로
+vehicle profile ID/contract hash/role/bitrate가 일치하지 않으면 decode와 TX를
+차단한다. 승인된 generated control package 전에는 HNO1 control mapping을 만들지
+않는다.

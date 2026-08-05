@@ -1,6 +1,25 @@
 # BRIEF
 
-Updated: 2026-08-03
+Updated: 2026-08-05
+
+## 2026-08-05 profile-scoped product closeout
+
+- D-033 is active. Product control readiness can no longer be derived from a
+  compile flag or bench name. Runtime autonomy, approved vehicle mapping,
+  independent gate evidence and artifact compatibility are fail-closed inputs.
+- `BENCH_005_007_V1` remains available only in explicit bench profiles.
+  HNO1 Rev 0 defines a different 1 Mbit/s Driving-Line `0x005/0x007` contract
+  and must not be mixed with it. `MdpsBench` is changed to `0x007` only.
+- Service/HIL raw requests move behind the common M7 coordinator/limiter/mapper,
+  and its ARM path requires the physical ArmKey. Release-capable control also
+  requires authenticated client credentials; absent credentials block that
+  profile rather than weakening Observer.
+- CSM feeder-UART DMA error callback/main handoff is a real source defect and
+  will use an atomic event with main-owned restart/stats. RP2040 SPSC/mailbox
+  ownership is unchanged.
+- Full disposition and cross-project ordering are recorded in Android
+  `docs/quality/PRODUCT_RELEASE_CLOSEOUT_20260805_KO.md`. No new device/HIL
+  success is claimed by this documentation baseline.
 
 ## 2026-08-03 Wi-Fi transient-envelope candidate
 

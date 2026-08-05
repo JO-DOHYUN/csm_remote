@@ -626,3 +626,50 @@
 - Linker correction: the 64 KiB DTCM reserve assertion now checks the final
   `__csm_dtcm_bss_end__`, not only the Wi-Fi queue end, so a future explicit
   DTCM arena cannot silently consume the declared reserve.
+
+## D-033 Close control products by evidence, not compile-time permission
+
+- Date: 2026-08-05
+- Status: Active implementation decision. D-029~D-032 transport and reset
+  evidence decisions remain unchanged.
+- Baseline audit: CSM `4583856`, feeder `1dfbdb3`, Android `bd31e75` were checked
+  against the owner closeout input. Confirmed source defects are RC-loss
+  steering neutral omission, MDPS-only drive leakage, compile-time autonomy
+  release, compile-time hardware gate permission, Service/HIL direct raw-CAN
+  bypass, missing artifact pairing, ignored ArmKey and CSM feeder-UART ISR/main
+  handoff. External hardware/credential facts are not synthesized in software.
+- Profile decision: keep `BENCH_005_007_V1` as a named isolated adapter.
+  `MdpsBench` maps only `0x007`. `RemoteProduct` cannot advertise control ready
+  without a runtime autonomy provider, approved vehicle model pack and actual
+  gate evidence. `ServiceHil` remains an explicitly identified engineering
+  profile and a release-capable variant requires authenticated client evidence
+  plus the physical ArmKey.
+- Common control path: RC, ServiceHil and future autonomy are source adapters.
+  They provide semantic latest values/events to one M7 coordinator. Authority,
+  safety, absolute 5/20 ms release, limiter, reversal, profile mapper,
+  `FdcanOwner` and TX completion journal are never bypassed by raw host bytes.
+- Failure decision: when the CAN backend can still transmit, a valid RC
+  stale/release transition schedules both drive and steering neutral. When a
+  hard gate, bus-off or backend fault prevents physical TX, firmware records
+  inhibit/failure evidence and does not claim neutral was sent.
+- Hardware decision: `CanTxEnable` output state and a build flag are not
+  independent gate readback. A board without an approved readback contract is
+  observer/bench-only for release purposes. ArmKey is a separate debounced
+  ServiceHil interlock and key removal disarms; it does not become a fabricated
+  proof of the transceiver gate.
+- Artifact decision: M7, M4 and feeder expose compatible protocol, contract,
+  profile and build-bundle identities. Missing/mismatched identities keep
+  sources not-ready and authority inhibited. Build/upload tools produce one
+  manifest rather than relying on filenames.
+- Feeder correction: RP2040 core0/core1 uses atomic SPSC/mailbox ownership and
+  is not the identified race. CSM `FeederUartIngress` currently shares plain
+  restart/stat fields between DMA error ISR and main. ISR will publish only an
+  atomic error event; main owns restart and accounting.
+- CAN DB boundary: HNO1 Rev 0 input SHA-256
+  `EEB0AE6DB9D30EB4EFB6229CA61893AE5E59CDEF9ABCE0C175701067073D16A1`
+  defines Driving 1 Mbit/s and System 500 kbit/s but conflicts with bench
+  `0x005/0x007` and has unresolved signal metadata. It cannot be a CSM control
+  mapper until an approved generated vehicle-contract package exists.
+- Verification: ownership and state behavior close in native guards/builds;
+  gate polarity, credential provisioning, CAN timing/ACK, reset/fault
+  coexistence and soak remain explicit HIL/release gates.
