@@ -496,6 +496,7 @@ Current `CONTROL_ACK` reasons:
 - `22` neutral profile missing
 - `23` rate limited
 - `24` unsupported command
+- `25` authority denied
 
 `HOST_CAN_TX_REQUEST` payload, 19 bytes, host-to-board:
 - `0..3 command_id u32`
@@ -527,6 +528,10 @@ Current board host TX policy:
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
+- TCP arrival spacing is not a CAN cadence clock. Network batching may compress
+  valid host 5/20 ms writes, so CSM never rejects or disarms solely from the
+  observed socket-arrival interval. Range, ramp, authority, safety, and backend
+  admission remain board-owned.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted

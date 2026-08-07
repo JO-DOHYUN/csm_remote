@@ -1642,7 +1642,7 @@ void serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper() {
   CHECK(result.frame.can_id_flags == 0x005);
   CHECK(result.frame.data[2] == 0xE8 && result.frame.data[3] == 0x03);
 
-  CHECK(!runtime.accept(1, 2, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(1, 2, 0x005, 8, forward).accepted);
   uint8_t reverse[8] = {0xAA, 0x52, 0xE8, 0x03, 0x60, 0, 0, 0};
   result = runtime.accept(5, 3, 0x005, 8, reverse);
   CHECK(result.accepted);
@@ -1656,8 +1656,12 @@ void serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper() {
   CHECK(result.frame.data[0] < 250);
   CHECK(result.frame.data[0] >= 130);
 
+  result = runtime.accept(35, 5, 0x007, 8, steering);
+  CHECK(result.accepted);
+
   uint8_t invalid[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 1, 0, 0};
-  CHECK(!runtime.accept(25, 5, 0x005, 8, invalid).accepted);
+  result = runtime.accept(45, 6, 0x005, 8, invalid);
+  CHECK(!result.accepted);
 }
 
 }  // namespace

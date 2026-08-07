@@ -36,10 +36,6 @@ class ServiceHilIntentRuntime {
   OperatorCommand requested_ = {};
   CommandLimiter limiter_ = {};
   VehicleCommandMapper mapper_ = {};
-  uint32_t last_drive_ms_ = 0;
-  uint32_t last_steering_ms_ = 0;
-  bool drive_seen_ = false;
-  bool steering_seen_ = false;
   bool configured_ = false;
 };
 

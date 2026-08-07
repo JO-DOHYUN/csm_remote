@@ -4,9 +4,6 @@ namespace csm::board::control {
 namespace {
 
 constexpr uint16_t kDetailBadWireIntent = 1;
-constexpr uint16_t kDetailLaneCadence = 2;
-constexpr uint16_t kDrivePeriodMs = 5;
-constexpr uint16_t kSteeringPeriodMs = 20;
 
 int16_t steeringPermille(uint8_t value) {
   const int32_t delta = static_cast<int32_t>(value) - kRemoteSteeringCenter;
@@ -56,8 +53,6 @@ void ServiceHilIntentRuntime::reset(uint32_t now_ms) {
   requested_ = {};
   requested_.source = authority::ControlSourceId::HostService;
   limiter_.begin(now_ms);
-  last_drive_ms_ = last_steering_ms_ = now_ms;
-  drive_seen_ = steering_seen_ = false;
 }
 
 bool ServiceHilIntentRuntime::decode(uint32_t can_id, uint8_t dlc,
@@ -108,15 +103,6 @@ ServiceHilIntentResult ServiceHilIntentRuntime::accept(
     result.detail = kDetailBadWireIntent;
     return result;
   }
-  const bool drive = can_id == kRemoteDriveCanId;
-  const uint32_t last_ms = drive ? last_drive_ms_ : last_steering_ms_;
-  const bool seen = drive ? drive_seen_ : steering_seen_;
-  const uint16_t period = drive ? kDrivePeriodMs : kSteeringPeriodMs;
-  if (seen && now_ms - last_ms < period) {
-    result.decision = authority::ControlDecisionCode::RejectedRateLimit;
-    result.detail = kDetailLaneCadence;
-    return result;
-  }
   requested_.command_seq = command_id;
   requested_.source_time_ms = now_ms;
   requested_.enable_request = true;
@@ -135,13 +121,6 @@ ServiceHilIntentResult ServiceHilIntentRuntime::accept(
   for (uint8_t index = 0; index < mapped.frame_count; ++index) {
     if (mapped.frames[index].can_id_flags == can_id) {
       limiter_.noteAccepted(now_ms, limited.command);
-      if (drive) {
-        drive_seen_ = true;
-        last_drive_ms_ = now_ms;
-      } else {
-        steering_seen_ = true;
-        last_steering_ms_ = now_ms;
-      }
       result.accepted = true;
       result.decision = authority::ControlDecisionCode::Accepted;
       result.frame = mapped.frames[index];
