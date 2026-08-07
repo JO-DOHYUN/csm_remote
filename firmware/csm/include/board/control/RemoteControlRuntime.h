@@ -31,6 +31,8 @@ struct RemoteControlRuntimeConfig {
   uint16_t max_forward_rpm = 500;
   uint16_t max_reverse_rpm = 500;
   uint16_t max_steering_deci_degree = 450;
+  uint8_t drive_channel_index = 1;
+  uint8_t steering_channel_index = 3;
   bool invert_drive = false;
   bool invert_steering = false;
 };

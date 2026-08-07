@@ -407,6 +407,18 @@
 #define BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING 0
 #endif
 
+#ifndef BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING
+#define BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING 0
+#endif
+
+#ifndef BOARD_REMOTE_DRIVE_CHANNEL_INDEX
+#define BOARD_REMOTE_DRIVE_CHANNEL_INDEX 3
+#endif
+
+#ifndef BOARD_REMOTE_STEERING_CHANNEL_INDEX
+#define BOARD_REMOTE_STEERING_CHANNEL_INDEX 1
+#endif
+
 #ifndef BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH
 #define BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH 0
 #endif
@@ -417,6 +429,7 @@
 #define BOARD_REMOTE_LOCAL_CAN_TX_ENABLED \
   (BOARD_ENABLE_REMOTE_CONTROL && \
    (BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
+    BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING || \
     BOARD_ENABLE_MDPS_BENCH_MAPPING) && \
    !BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX)
 
@@ -564,6 +577,18 @@
      BOARD_ENABLE_MCP2515 || BOARD_ENABLE_MCP2515_INIT || \
      !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED)
 #error "Product vehicle command mapping violates the feeder/J4 RC contract"
+#endif
+
+#if BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING && \
+    (BOARD_CSM_PROFILE_REMOTE_PRODUCT || !BOARD_CSM_PROFILE_FULL_INSTRUMENTED || \
+     !BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS || !BOARD_ENABLE_REMOTE_CONTROL || \
+     !BOARD_ENABLE_REMOTE_AUTHORITY || !BOARD_HW_PROFILE_MID_FEEDER_UART || \
+     !BOARD_ENABLE_FEEDER_UART || BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
+     BOARD_ENABLE_MDPS_BENCH_MAPPING || !BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     !BOARD_ENABLE_HOST_DOWNLINK || !BOARD_HOST_DOWNLINK_TRANSPORT_WIFI || \
+     !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED || \
+     !BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)
+#error "Service/HIL vehicle mapping violates the feeder/J4 bench contract"
 #endif
 
 #ifndef BOARD_ENABLE_VOLTAGE_ADC
@@ -6251,7 +6276,8 @@ void setup() {
   remote_config.configured = true;
   remote_config.local_can_tx_enabled =
       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED != 0;
-#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING
+#if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
+    BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING
   remote_config.mapping =
       csm::board::control::VehicleCommandMapping::Vehicle0x005And0x007;
 #elif BOARD_ENABLE_MDPS_BENCH_MAPPING
@@ -6278,6 +6304,8 @@ void setup() {
   remote_config.max_forward_rpm = 500;
   remote_config.max_reverse_rpm = 500;
   remote_config.max_steering_deci_degree = 450;
+  remote_config.drive_channel_index = BOARD_REMOTE_DRIVE_CHANNEL_INDEX;
+  remote_config.steering_channel_index = BOARD_REMOTE_STEERING_CHANNEL_INDEX;
   remote_control_runtime_ok = remote_control_runtime.begin(
       millis(), static_cast<uint32_t>(boot_session_id), remote_config);
   record_boot_progress(

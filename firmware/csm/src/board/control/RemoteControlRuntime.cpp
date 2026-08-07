@@ -37,6 +37,9 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
       config.steering_deadband_permille > 100 ||
       config.auxiliary_threshold_permille < 100 ||
       config.auxiliary_threshold_permille > 1000 ||
+      config.drive_channel_index >= remote::kRcChannelCount ||
+      config.steering_channel_index >= remote::kRcChannelCount ||
+      config.drive_channel_index == config.steering_channel_index ||
       config.steering_step_permille == 0 ||
       config.steering_return_step_permille == 0) {
     return false;
@@ -56,8 +59,8 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   orchestrator_.begin(now_ms);
 
   remote::RemoteControlSourceConfig source_config;
-  source_config.drive_channel_index = 1;
-  source_config.steering_channel_index = 3;
+  source_config.drive_channel_index = config.drive_channel_index;
+  source_config.steering_channel_index = config.steering_channel_index;
   source_config.auxiliary_channel_index = 4;
   source_config.steering_overlay_channel_index = 9;
   source_config.momentary_overlay_channel_index = 10;
@@ -255,8 +258,8 @@ void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
   status_.sample_age_ms = snapshot.age_ms;
   status_.link_quality = snapshot.sample.link_quality;
   status_.rssi_magnitude = snapshot.sample.rssi_hint;
-  status_.drive_permille = snapshot.sample.ch[1];
-  status_.steering_permille = snapshot.sample.ch[3];
+  status_.drive_permille = snapshot.sample.ch[config_.drive_channel_index];
+  status_.steering_permille = snapshot.sample.ch[config_.steering_channel_index];
   status_.auxiliary_permille = snapshot.sample.ch[4];
   status_.remote_valid = status_.frontend_alive &&
       mailbox_reader_.hasFreshUsableSample();
@@ -465,9 +468,9 @@ void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {
 
 bool RemoteControlRuntime::isNeutralSample(
     const remote::M4RemoteMailboxSnapshot& snapshot) const {
-  return absoluteValue(snapshot.sample.ch[1]) <=
+  return absoluteValue(snapshot.sample.ch[config_.drive_channel_index]) <=
              static_cast<int16_t>(config_.neutral_deadband_permille) &&
-         absoluteValue(snapshot.sample.ch[3]) <=
+         absoluteValue(snapshot.sample.ch[config_.steering_channel_index]) <=
              static_cast<int16_t>(config_.neutral_deadband_permille);
 }
 

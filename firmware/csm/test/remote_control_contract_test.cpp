@@ -1203,6 +1203,8 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   config.auxiliary_threshold_permille = 500;
   config.steering_step_permille = 30;
   config.steering_return_step_permille = 50;
+  config.drive_channel_index = 3;
+  config.steering_channel_index = 1;
   CHECK(runtime.begin(0, 0xABCD, config));
 
   control::RemoteControlRuntimeInputs inputs;
@@ -1261,11 +1263,13 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   CHECK(steering_frames == 1);
   CHECK(runtime.status().handoff_qualified);
 
-  sample.ch[1] = 1000;
-  sample.ch[3] = -1000;
+  sample.ch[1] = -1000;
+  sample.ch[3] = 1000;
   ++sample.seq;
   publish(1);
   CHECK(!runtime.service(1, inputs).frame_ready);
+  CHECK(runtime.status().drive_permille == 1000);
+  CHECK(runtime.status().steering_permille == -1000);
 
   drain(5, &drive_frames, &steering_frames);
   CHECK(drive_frames == 1);
