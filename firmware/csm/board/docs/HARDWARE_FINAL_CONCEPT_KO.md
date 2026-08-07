@@ -168,8 +168,6 @@ flowchart TB
 | 보드 내부 신호 | Portenta 핀 | STM32 포트 | 기본 상태 | 용도 |
 | --- | --- | --- | --- | --- |
 | `ESTOP_IN_N` | `D2` | `PJ11` | pulled low/fault | isolated estop chain input |
-| `ARM_KEY_IN` | `D3` | `PG7` | inactive | local/service arm permission |
-| `CAN_TX_ENABLE` | `D1` | `PK1` | disabled | hard gate for control CAN TX |
 | `SAFETY_WD_TOGGLE` | `D0` | `PH15` | inactive | external safety watchdog heartbeat |
 | `FIELD_PWR_OK` | `D12` | `PH7` | false | field power monitor input |
 | `ENC_DRV_FAULT_N` | `D13` | `PA10` | pulled low/fault | encoder receiver/cable/power fault |
@@ -189,8 +187,6 @@ flowchart TB
 | MCP2515 CAN | `CAN_SPI_CS_N` | `D7` | `PI0` | MCP2515 CS |
 | MCP2515 CAN | `CAN_INT_N` | `D11` | `PH8` | MCP2515 INT |
 | Safety | `ESTOP_IN_N` | `D2` | `PJ11` | isolated input |
-| Safety | `ARM_KEY_IN` | `D3` | `PG7` | isolated/service input |
-| Safety | `CAN_TX_ENABLE` | `D1` | `PK1` | default disabled |
 | Safety | `SAFETY_WD_TOGGLE` | `D0` | `PH15` | external watchdog |
 | Safety | `FIELD_PWR_OK` | `D12` | `PH7` | health input |
 | Encoder | `ENC_DRV_FAULT_N` | `D13` | `PA10` | front-end fault |

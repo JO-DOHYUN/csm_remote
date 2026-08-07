@@ -11,8 +11,7 @@ constexpr uint16_t kDefaultLeaseMs = 500;
 constexpr uint16_t kMaxLeaseMs = 2000;
 }  // namespace
 
-void SafetySupervisor::begin(uint32_t now_ms,
-                             const SafetySupervisorConfig& config) {
+void SafetySupervisor::begin(uint32_t now_ms) {
   has_heartbeat_ = false;
   armed_ = false;
   fault_lockout_ = false;
@@ -23,11 +22,6 @@ void SafetySupervisor::begin(uint32_t now_ms,
   state_ = SafetyState::MonitorOnly;
   transition_counter_ = 1;
   inputs_ = {};
-  arm_key_required_ = config.require_arm_key;
-  arm_key_ready_ = !arm_key_required_;
-  arm_key_high_seen_ = false;
-  arm_key_debounce_ms_ = config.arm_key_debounce_ms;
-  arm_key_high_since_ms_ = now_ms;
 }
 
 void SafetySupervisor::setState(SafetyState state) {
@@ -81,21 +75,6 @@ uint8_t SafetySupervisor::faultBits() const {
 void SafetySupervisor::update(uint32_t now_ms, const SafetyInputs& inputs) {
   inputs_ = inputs;
 
-  if (!arm_key_required_) {
-    arm_key_ready_ = true;
-  } else if (!inputs_.arm_key) {
-    arm_key_ready_ = false;
-    arm_key_high_seen_ = false;
-    arm_key_high_since_ms_ = now_ms;
-  } else if (!arm_key_high_seen_) {
-    arm_key_high_seen_ = true;
-    arm_key_high_since_ms_ = now_ms;
-    arm_key_ready_ = arm_key_debounce_ms_ == 0;
-  } else if (!arm_key_ready_ &&
-             now_ms - arm_key_high_since_ms_ >= arm_key_debounce_ms_) {
-    arm_key_ready_ = true;
-  }
-
   if (inputs_.estop_asserted) {
     armed_ = false;
     setState(SafetyState::Estop);
@@ -106,10 +85,6 @@ void SafetySupervisor::update(uint32_t now_ms, const SafetyInputs& inputs) {
     armed_ = false;
     setState(SafetyState::FaultLockout);
     return;
-  }
-
-  if (armed_ && !arm_key_ready_) {
-    armed_ = false;
   }
 
   if (armed_ && !heartbeatAlive(now_ms)) {
@@ -154,9 +129,6 @@ uint8_t SafetySupervisor::arm(uint32_t now_ms, uint16_t lease_ms, bool control_b
   if (fault_lockout_) {
     return ControlReasonSafetyLockout;
   }
-  if (!arm_key_ready_) {
-    return ControlReasonNotArmed;
-  }
   if (!heartbeatAlive(now_ms)) {
     return ControlReasonHostTimeout;
   }
@@ -172,10 +144,6 @@ uint8_t SafetySupervisor::arm(uint32_t now_ms, uint16_t lease_ms, bool control_b
 }
 
 uint8_t SafetySupervisor::renewLease(uint32_t now_ms, uint16_t lease_ms) {
-  if (!arm_key_ready_) {
-    armed_ = false;
-    return ControlReasonNotArmed;
-  }
   if (!heartbeatAlive(now_ms)) {
     armed_ = false;
     setState(SafetyState::HostTimeout);
@@ -241,8 +209,6 @@ bool SafetySupervisor::canAcceptTx(uint32_t now_ms, bool control_backend_ready, 
     local_reason = ControlReasonEncoderFault;
   } else if (fault_lockout_) {
     local_reason = ControlReasonSafetyLockout;
-  } else if (!arm_key_ready_) {
-    local_reason = ControlReasonNotArmed;
   } else if (!heartbeatAlive(now_ms)) {
     local_reason = ControlReasonHostTimeout;
   } else if (!armed_) {
@@ -259,15 +225,6 @@ bool SafetySupervisor::canAcceptTx(uint32_t now_ms, bool control_backend_ready, 
     *reason = local_reason;
   }
   return ok;
-}
-
-bool SafetySupervisor::canDriveTxGate() const {
-  return armed_ &&
-         arm_key_ready_ &&
-         !inputs_.estop_asserted &&
-         inputs_.field_power_ok &&
-         !inputs_.encoder_fault &&
-         !fault_lockout_;
 }
 
 }  // namespace csm::board

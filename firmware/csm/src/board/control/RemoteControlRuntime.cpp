@@ -324,8 +324,8 @@ void RemoteControlRuntime::requestImmediateSilence(uint32_t now_ms) {
 void RemoteControlRuntime::beginCycle(
     uint32_t now_ms, const RemoteControlRuntimeInputs& inputs,
     uint32_t drive_release_sequence, bool steering_release_due) {
-  if (!inputs.hard_safety_allows || !inputs.hardware_gate_allows ||
-      inputs.local_tx_inhibit_latched || status_.can_tx_inhibit_latched ||
+  if (!inputs.hard_safety_allows || inputs.local_tx_inhibit_latched ||
+      status_.can_tx_inhibit_latched ||
       !inputs.backend_state.ready || inputs.backend_state.bus_off ||
       inputs.backend_state.error_passive) {
     pending_frame_index_ = pending_frame_count_ = 0;
@@ -360,7 +360,6 @@ void RemoteControlRuntime::beginCycle(
     orchestrator_inputs.remote_source_present = status_.remote_reserved;
     orchestrator_inputs.remote_handoff_qualified = status_.handoff_qualified;
     orchestrator_inputs.remote_takeover_request = true;
-    orchestrator_inputs.hardware_gate_allows = inputs.hardware_gate_allows;
     orchestrator_inputs.backend_state = inputs.backend_state;
     RemoteControlOrchestratorDeps deps;
     deps.authority_manager = &authority_manager_;
@@ -437,7 +436,6 @@ bool RemoteControlRuntime::scheduleSafetyStop(
   gateway_inputs.authority_decision.autonomy_state = inputs.autonomy_state;
   gateway_inputs.local_tx_inhibit_latched = false;
   gateway_inputs.safety_supervisor_allows = inputs.hard_safety_allows;
-  gateway_inputs.hardware_gate_allows = inputs.hardware_gate_allows;
   gateway_inputs.backend_state = inputs.backend_state;
   if (!scheduleMappedFrames(now_ms, mapped, gateway_inputs)) return false;
   ++status_.neutral_cycles;

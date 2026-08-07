@@ -511,39 +511,6 @@ void hostTransportEpochInvalidatesHeartbeatAndLease() {
   CHECK(supervisor.state() == SafetyState::Estop);
 }
 
-void serviceArmKeyIsDebouncedAndFailClosed() {
-  using namespace csm::board;
-  SafetySupervisor supervisor;
-  SafetySupervisorConfig config;
-  config.require_arm_key = true;
-  config.arm_key_debounce_ms = 20;
-  supervisor.begin(0, config);
-  SafetyInputs inputs;
-  inputs.field_power_ok = true;
-  inputs.control_backend_ready = true;
-  supervisor.update(0, inputs);
-  CHECK(supervisor.heartbeat(1) == csm::ControlReasonOk);
-  CHECK(supervisor.arm(1, 500, true) == csm::ControlReasonNotArmed);
-  inputs.arm_key = true;
-  supervisor.update(10, inputs);
-  CHECK(!supervisor.armKeyReady());
-  supervisor.update(29, inputs);
-  CHECK(!supervisor.armKeyReady());
-  supervisor.update(30, inputs);
-  CHECK(supervisor.armKeyReady());
-  CHECK(supervisor.arm(30, 500, true) == csm::ControlReasonOk);
-  uint8_t reason = csm::ControlReasonOk;
-  CHECK(supervisor.canAcceptTx(31, true, &reason));
-  CHECK(supervisor.renewLease(31, 500) == csm::ControlReasonOk);
-  inputs.arm_key = false;
-  supervisor.update(32, inputs);
-  CHECK(!supervisor.armKeyReady());
-  CHECK(!supervisor.canDriveTxGate());
-  CHECK(!supervisor.canAcceptTx(32, true, &reason));
-  CHECK(reason == csm::ControlReasonNotArmed);
-  CHECK(supervisor.renewLease(32, 500) == csm::ControlReasonNotArmed);
-}
-
 void packChannels(const uint16_t channels[16], uint8_t payload[22]) {
   std::memset(payload, 0, 22);
   uint32_t bit_offset = 0;
@@ -876,7 +843,6 @@ void remotePreemptsAutonomyAndMapsCh4Ch5Ch10Ch11() {
   inputs.remote_source_present = true;
   inputs.remote_handoff_qualified = true;
   inputs.remote_takeover_request = true;
-  inputs.hardware_gate_allows = true;
   inputs.backend_state.ready = true;
 
   control::RemoteControlOrchestratorDeps deps;
@@ -1210,7 +1176,6 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   control::RemoteControlRuntimeInputs inputs;
   inputs.hard_safety_allows = true;
   inputs.local_tx_inhibit_latched = false;
-  inputs.hardware_gate_allows = true;
   inputs.autonomy_state =
       authority::AutonomyAuthorityState::InactiveConfirmed;
   inputs.backend_state.ready = true;
@@ -1379,7 +1344,6 @@ void runtimeImmediateStopRespectsSafetyAndWraparound() {
     control::RemoteControlRuntimeInputs inputs;
     inputs.hard_safety_allows = true;
     inputs.local_tx_inhibit_latched = false;
-    inputs.hardware_gate_allows = true;
     inputs.autonomy_state =
         authority::AutonomyAuthorityState::InactiveConfirmed;
     inputs.backend_state.ready = true;
@@ -1511,7 +1475,6 @@ void runtimeHandoffLossAndFaultPolicy() {
   control::RemoteControlRuntimeInputs inputs;
   inputs.hard_safety_allows = true;
   inputs.local_tx_inhibit_latched = false;
-  inputs.hardware_gate_allows = true;
   inputs.autonomy_state = authority::AutonomyAuthorityState::InactiveConfirmed;
   inputs.backend_state.ready = true;
 
@@ -1706,7 +1669,6 @@ int main() {
   builtinCanDuplicateMaskLatchesTrackingFault();
   builtinCanCancelFailureAndIdentityWrapFailClosed();
   hostTransportEpochInvalidatesHeartbeatAndLease();
-  serviceArmKeyIsDebouncedAndFailClosed();
   crsfChannelsDecodeAndNormalize();
   upstreamAutonomyPrecedesRemoteReservation();
   frozenMailboxCannotRemainFresh();

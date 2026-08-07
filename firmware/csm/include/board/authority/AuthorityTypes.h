@@ -54,7 +54,6 @@ enum class ControlDecisionCode : uint8_t {
   RejectedNoTakeover = 12,
   RejectedRateLimit = 13,
   RejectedFramePolicy = 14,
-  RejectedHardwareGate = 15,
   RejectedFaultLockout = 16,
 };
 

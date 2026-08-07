@@ -36,7 +36,6 @@ struct RemoteControlOrchestratorInputs {
   bool remote_handoff_qualified = false;
   bool remote_takeover_request = false;
   bool remote_release_request = false;
-  bool hardware_gate_allows = false;
   can::CanBackendState backend_state = {};
 };
 

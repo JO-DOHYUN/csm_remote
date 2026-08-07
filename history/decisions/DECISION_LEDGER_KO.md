@@ -630,20 +630,19 @@
 ## D-033 Close control products by evidence, not compile-time permission
 
 - Date: 2026-08-05
-- Status: Active implementation decision. D-029~D-032 transport and reset
-  evidence decisions remain unchanged.
+- Status: Active except its proposed external ArmKey/CAN-TX-gate requirements,
+  which are superseded by D-034. D-029~D-032 transport and reset evidence
+  decisions remain unchanged.
 - Baseline audit: CSM `4583856`, feeder `1dfbdb3`, Android `bd31e75` were checked
   against the owner closeout input. Confirmed source defects are RC-loss
   steering neutral omission, MDPS-only drive leakage, compile-time autonomy
-  release, compile-time hardware gate permission, Service/HIL direct raw-CAN
-  bypass, missing artifact pairing, ignored ArmKey and CSM feeder-UART ISR/main
+  release, Service/HIL direct raw-CAN bypass, missing artifact pairing and CSM feeder-UART ISR/main
   handoff. External hardware/credential facts are not synthesized in software.
 - Profile decision: keep `BENCH_005_007_V1` as a named isolated adapter.
   `MdpsBench` maps only `0x007`. `RemoteProduct` cannot advertise control ready
-  without a runtime autonomy provider, approved vehicle model pack and actual
-  gate evidence. `ServiceHil` remains an explicitly identified engineering
-  profile and a release-capable variant requires authenticated client evidence
-  plus the physical ArmKey.
+  without a runtime autonomy provider and approved vehicle model pack.
+  `ServiceHil` remains an explicitly identified engineering profile and a
+  release-capable variant requires authenticated client evidence.
 - Common control path: RC, ServiceHil and future autonomy are source adapters.
   They provide semantic latest values/events to one M7 coordinator. Authority,
   safety, absolute 5/20 ms release, limiter, reversal, profile mapper,
@@ -652,11 +651,6 @@
   stale/release transition schedules both drive and steering neutral. When a
   hard gate, bus-off or backend fault prevents physical TX, firmware records
   inhibit/failure evidence and does not claim neutral was sent.
-- Hardware decision: `CanTxEnable` output state and a build flag are not
-  independent gate readback. A board without an approved readback contract is
-  observer/bench-only for release purposes. ArmKey is a separate debounced
-  ServiceHil interlock and key removal disarms; it does not become a fabricated
-  proof of the transceiver gate.
 - Artifact decision: M7, M4 and feeder expose compatible protocol, contract,
   profile and build-bundle identities. Missing/mismatched identities keep
   sources not-ready and authority inhibited. Build/upload tools produce one
@@ -671,5 +665,18 @@
   `0x005/0x007` and has unresolved signal metadata. It cannot be a CSM control
   mapper until an approved generated vehicle-contract package exists.
 - Verification: ownership and state behavior close in native guards/builds;
-  gate polarity, credential provisioning, CAN timing/ACK, reset/fault
+  safety-input behavior, credential provisioning, CAN timing/ACK, reset/fault
   coexistence and soak remain explicit HIL/release gates.
+
+## D-034 Remove unimplemented external control interlocks
+
+- Date: 2026-08-07
+- Status: Active; supersedes every D-033 requirement for D1 `CanTxEnable`, D3
+  `ArmKey`, hardware-gate readback and their compile-time substitutes.
+- Operator outcome: Service/HIL ARM requires no undocumented switch or wiring.
+  It remains gated by explicit operator intent, current epoch/boot identity,
+  compatible capability, fresh health, RC/autonomy priority, heartbeat/lease,
+  E-stop/field-power/encoder fault state and an operational CAN backend.
+- Cleanup: pin ownership, safety state, gateway input/decision, profile guards,
+  tests and active hardware documentation for the removed interlocks are deleted.
+  A source guard fails if those names return.

@@ -91,7 +91,6 @@ for item in (
     "inputs.local_tx_inhibit_latched = true;",
     "AutonomyAuthorityState::Unknown;",
     "BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE",
-    "BOARD_CAN_TX_GATE_READBACK_SUPPORTED",
     "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH",
     "VehicleCommandMapping::VehicleMdps0x007Only",
 ):

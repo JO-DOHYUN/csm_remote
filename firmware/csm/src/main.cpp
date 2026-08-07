@@ -545,18 +545,10 @@
 #define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
 #endif
 
-// These are evidence inputs, not feature switches. A production artifact must
-// remain unable to release motion unless both claims are backed by a runtime
-// source/readback. Explicit bench artifacts may opt into the virtual adapters;
-// CAPABILITY must never advertise those adapters as production evidence.
+// Production local control still requires an explicit autonomy-release source.
+// Service/HIL may use the bounded virtual provider; it is never production evidence.
 #ifndef BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
 #define BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE 0
-#endif
-#ifndef BOARD_CAN_TX_GATE_READBACK_SUPPORTED
-#define BOARD_CAN_TX_GATE_READBACK_SUPPORTED 0
-#endif
-#ifndef BOARD_CAN_TX_GATE_READBACK_PIN
-#define BOARD_CAN_TX_GATE_READBACK_PIN -1
 #endif
 #ifndef BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
 #define BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH 0
@@ -564,7 +556,7 @@
 
 #if BOARD_CSM_PROFILE_REMOTE_PRODUCT && !BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
     BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
-#error "RemoteProduct may not use virtual autonomy/gate evidence"
+#error "RemoteProduct may not use virtual autonomy evidence"
 #endif
 
 #if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING && \
@@ -605,14 +597,6 @@
 
 #ifndef BOARD_BUILTIN_CAN_TX_TEST_ID
 #define BOARD_BUILTIN_CAN_TX_TEST_ID 0x322
-#endif
-
-#ifndef BOARD_ENABLE_CAN_TX_GATE_FOR_TEST
-#define BOARD_ENABLE_CAN_TX_GATE_FOR_TEST BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-#endif
-
-#ifndef BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX
-#define BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX BOARD_ENABLE_BUILTIN_CAN_RX
 #endif
 
 #ifndef BOARD_PRODUCT_ACK_OBSERVE_MODE
@@ -2804,9 +2788,7 @@ static void emit_capability() {
   config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
   config.control_path = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED ? 2 :
       (BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0);
-  if (!(BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) ||
-      !(BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
+  if (!(BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
         BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)) {
     config.control_path = 0;
   }
@@ -2877,8 +2859,6 @@ static void emit_capability() {
       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
-       (BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
         BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
@@ -2923,8 +2903,6 @@ static void emit_capability() {
       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
       (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
-       (BOARD_CAN_TX_GATE_READBACK_SUPPORTED ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
         BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
        (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
@@ -3693,7 +3671,6 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   inputs |= digitalRead(BoardPins::EstopInN) ? 0 : (1u << 0);
   inputs |= digitalRead(BoardPins::FieldPowerOk) ? (1u << 1) : 0;
   inputs |= digitalRead(BoardPins::EncoderFaultN) ? 0 : (1u << 2);
-  inputs |= digitalRead(BoardPins::ArmKeyIn) ? (1u << 3) : 0;
 #endif
 
   uint8_t payload[csm::kBoardHealthV13PayloadLen];
@@ -4062,10 +4039,6 @@ static void __attribute__((unused)) enter_passive_can_frontend_fault_hold(
   can_frontend_session_arm_pending = false;
   ack_observe_enabled = false;
 
-#if BOARD_ENABLE_SAFETY_IO
-  digitalWrite(BoardPins::CanTxEnable, LOW);
-#endif
-
 #if BOARD_ENABLE_MCP2515
   if (mcp2515 != nullptr) {
     mcp2515->clearTXInterrupts();
@@ -4300,25 +4273,13 @@ static void service_voltage_adc_lane() {
 
 static void init_safety_pins() {
 #if BOARD_ENABLE_SAFETY_IO
-  pinMode(BoardPins::CanTxEnable, OUTPUT);
-  digitalWrite(BoardPins::CanTxEnable, LOW);
-
   pinMode(BoardPins::SafetyWatchdogToggle, OUTPUT);
   digitalWrite(BoardPins::SafetyWatchdogToggle, LOW);
 
   pinMode(BoardPins::EstopInN, INPUT_PULLUP);
-  pinMode(BoardPins::ArmKeyIn, INPUT_PULLDOWN);
   pinMode(BoardPins::FieldPowerOk, INPUT_PULLUP);
   pinMode(BoardPins::EncoderFaultN, INPUT_PULLUP);
   pinMode(BoardPins::SpareServiceGpio, INPUT);
-#endif
-}
-
-static bool should_enable_can_tx_gate_for_test() {
-#if BOARD_ENABLE_CAN_TX_GATE_FOR_TEST && BOARD_ENABLE_BUILTIN_CAN_LANE
-  return builtin_can_tx_ok;
-#else
-  return false;
 #endif
 }
 
@@ -4392,7 +4353,6 @@ static csm::board::SafetyInputs read_safety_inputs() {
   inputs.estop_asserted = !digitalRead(BoardPins::EstopInN);
   inputs.field_power_ok = digitalRead(BoardPins::FieldPowerOk);
   inputs.encoder_fault = !digitalRead(BoardPins::EncoderFaultN);
-  inputs.arm_key = digitalRead(BoardPins::ArmKeyIn);
 #endif
   inputs.control_backend_ready = any_control_backend_ready();
   return inputs;
@@ -4404,17 +4364,6 @@ static void update_safety_state() {
   const SafetyState before = safety_supervisor.state();
   safety_supervisor.update(millis(), inputs);
   safety_state = safety_supervisor.state();
-  const bool rx_transceiver_enable =
-#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
-      (BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0) && ack_observe_enabled;
-#else
-      BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0;
-#endif
-  digitalWrite(BoardPins::CanTxEnable,
-               (rx_transceiver_enable ||
-                safety_supervisor.canDriveTxGate() ||
-                should_enable_can_tx_gate_for_test()) ? HIGH : LOW);
-
   if (inputs.estop_asserted && !estop_prev) {
     emit_board_event(EventEstopAsserted, 0, 1);
   }
@@ -4454,14 +4403,6 @@ static void service_remote_control() {
   inputs.hard_safety_allows = !inputs.estop_asserted &&
       safety_inputs.field_power_ok && !safety_inputs.encoder_fault &&
       !inputs.fault_lockout;
-  inputs.hardware_gate_allows =
-      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED != 0) &&
-      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0) &&
-#if BOARD_CAN_TX_GATE_READBACK_SUPPORTED
-      (digitalRead(BOARD_CAN_TX_GATE_READBACK_PIN) != 0);
-#else
-      (BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH != 0);
-#endif
   inputs.host_service_active = safety_supervisor.leaseAlive(now_ms);
 #if BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
   // The provider owns freshness and positive inactive evidence. Until the
@@ -5015,12 +4956,6 @@ static void set_can_observe_mode_for_session(bool enabled, bool force) {
     return;
   }
 
-#if BOARD_ENABLE_SAFETY_IO
-  if (!target_ack_observe) {
-    digitalWrite(BoardPins::CanTxEnable, LOW);
-  }
-#endif
-
 #if BOARD_ENABLE_MCP2515
   if (mcp2515 != nullptr) {
     const MCP2515::ERROR err = target_ack_observe ? mcp2515->setNormalMode()
@@ -5042,10 +4977,6 @@ static void set_can_observe_mode_for_session(bool enabled, bool force) {
 
   ack_observe_enabled = target_ack_observe;
 
-#if BOARD_ENABLE_SAFETY_IO
-  digitalWrite(BoardPins::CanTxEnable,
-               (ack_observe_enabled && (BOARD_CAN_TRANSCEIVER_ENABLE_FOR_RX != 0)) ? HIGH : LOW);
-#endif
   emit_board_event(EventTransceiverSafeStateChanged,
                    ack_observe_enabled ? 1u : 0u,
                    usb_attach_quarantine_total);
@@ -6181,9 +6112,7 @@ void setup() {
   }
 #endif
 
-  csm::board::SafetySupervisorConfig safety_config;
-  safety_config.require_arm_key = BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS != 0;
-  safety_supervisor.begin(millis(), safety_config);
+  safety_supervisor.begin(millis());
   safety_state = safety_supervisor.state();
   voltage_adc_ok = init_voltage_adc_lane();
 

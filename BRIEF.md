@@ -6,12 +6,13 @@ Updated: 2026-08-05
 
 - D-033 is active. Product control readiness can no longer be derived from a
   compile flag or bench name. Runtime autonomy, approved vehicle mapping,
-  independent gate evidence and artifact compatibility are fail-closed inputs.
+  actual safety evidence and artifact compatibility are fail-closed inputs.
 - `BENCH_005_007_V1` remains available only in explicit bench profiles.
   HNO1 Rev 0 defines a different 1 Mbit/s Driving-Line `0x005/0x007` contract
   and must not be mixed with it. `MdpsBench` is changed to `0x007` only.
 - Service/HIL raw requests move behind the common M7 coordinator/limiter/mapper,
-  and its ARM path requires the physical ArmKey. Release-capable control also
+  and its ARM path requires explicit operator intent plus current authority,
+  health, heartbeat/lease and CAN-backend evidence. Release-capable control also
   requires authenticated client credentials; absent credentials block that
   profile rather than weakening Observer.
 - CSM feeder-UART DMA error callback/main handoff is a real source defect and
@@ -291,7 +292,7 @@ contract.
 ## 2026-07-23 RC/Service shared vehicle bench contract
 
 - RC source is CRSF CH2(index 1), positive forward. RC and Android Service/HIL now share standard `0x005` DLC8 drive (`AA 52 speedLE direction 00 00 00`, stop `AA 02 00 00 00 00 00 00`) and standard `0x007` DLC8 steering byte0 `10..130..250`/zero tail.
-- Drive uses a 5% joystick deadband. Above it, the first active command is 20% (`speed=200`) and subsequent output is rounded to 5% steps through 100%; values `1..199` are never emitted with mode `AA 52`. The existing time-equivalent slew and zero-before-reverse rule remain, with drive configured at 200 Hz and steering independently at 50 Hz. Co-scheduled drive/steering frames are drained into the CAN FIFO in one bounded service pass instead of retaining steering across the next 5 ms deadline. Unqualified/lost/failsafe RC emits only the drive stop frame when autonomy is explicitly released and hard/hardware gates are healthy.
+- Drive uses a 5% joystick deadband. Above it, the first active command is 20% (`speed=200`) and subsequent output is rounded to 5% steps through 100%; values `1..199` are never emitted with mode `AA 52`. The existing time-equivalent slew and zero-before-reverse rule remain, with drive configured at 200 Hz and steering independently at 50 Hz. Co-scheduled drive/steering frames are drained into the CAN FIFO in one bounded service pass instead of retaining steering across the next 5 ms deadline. Unqualified/lost/failsafe RC emits only the drive stop frame when autonomy is explicitly released and actual safety/backend state is healthy.
 - Service/HIL permits RC or host through the same authority boundary, never both as motion owners. Host allowlist validates exact ID/DLC/payload. Normal app joystick release keeps ARM while sending neutral; lifecycle/session/authority failures still disarm.
 - Wi-Fi identity uses a connection-edge `STREAM_SESSION` anchor, with an
   idempotent `HOST_QUERY_CAPABILITY` recovery handshake ordered as
@@ -392,7 +393,7 @@ contract.
 - Kvaser CAN1 `0x50` 20 Hz와 CSM Wi-Fi를 같은 30 s 창에서 계측한 최종 artifact는 `C:\WORKS\VS\vsm_android_app\build\hil\20260716-114703-kvaser-can1-wifi-observer`다. CSM health-window source/bus0는 `580/580`, CAN/FIFO/Wi-Fi drop과 typed/segment/capture gap은 모두 0이었다.
 - 2026-07-16의 폐기 전 `0x100/0x200` 계약에서는 PC HIL client로 canonical heartbeat/ARM/neutral/disarm과 matching `CAN_TX_RAW`를 확인했다. 이 기록은 D-016의 현행 `0x005/0x007` 검증으로 승계되지 않는다.
 - 2026-07-20 당시 dirty build 사용량은 M4 RAM 14.7%/Flash 7.0%, M7 RAM 74.7%/Flash 44.0%였다. 현재 reset REF build는 RAM 79.5%/Flash 45.5%다.
-- 실제 R16SM CRSF/telemetry, M4-M7 IPC, autonomy wiring, 실제 vehicle mapping, D1 hardware gate, completion-correlated CAN TX, production Wi-Fi 동시 운용, dual-CAN 고부하와 장시간 reset gate는 아직 검증되지 않았다.
+- 실제 R16SM CRSF/telemetry, M4-M7 IPC, autonomy wiring, 실제 vehicle mapping, 실제 safety 입력, completion-correlated CAN TX, production Wi-Fi 동시 운용, dual-CAN 고부하와 장시간 reset gate는 아직 검증되지 않았다.
 
 ## 확정된 목표
 
@@ -418,7 +419,7 @@ contract.
 3. Windows USB + Android Wi-Fi + RC + CAN0 2,000 fps + CAN1 2,000 fps 동시 HIL과
    1/8/24시간 soak를 수행한다.
 4. R16SM CRSF/telemetry와 M4-M7 IPC를 실제 장비에서 검증한다.
-5. upstream autonomy runtime profile, 실제 차량 mapping, D1 hardware gate를 승인한다.
+5. upstream autonomy runtime profile, 실제 차량 mapping과 safety 입력 계약을 승인한다.
 6. FDCAN completion-correlated `CAN_TX_RAW` host contract는 완료했다. 실제
    Kvaser ID/payload/주기/ACK와 late/cancel failure HIL은 남아 있다.
 

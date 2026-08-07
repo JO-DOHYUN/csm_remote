@@ -42,7 +42,6 @@ struct RemoteControlRuntimeInputs {
   bool estop_asserted = false;
   bool fault_lockout = false;
   bool local_tx_inhibit_latched = true;
-  bool hardware_gate_allows = false;
   bool host_service_active = false;
   authority::AutonomyAuthorityState autonomy_state =
       authority::AutonomyAuthorityState::Unknown;

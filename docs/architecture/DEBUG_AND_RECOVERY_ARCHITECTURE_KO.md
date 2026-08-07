@@ -216,7 +216,7 @@ release artifact 전에 다음 gate가 모두 닫혀야 한다.
 1. bootloader early reset-latch 보존 또는 동등한 외부 reset/power evidence
 2. upstream autonomy monitor의 실제 CAN profile·runtime wiring과 fail-closed HIL
 3. 실제 차량 CAN mapping 승인; `0x007` MDPS mapper는 bench 전용이며 기본 Off
-4. D1 hardware gate의 실제 회로 극성·fail-safe 의미와 readback 검증
+4. 실제 vehicle safety 입력과 CAN backend fault의 fail-safe 의미 검증
 5. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`; driver FIFO enqueue 결과만으로
    actual bus transmission을 주장하지 않음
 6. Kvaser 등 외부 analyzer에서 ID/payload/주기/ACK와 typed evidence 대조

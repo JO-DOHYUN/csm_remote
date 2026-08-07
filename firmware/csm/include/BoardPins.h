@@ -12,9 +12,7 @@ namespace BoardPins {
 //   second internal CAN backend is implemented and HIL-proven.
 
 static constexpr pin_size_t SafetyWatchdogToggle = D0;  // PH15
-static constexpr pin_size_t CanTxEnable = D1;           // PK1, default disabled by hardware pulldown
 static constexpr pin_size_t EstopInN = D2;              // PJ11, isolated input
-static constexpr pin_size_t ArmKeyIn = D3;              // PG7, isolated/service input
 
 static constexpr pin_size_t EncoderB = D4;              // PC7, TIM3_CH2
 static constexpr pin_size_t EncoderA = D5;              // PC6, TIM3_CH1

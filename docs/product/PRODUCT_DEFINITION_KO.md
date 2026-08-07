@@ -47,7 +47,7 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 - RC stale/failsafe는 즉시 중립으로 전환하고 안정된 release qualification 뒤에만 하위 source를 허가한다.
 - malformed CRSF, IPC integrity failure, M4 heartbeat loss는 authority를 해제하지 않는 fail-closed 상태다.
 - M4, VSM, parser, UI는 최종 CAN TX 권한을 가질 수 없다.
-- 모든 local motion TX는 M7 `CanTxGateway`와 hardware gate를 통과해야 한다.
+- 모든 local motion TX는 M7 `CanTxGateway`의 authority, safety, frame policy와 실제 CAN backend 상태를 통과해야 한다.
 - `CONTROL_ACK`는 요청 수락/거부 증거다. `CAN_TX_RAW`는 별도 TX evidence지만
   현재 built-in CAN의 driver FIFO enqueue 수락 직후 발행되는 경로는 물리 송신
   완료 증거가 아니다. release에서는 FDCAN TX completion/TXBTO와 상관된 record와
@@ -79,7 +79,6 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 
 - upstream autonomy monitor의 실제 CAN profile과 runtime wiring
 - 실제 차량 vehicle mapping 승인; `0x007` MDPS mapping은 bench 전용이며 기본 Off
-- D1 hardware gate의 회로 극성, fail-safe 의미, readback 검증
 - completion-correlated `CAN_TX_RAW`와 Kvaser 등 외부 analyzer 대조
 - RC loss/reacquire, USB+Wi-Fi+CAN 동시 부하, reset/fault injection, 장시간 soak
 

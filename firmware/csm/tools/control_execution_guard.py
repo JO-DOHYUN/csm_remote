@@ -29,7 +29,8 @@ for required in (
     "BOARD_ENABLE_REMOTE_CONTROL=1",
     "BOARD_ENABLE_REMOTE_AUTHORITY=1",
     "BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING=0",
-    "BOARD_ENABLE_MDPS_BENCH_MAPPING=1",
+    "BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING=1",
+    "BOARD_ENABLE_MDPS_BENCH_MAPPING=0",
     "BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS=1",
     "BOARD_ENABLE_HOST_CAN_TX_BUILTIN=1",
     "BOARD_ENABLE_HOST_DOWNLINK=1",
@@ -296,14 +297,17 @@ for required in (
 
 safety_header = (root / "include" / "board" / "SafetySupervisor.h").read_text(encoding="utf-8")
 safety_source = (root / "src" / "board" / "SafetySupervisor.cpp").read_text(encoding="utf-8")
-for required in (
-    "require_arm_key",
-    "arm_key_debounce_ms",
-    "if (!arm_key_ready_)",
-    "safety_config.require_arm_key = BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS != 0;",
+gateway_header = (root / "include" / "board" / "control" / "CanTxGateway.h").read_text(encoding="utf-8")
+gateway_source = (root / "src" / "board" / "control" / "CanTxGateway.cpp").read_text(encoding="utf-8")
+for forbidden in (
+    "ArmKey",
+    "arm_key",
+    "CanTxEnable",
+    "hardware_gate_allows",
+    "RejectedHardwareGate",
 ):
-    if required not in safety_header + safety_source + main:
-        fail(f"Service/HIL ArmKey interlock missing {required}")
+    if forbidden in safety_header + safety_source + main + gateway_header + gateway_source:
+        fail(f"removed external control interlock returned: {forbidden}")
 
 feeder_header = (root / "include" / "board" / "feeder" / "FeederUartIngress.h").read_text(encoding="utf-8")
 feeder_source = (root / "src" / "board" / "feeder" / "FeederUartIngress.cpp").read_text(encoding="utf-8")

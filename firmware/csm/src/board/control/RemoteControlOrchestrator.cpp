@@ -176,7 +176,6 @@ CanTxGatewayInputs RemoteControlOrchestrator::buildGatewayInputs(
   gateway_inputs.authority_decision = authority_decision;
   gateway_inputs.local_tx_inhibit_latched = inputs.local_tx_inhibit_latched;
   gateway_inputs.safety_supervisor_allows = inputs.safety_supervisor_allows;
-  gateway_inputs.hardware_gate_allows = inputs.hardware_gate_allows;
   gateway_inputs.backend_state = inputs.backend_state;
   return gateway_inputs;
 }

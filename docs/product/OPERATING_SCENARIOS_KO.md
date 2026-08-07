@@ -5,7 +5,7 @@
 M7 application은 위험한 driver보다 먼저 reset evidence와 retained recovery를
 복구하고 새 boot marker를 commit한다. safety inhibit 상태에서 시작하며 hard
 safety 허용, upstream autonomy의 명시적 `InactiveConfirmed`, RC neutral handoff,
-실제 vehicle mapping, hardware gate, CAN backend가 모두 유효하기 전에는 local
+실제 vehicle mapping, authority/safety 입력, CAN backend가 모두 유효하기 전에는 local
 CAN TX를 허용하지 않는다. VSM 미연결은 RC 안전 판단을 바꾸지 않는다.
 초기화 순서는 `safe/inhibit -> reset/watchdog evidence -> safety/RC/CAN
 runtime -> canonical/USB -> Wi-Fi observer`다. Wi-Fi start 실패나 지연은
@@ -78,6 +78,6 @@ last progress, main gap, Wi-Fi phase, retained integrity와 CAN TX 0을 판정�
 
 Production Remote profile의 vehicle mapper 기본값은 `None`이고 local CAN TX
 capability도 Off다. `0x007` MDPS mapping은 명시적 bench artifact에만 허용한다.
-upstream autonomy runtime wiring, 실제 차량 mapping, D1 hardware gate 의미,
+upstream autonomy runtime wiring, 실제 차량 mapping,
 completion-correlated `CAN_TX_RAW`, 외부 analyzer HIL 전에는 RC data를 관측할 수
 있어도 차량 제어 제품으로 운용하지 않는다.

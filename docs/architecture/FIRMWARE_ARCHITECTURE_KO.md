@@ -53,7 +53,7 @@ failure는 authority를 풀지 않는다. SRAM4 IPC는 header, M4 writer, M7 wri
 영역을 32-byte cache-line 단위로 분리하며 writer는 자기 영역만 clean한다.
 
 `AuthorityManager`와 mapper는 CAN driver를 호출하지 않는다. `CanTxGateway`는
-authority, build profile, allowlist, hardware gate, backend 상태를 검증하고 M7
+authority, build profile, allowlist, safety, backend 상태를 검증하고 M7
 runtime만 driver write를 수행한다. 현재 Portenta built-in CAN의 양수 write
 결과는 driver FIFO enqueue 수락 근거다. FDCAN TX completion/TXBTO와 상관되지
 않은 `CAN_TX_RAW`를 물리 bus 송신 성공으로 해석하지 않는다.
@@ -61,12 +61,12 @@ runtime만 driver write를 수행한다. 현재 Portenta built-in CAN의 양수 
 Production Remote profile의 mapper 기본값은 `None`이고 local CAN TX capability도
 광고하지 않는다. `VehicleBench0x005And0x007`은 명시적 bench flag로만 선택할 수 있으며
 제품의 5-ID 차량 mapping이 아니다. 실제 vehicle mapping, autonomy runtime wiring,
-D1 hardware gate 의미, completion-correlated TX evidence가 승인되기 전에는 이
+실제 vehicle safety 입력과 completion-correlated TX evidence가 승인되기 전에는 이
 profile을 차량 제어 release artifact로 판정하지 않는다.
 
 compile-time `InactiveConfirmed`와 control-enable flag는 runtime evidence가 아니다.
 RemoteProduct는 실제 autonomy provider가 fresh `InactiveConfirmed`를 제공하고,
-approved vehicle profile과 독립 hardware gate evidence가 모두 유효할 때만 local
+approved vehicle profile과 실제 authority/safety evidence가 모두 유효할 때만 local
 motion authority를 검토한다. 입력이 없는 경우 `Unknown/inhibit`가 정상 제품
 동작이다. bench-only release adapter는 capability/profile에 별도로 표시한다.
 
@@ -75,10 +75,9 @@ ServiceHil의 wire request는 direct CAN frame permission이 아니다. adapter�
 RealtimeCoordinator, authority, limiter, mapper와 absolute release schedule을
 통과한다. host가 CAN backend를 직접 호출하는 경로는 금지한다.
 
-ArmKey는 debounced physical ServiceHil ARM interlock이다. key OFF에서는 ARM/renew를
-거부하고, 이미 armed이면 가능한 neutral transition 뒤 disarm/inhibit한다.
-`CanTxEnable` 출력값이나 build flag는 별도 gate readback이 아니다. 승인된
-readback 입력이 없는 board/profile은 vehicle-control release를 광고하지 않는다.
+ServiceHil ARM은 명시적 operator 요청, 현재 epoch/boot identity, fresh health,
+RC/autonomy release, heartbeat/lease와 CAN backend ready를 요구한다. 존재하지 않는
+외부 ArmKey 또는 CAN-TX gate 입력은 제품 계약으로 가정하지 않는다.
 
 vehicle 벤치에는 별도 `remote_product_mdps_bench_wifi` artifact를 사용한다. 이
 artifact도 제품 authority/safety/limiter와 canonical USB/Wi-Fi 경계를 그대로

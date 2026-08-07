@@ -33,7 +33,6 @@ struct CanTxGatewayInputs {
   authority::AuthorityDecision authority_decision = {};
   bool local_tx_inhibit_latched = true;
   bool safety_supervisor_allows = false;
-  bool hardware_gate_allows = false;
   can::CanBackendState backend_state = {};
 };
 
