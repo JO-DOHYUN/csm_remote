@@ -218,8 +218,8 @@ void testFreshAnchorPartialCompletionBoundary() {
 
 void testQueueEnvelopeCoversDeclaredTransient() {
   using namespace csm::board::uplink;
-  CHECK(kProductEnabledWireBytesPerSecond == 111922);
-  CHECK(kProductEnabledRecordsPerSecond == 686);
+  CHECK(kProductEnabledWireBytesPerSecond == 115922);
+  CHECK(kProductEnabledRecordsPerSecond == 786);
   CHECK(kProductUplinkMinimumBytesPerSecond == 120000);
   CHECK(kProductUplinkDesignBytesPerSecond == 135000);
   CHECK(BOARD_WIFI_SINK_QUEUE_BYTES == 49152);
@@ -232,7 +232,7 @@ void testQueueEnvelopeCoversDeclaredTransient() {
   CHECK(kWifiFallbackIngressBytes == 675);
   CHECK(kWifiTransientIngressBytes == 33750);
   CHECK(kWifiFallbackIngressRecords == 4);
-  CHECK(kWifiTransientIngressRecords == 172);
+  CHECK(kWifiTransientIngressRecords == 197);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES +
             csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
             kWifiFallbackIngressBytes <=

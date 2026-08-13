@@ -4496,6 +4496,62 @@ static void service_remote_control() {
 }
 #endif
 
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+static void service_service_hil_control() {
+  if (!service_hil_intent_runtime_ok ||
+      !service_hil_intent_runtime.active()) {
+    return;
+  }
+
+  const uint32_t now_ms = millis();
+  uint8_t safety_reason = ControlReasonOk;
+  const bool authority_allowed = host_control_authority_allowed();
+  const bool safety_allowed = safety_supervisor.canAcceptTx(
+      now_ms, control_backend_ready_for_bus(BOARD_BUILTIN_CAN_BUS_ID),
+      &safety_reason);
+  if (!authority_allowed || !safety_allowed) {
+    // Authority, heartbeat, lease, safety and backend are release-time gates.
+    // Once one closes, no stale intent can survive into a later ARM session.
+    service_hil_intent_runtime.reset(now_ms);
+    service_steering_center_guard.reset();
+    return;
+  }
+
+  const csm::board::control::ServiceHilReleaseBatch releases =
+      service_hil_intent_runtime.poll(now_ms);
+  for (uint8_t index = 0; index < releases.count; ++index) {
+    const csm::board::control::ServiceHilReleaseItem& item =
+        releases.items[index];
+    csm::board::can::CanBackendState backend;
+    backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
+    const csm::board::can::BuiltinCanTxOutcome tx_outcome =
+        submit_builtin_can_frame(
+            item.frame.bus, item.frame.can_id_flags, item.frame.dlc,
+            item.frame.data,
+            csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
+            item.command_id);
+    if (!tx_outcome.fifoEnqueueAccepted()) {
+      increment_builtin_can_counter(&builtin_can_tx_failed_total);
+      emit_board_event(
+          EventBuiltinCanTxFailed,
+          (static_cast<uint16_t>(tx_outcome.code) << 8u) |
+              static_cast<uint16_t>(
+                  static_cast<uint32_t>(-tx_outcome.driver_result) & 0xFFu),
+          builtin_can_tx_failed_total);
+      if (tx_outcome.terminalFailure()) {
+        builtin_can_tx_inhibit_latched = true;
+        service_hil_intent_runtime.reset(now_ms);
+        service_steering_center_guard.reset();
+      }
+      // A transient full/busy outcome consumes this absolute release. Retrying
+      // it later would create the same catch-up burst this scheduler removes.
+      break;
+    }
+    safety_supervisor.noteControlTx(now_ms);
+  }
+}
+#endif
+
 static void toggle_safety_watchdog_if_needed() {
 #if BOARD_ENABLE_SAFETY_IO
   const uint32_t now_ms = millis();
@@ -5048,7 +5104,8 @@ static bool __attribute__((unused)) is_allowed_host_can_frame(
   }
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
   return (can_id == csm::board::control::kRemoteDriveCanId && dlc == 8) ||
-         (can_id == csm::board::control::kRemoteSteeringCanId && dlc == 8);
+         (can_id == csm::board::control::kRemoteSteeringCanId && dlc == 8) ||
+         (can_id == csm::board::control::kServiceHilEhbCanId && dlc == 8);
 #else
   return can_id == kHostCanTxAllowedPrimaryId ||
          (can_id >= kHostCanTxAllowedRangeStart && can_id <= kHostCanTxAllowedRangeEnd);
@@ -5080,6 +5137,14 @@ static bool __attribute__((unused)) is_valid_service_hil_payload(
     }
     return data[7] == 0 ||
         data[7] == csm::board::control::kRemoteAuxiliaryNegative;
+  }
+  if (can_id == csm::board::control::kServiceHilEhbCanId) {
+    for (uint8_t i = 0; i < 7; ++i) {
+      if (data[i] != 0) return false;
+    }
+    return data[7] == csm::board::control::kServiceHilEhbNeutral ||
+        (data[7] >= csm::board::control::kServiceHilEhbMinimum &&
+         data[7] <= csm::board::control::kServiceHilEhbMaximum);
   }
   return false;
 #else
@@ -5414,25 +5479,38 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
                      host_can_tx_request_total);
     return;
   }
-  const csm::board::control::ServiceHilIntentResult normalized =
+  const csm::board::control::ServiceHilIntentResult admitted =
       service_hil_intent_runtime.accept(now_ms, command_id, can_id, dlc, data);
-  if (!normalized.accepted) {
+  if (!admitted.accepted) {
     host_can_tx_rejected_total++;
-    const uint8_t reason =
-        normalized.decision ==
-                csm::board::authority::ControlDecisionCode::RejectedRateLimit
-            ? ControlReasonRateLimited
-            : ControlReasonUnsupportedFrame;
+    uint8_t reason = ControlReasonSafetyLockout;
+    switch (admitted.decision) {
+      case csm::board::authority::ControlDecisionCode::RejectedRateLimit:
+        reason = ControlReasonRateLimited;
+        break;
+      case csm::board::authority::ControlDecisionCode::RejectedNoTakeover:
+        reason = ControlReasonAuthorityDenied;
+        break;
+      case csm::board::authority::ControlDecisionCode::RejectedFramePolicy:
+        reason = ControlReasonUnsupportedFrame;
+        break;
+      default:
+        break;
+    }
     emit_control_ack(command_id, ControlAckRejected, reason, bus,
                      can_id_flags, dlc, host_can_tx_request_total);
     emit_board_event(EventHostCanTxRejected, reason,
                      host_can_tx_rejected_total);
     return;
   }
-  can_id_flags = normalized.frame.can_id_flags;
-  dlc = normalized.frame.dlc;
-  memcpy(data, normalized.frame.data, sizeof(data));
-#endif
+  // This ACK confirms semantic intent admission only. The M7 release scheduler
+  // owns limiter progression and physical CAN cadence; terminal transmission
+  // remains visible only through CONTROL_TX_EVIDENCE and CAN_TX_RAW.
+  host_can_tx_accepted_total++;
+  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus,
+                   can_id_flags, dlc, host_can_tx_accepted_total);
+  return;
+#else
 
 #if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
   if (target_mcp2515) {
@@ -5527,6 +5605,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
                    host_can_tx_request_total);
   emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
 #endif
+#endif  // BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
 #else
   (void)payload;
   (void)len;
@@ -5539,6 +5618,7 @@ static void service_steering_center_timeout() {
   if (!host_control_authority_allowed() ||
       !safety_supervisor.leaseAlive(now_ms)) {
     service_steering_center_guard.reset();
+    service_hil_intent_runtime.reset(now_ms);
     return;
   }
 
@@ -5547,45 +5627,15 @@ static void service_steering_center_timeout() {
     return;
   }
 
-  uint8_t reason = ControlReasonOk;
-  if (!safety_supervisor.canAcceptTx(
-          now_ms, control_backend_ready_for_bus(BOARD_BUILTIN_CAN_BUS_ID),
-          &reason)) {
-    service_steering_center_guard.reset();
-    return;
-  }
-
   uint8_t data[8] = {};
   data[0] = steering;
-  const csm::board::control::ServiceHilIntentResult normalized =
+  const csm::board::control::ServiceHilIntentResult admitted =
       service_hil_intent_runtime.accept(
-          now_ms, host_can_tx_request_total + 1U,
+          now_ms, 0,
           csm::board::control::kRemoteSteeringCanId, 8, data);
-  if (!normalized.accepted) {
+  if (!admitted.accepted) {
     service_steering_center_guard.reset();
-    return;
   }
-  csm::board::can::CanBackendState backend;
-  backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
-  const csm::board::can::BuiltinCanTxOutcome tx_outcome =
-      submit_builtin_can_frame(
-          BOARD_BUILTIN_CAN_BUS_ID,
-          normalized.frame.can_id_flags, normalized.frame.dlc,
-          normalized.frame.data,
-          csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
-          host_can_tx_request_total + 1U);
-  if (!tx_outcome.fifoEnqueueAccepted()) {
-    increment_builtin_can_counter(&builtin_can_tx_failed_total);
-    builtin_can_tx_inhibit_latched = true;
-    emit_board_event(
-        EventBuiltinCanTxFailed,
-        (static_cast<uint16_t>(tx_outcome.code) << 8u) |
-            static_cast<uint16_t>(
-                static_cast<uint32_t>(-tx_outcome.driver_result) & 0xFFu),
-        builtin_can_tx_failed_total);
-    return;
-  }
-  safety_supervisor.noteControlTx(now_ms);
 }
 #endif
 
@@ -5655,6 +5705,13 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
         reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
+        if (reason == ControlReasonOk &&
+            !service_hil_intent_runtime.activate(millis())) {
+          safety_supervisor.disarm(millis());
+          reason = ControlReasonSafetyLockout;
+        }
+#endif
       }
       break;
     case csm::HostControlRenewLease:
@@ -5780,6 +5837,7 @@ static void service_host_downlink(int budget) {
     safety_supervisor.invalidateHostSession(millis());
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
     service_steering_center_guard.reset();
+    service_hil_intent_runtime.reset(millis());
 #endif
     safety_state = safety_supervisor.state();
     last_wifi_epoch = wifi_epoch;
@@ -6323,6 +6381,9 @@ void loop() {
   // the runtime's absolute timeline or producing catch-up bursts.
   update_safety_state();
   service_remote_control();
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  service_service_hil_control();
+#endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif
@@ -6380,6 +6441,9 @@ void loop() {
   service_deferred_loss_events();
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  service_service_hil_control();
+#endif
 #endif
   record_runtime_breadcrumb(RuntimeStageHostDownlink);
   service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
@@ -6387,10 +6451,14 @@ void loop() {
   update_safety_state();
 #if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
   service_steering_center_timeout();
+  service_service_hil_control();
 #endif
   toggle_safety_watchdog_if_needed();
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  service_service_hil_control();
+#endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif
@@ -6425,6 +6493,9 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  service_service_hil_control();
+#endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif
@@ -6458,6 +6529,9 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageIdle);
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
+#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS && BOARD_ENABLE_HOST_CAN_TX_BUILTIN
+  service_service_hil_control();
+#endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif

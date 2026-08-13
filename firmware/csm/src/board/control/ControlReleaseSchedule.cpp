@@ -11,12 +11,17 @@ bool timeReached(uint32_t now_ms, uint32_t release_ms) {
 
 bool ControlReleaseSchedule::begin(uint32_t phase_ms,
                                    uint32_t drive_period_ms,
-                                   uint32_t steering_period_ms) {
+                                   uint32_t steering_period_ms,
+                                   uint32_t brake_period_ms,
+                                   uint32_t brake_phase_offset_ms) {
   if (drive_period_ms == 0 || steering_period_ms == 0 ||
       drive_period_ms >= 0x80000000u ||
-      steering_period_ms >= 0x80000000u) {
+      steering_period_ms >= 0x80000000u ||
+      brake_period_ms >= 0x80000000u ||
+      brake_phase_offset_ms >= 0x80000000u) {
     drive_ = {};
     steering_ = {};
+    brake_ = {};
     started_ = false;
     return false;
   }
@@ -27,6 +32,9 @@ bool ControlReleaseSchedule::begin(uint32_t phase_ms,
   drive_.next_release_ms = phase_ms;
   steering_.period_ms = steering_period_ms;
   steering_.next_release_ms = phase_ms;
+  brake_ = {};
+  brake_.period_ms = brake_period_ms;
+  brake_.next_release_ms = phase_ms + brake_phase_offset_ms;
   started_ = true;
   return true;
 }
@@ -36,6 +44,9 @@ ControlReleaseBatch ControlReleaseSchedule::poll(uint32_t now_ms) {
   if (!started_) return releases;
   releases.drive = pollLane(now_ms, &drive_);
   releases.steering = pollLane(now_ms, &steering_);
+  if (brake_.period_ms != 0) {
+    releases.brake = pollLane(now_ms, &brake_);
+  }
   return releases;
 }
 

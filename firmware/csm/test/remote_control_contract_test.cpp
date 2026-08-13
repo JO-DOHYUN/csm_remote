@@ -1631,37 +1631,243 @@ void runtimeHandoffLossAndFaultPolicy() {
   CHECK(runtime.status().cycle_deadline_misses == 0);
 }
 
-void serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper() {
+void serviceHilIngressIsAdmissionAndM7OwnsCadence() {
   using csm::board::control::ServiceHilIntentRuntime;
+  using csm::board::control::ServiceHilReleaseBatch;
   ServiceHilIntentRuntime runtime;
   CHECK(runtime.begin(0, 1, 0x4849u));
 
   uint8_t forward[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 0, 0, 0};
-  auto result = runtime.accept(0, 1, 0x005, 8, forward);
-  CHECK(result.accepted);
-  CHECK(result.frame.can_id_flags == 0x005);
-  CHECK(result.frame.data[2] == 0xE8 && result.frame.data[3] == 0x03);
-
-  CHECK(runtime.accept(1, 2, 0x005, 8, forward).accepted);
-  uint8_t reverse[8] = {0xAA, 0x52, 0xE8, 0x03, 0x60, 0, 0, 0};
-  result = runtime.accept(5, 3, 0x005, 8, reverse);
-  CHECK(result.accepted);
-  CHECK(result.frame.data[4] != 0x60);
-  CHECK((static_cast<uint16_t>(result.frame.data[2]) |
-         (static_cast<uint16_t>(result.frame.data[3]) << 8u)) < 1000u);
-
   uint8_t steering[8] = {250, 0, 0, 0, 0, 0, 0, 0};
-  result = runtime.accept(20, 4, 0x007, 8, steering);
-  CHECK(result.accepted);
-  CHECK(result.frame.data[0] < 250);
-  CHECK(result.frame.data[0] >= 130);
+  const auto inactive = runtime.accept(0, 1, 0x005, 8, forward);
+  CHECK(!inactive.accepted);
+  CHECK(inactive.decision ==
+        csm::board::authority::ControlDecisionCode::RejectedNoTakeover);
+  CHECK(runtime.activate(0));
 
-  result = runtime.accept(35, 5, 0x007, 8, steering);
-  CHECK(result.accepted);
+  // A TCP burst changes only the latest semantic targets. It cannot advance
+  // the limiter or release CAN before M7's first absolute deadline.
+  CHECK(runtime.accept(0, 10, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(1, 11, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(2, 12, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(3, 13, 0x007, 8, steering).accepted);
+  CHECK(runtime.status().released_frames == 0);
+  CHECK(runtime.poll(4).count == 0);
+
+  auto find_release = [](const ServiceHilReleaseBatch& batch,
+                         uint32_t can_id)
+      -> const csm::board::control::ServiceHilReleaseItem* {
+    for (uint8_t index = 0; index < batch.count; ++index) {
+      if ((batch.items[index].frame.can_id_flags & 0x7FFu) == can_id) {
+        return &batch.items[index];
+      }
+    }
+    return nullptr;
+  };
+
+  ServiceHilReleaseBatch batch = runtime.poll(5);
+  CHECK(batch.count == 2);
+  const auto* drive = find_release(batch, 0x005);
+  const auto* steer = find_release(batch, 0x007);
+  CHECK(drive != nullptr && drive->command_id == 12);
+  CHECK(steer != nullptr && steer->command_id == 13);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  CHECK(steer != nullptr && steer->frame.data[0] == 130);
+  CHECK(runtime.poll(6).count == 0);
+  CHECK(runtime.poll(9).count == 0);
+
+  // Irregular cooperative polling retains phase and never catches up with an
+  // adjacent burst. The late 10 ms release is sent once at 12 ms; the reached
+  // 15 ms slot is accounted as missed because only 3 ms elapsed.
+  batch = runtime.poll(12);
+  CHECK(batch.count == 2);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  const auto* ehb = find_release(batch, 0x364);
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 0);
+  batch = runtime.poll(15);
+  CHECK(batch.count == 0);
+  CHECK(batch.drive_missed_releases == 1);
+  batch = runtime.poll(20);
+  CHECK(batch.count == 1);
+  CHECK(find_release(batch, 0x005) != nullptr);
+  batch = runtime.poll(25);
+  CHECK(batch.count == 2);
+  drive = find_release(batch, 0x005);
+  steer = find_release(batch, 0x007);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  CHECK(steer != nullptr && steer->frame.data[0] == 133);
+
+  // Reversal is admitted immediately as intent, but the fixed M7 cycle first
+  // reaches zero; only a later release may carry the reverse direction.
+  uint8_t reverse[8] = {0xAA, 0x52, 0xE8, 0x03, 0x60, 0, 0, 0};
+  CHECK(runtime.accept(26, 14, 0x005, 8, reverse).accepted);
+  batch = runtime.poll(30);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  batch = runtime.poll(35);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  batch = runtime.poll(40);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  batch = runtime.poll(45);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  batch = runtime.poll(50);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+  batch = runtime.poll(55);
+  drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x52);
+  CHECK(drive != nullptr && drive->frame.data[4] == 0x60);
 
   uint8_t invalid[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 1, 0, 0};
-  result = runtime.accept(45, 6, 0x005, 8, invalid);
-  CHECK(!result.accepted);
+  CHECK(!runtime.accept(36, 15, 0x005, 8, invalid).accepted);
+}
+
+void serviceHilEhbUsesIndependentTwentyMillisecondLane() {
+  using namespace csm::board::control;
+  ServiceHilIntentRuntime runtime;
+  CHECK(runtime.begin(0, 1, 0x4849u));
+  CHECK(runtime.activate(0));
+
+  auto find_ehb = [](const ServiceHilReleaseBatch& batch)
+      -> const ServiceHilReleaseItem* {
+    for (uint8_t index = 0; index < batch.count; ++index) {
+      if ((batch.items[index].frame.can_id_flags & 0x7FFu) ==
+          kServiceHilEhbCanId) return &batch.items[index];
+    }
+    return nullptr;
+  };
+
+  // ARM establishes exact all-zero EHB neutral before any host setpoint.
+  auto batch = runtime.poll(10);
+  const auto* ehb = find_ehb(batch);
+  CHECK(ehb != nullptr);
+  CHECK(ehb->command_id == 0);
+  CHECK(ehb->frame.dlc == 8);
+  for (uint8_t index = 0; index < 8; ++index) {
+    CHECK(ehb->frame.data[index] == 0);
+  }
+
+  uint8_t request[8] = {0, 0, 0, 0, 0, 0, 0, 1};
+  CHECK(runtime.accept(11, 81, kServiceHilEhbCanId, 8, request).accepted);
+  request[7] = 150;
+  CHECK(runtime.accept(12, 82, kServiceHilEhbCanId, 8, request).accepted);
+  CHECK(find_ehb(runtime.poll(29)) == nullptr);
+  batch = runtime.poll(30);
+  ehb = find_ehb(batch);
+  CHECK(ehb != nullptr && ehb->command_id == 82);
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 150);
+  for (uint8_t index = 0; index < 7; ++index) {
+    CHECK(ehb != nullptr && ehb->frame.data[index] == 0);
+  }
+
+  // Wire policy rejects the gap above neutral and every out-of-range byte.
+  request[0] = 1;
+  CHECK(!runtime.accept(31, 83, kServiceHilEhbCanId, 8, request).accepted);
+  request[0] = 0;
+  request[7] = 151;
+  CHECK(!runtime.accept(32, 84, kServiceHilEhbCanId, 8, request).accepted);
+
+  // A stale host setpoint becomes all-zero on the next independent release.
+  batch = runtime.poll(330);
+  ehb = find_ehb(batch);
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 0);
+  CHECK(batch.ehb_stale);
+}
+
+void serviceHilLimiterPreservesTwentyMillisecondWallTimeRamp() {
+  using csm::board::control::ServiceHilIntentRuntime;
+  using csm::board::control::ServiceHilReleaseBatch;
+  ServiceHilIntentRuntime runtime;
+  CHECK(runtime.begin(0, 1, 0x4849u));
+  CHECK(runtime.activate(0));
+
+  uint8_t forward[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 0, 0, 0};
+  uint8_t steering[8] = {250, 0, 0, 0, 0, 0, 0, 0};
+  CHECK(runtime.accept(0, 31, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(0, 32, 0x007, 8, steering).accepted);
+
+  auto find_release = [](const ServiceHilReleaseBatch& batch,
+                         uint32_t can_id)
+      -> const csm::board::control::ServiceHilReleaseItem* {
+    for (uint8_t index = 0; index < batch.count; ++index) {
+      if ((batch.items[index].frame.can_id_flags & 0x7FFu) == can_id) {
+        return &batch.items[index];
+      }
+    }
+    return nullptr;
+  };
+
+  ServiceHilReleaseBatch batch;
+  for (uint32_t now_ms = 5; now_ms <= 20; now_ms += 5) {
+    batch = runtime.poll(now_ms);
+  }
+  const auto* drive = find_release(batch, 0x005);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x02);
+
+  // Five 5 ms steps produce 60 throttle permille and 35 steering permille:
+  // within one scaled step of the 20 ms reference ramp, rather than the old
+  // unscaled 250/150 permille jump. The mapper exposes those boundaries as
+  // the first minimum-speed frame and a 134 steering byte.
+  batch = runtime.poll(25);
+  drive = find_release(batch, 0x005);
+  const auto* steer = find_release(batch, 0x007);
+  CHECK(drive != nullptr && drive->frame.data[1] == 0x52);
+  CHECK(drive != nullptr && drive->frame.data[2] == 0xC8 &&
+        drive->frame.data[3] == 0x00);
+  CHECK(steer != nullptr && steer->frame.data[0] == 134);
+}
+
+void serviceHilPerAxisStaleConvergesToBoundedNeutral() {
+  using csm::board::control::ServiceHilIntentRuntime;
+  ServiceHilIntentRuntime runtime;
+  CHECK(runtime.begin(0, 1, 0x4849u));
+  CHECK(runtime.activate(0));
+
+  uint8_t forward[8] = {0xAA, 0x52, 0xE8, 0x03, 0x50, 0, 0, 0};
+  uint8_t steering[8] = {250, 0, 0, 0, 0, 0, 0, 0};
+  CHECK(runtime.accept(0, 21, 0x005, 8, forward).accepted);
+  CHECK(runtime.accept(0, 22, 0x007, 8, steering).accepted);
+
+  csm::board::control::ServiceHilReleaseBatch batch;
+  for (uint32_t now_ms = 5; now_ms <= 300; now_ms += 5) {
+    batch = runtime.poll(now_ms);
+    CHECK(!batch.drive_stale);
+    CHECK(!batch.steering_stale);
+  }
+
+  // Freshness expires independently of heartbeat/lease. Drive reaches its
+  // exact stop frame within 100 ms of the 300 ms freshness bound; steering
+  // returns through the wall-time-scaled limiter and is exact center within
+  // 200 ms for the ramp accumulated during this test.
+  bool drive_neutral = false;
+  bool steering_neutral = false;
+  for (uint32_t now_ms = 305; now_ms <= 500; now_ms += 5) {
+    batch = runtime.poll(now_ms);
+    CHECK(batch.drive_stale);
+    CHECK(batch.steering_stale);
+    for (uint8_t index = 0; index < batch.count; ++index) {
+      const auto& frame = batch.items[index].frame;
+      const uint32_t can_id = frame.can_id_flags & 0x7FFu;
+      if (can_id == 0x005 && frame.data[1] == 0x02) {
+        drive_neutral = true;
+      }
+      if (can_id == 0x007 && frame.data[0] == 130 && frame.data[7] == 0) {
+        steering_neutral = true;
+      }
+    }
+  }
+  CHECK(drive_neutral);
+  CHECK(steering_neutral);
+  CHECK(runtime.status().drive_stale);
+  CHECK(runtime.status().steering_stale);
+
+  runtime.reset(501);
+  CHECK(!runtime.active());
+  CHECK(runtime.poll(1000).count == 0);
 }
 
 }  // namespace
@@ -1685,7 +1891,10 @@ int main() {
   runtimeReleasePhasesSurviveCooperativeLoopGap();
   runtimeImmediateStopRespectsSafetyAndWraparound();
   runtimeHandoffLossAndFaultPolicy();
-  serviceHilLegacyWireIsRebuiltByCommonLimiterAndMapper();
+  serviceHilIngressIsAdmissionAndM7OwnsCadence();
+  serviceHilEhbUsesIndependentTwentyMillisecondLane();
+  serviceHilLimiterPreservesTwentyMillisecondWallTimeRamp();
+  serviceHilPerAxisStaleConvergesToBoundedNeutral();
   if (failures != 0) {
     std::fprintf(stderr, "%d remote control contract checks failed\n", failures);
     return 1;

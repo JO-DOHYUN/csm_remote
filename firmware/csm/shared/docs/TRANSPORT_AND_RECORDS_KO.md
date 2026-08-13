@@ -455,6 +455,13 @@ Arduino CAN API accepts the write. Future queued control lanes may keep the same
 payload size while refining status wording, but must preserve the rule that
 `CAN_TX_RAW` is the actual-send evidence.
 
+In the Service/HIL `0x005/0x007/0x364` profile, `CONTROL_ACK status=1 reason=0`
+means that the frame-shaped payload was validated and admitted as the latest
+semantic intent for that axis. It does not mean that CAN was written at TCP
+arrival time. The M7 release owner later produces `CONTROL_TX_EVIDENCE` and
+`CAN_TX_RAW` at the fixed vehicle cadence; only those records prove an actual
+release and hardware completion.
+
 `CONTROL_TX_EVIDENCE` payload, 40 bytes:
 - `0..7 mono_us u64`
 - `8..11 command_id u32`
@@ -515,11 +522,14 @@ Current board host TX policy:
 - Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
 - Extended and RTR frames are rejected in this baseline.
 - `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses an exact
-  bench allowlist: standard `0x005` DLC8 drive payload and standard `0x007` DLC8
+  bench allowlist: standard `0x005` DLC8 drive payload, standard `0x007` DLC8
   steering payload described above. Service/HIL CENTER preserves steering byte0,
   sets byte7 to `0x01` for 4 seconds, then returns to byte0 `130` and byte7 `0x00`.
   Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
-  bounded steering overlay are validated before authority/safety admission. The removed
+  bounded steering overlay are validated before authority/safety admission. Standard
+  `0x364` DLC8 EHB intent has bytes0..6 fixed `0x00`; byte7 is neutral `0x00`
+  or the owner-approved Service/HIL request `0x01..0x96` (decimal 1..150).
+  The removed
   `0x100/0x200` adapter is not accepted.
 - Service/HIL에서 이 레코드는 wire 호환 envelope일 뿐 direct raw-CAN 권한이
   아니다. 보드는 `0x005/0x007`을 operator intent로 해석한 뒤 공통
@@ -532,6 +542,22 @@ Current board host TX policy:
   valid host 5/20 ms writes, so CSM never rejects or disarms solely from the
   observed socket-arrival interval. Range, ramp, authority, safety, and backend
   admission remain board-owned.
+- Service/HIL keeps exactly one latest semantic intent per axis and has no
+  downlink-to-CAN queue. M7's existing absolute/no-catch-up release schedule
+  advances the limiter once per 5 ms control release, emits `0x005` every 5 ms,
+  emits `0x007` every 20 ms, and emits `0x364` every 20 ms. The EHB phase is
+  staggered 5 ms after steering so the three control frames do not contend for
+  the same FDCAN FIFO instant. A late cooperative poll consumes missed
+  deadlines and never replays them as an adjacent burst.
+- Limiter steps are specified by the product's 20 ms reference dynamics and
+  scaled to the 5 ms release (`50/200/30/50` -> `12/50/7/12` permille).
+  ARM therefore changes authority, not the wall-time ramp or mechanical demand.
+- Each axis intent is fresh for 300 ms. An independently stale drive or steering
+  lane converges to neutral through the fixed-time M7 limiter; stale EHB emits
+  exact zero at its next 20 ms release. The other lanes remain independent.
+  Heartbeat, lease, authority, safety, or backend
+  loss closes the whole Service/HIL release path and clears every retained
+  intent; a later ARM cannot inherit stale targets.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
@@ -587,7 +613,7 @@ Current board host TX policy:
   the queue's atomic producer/consumer cursors directly; it does not maintain a
   second cached snapshot that either side could overwrite out of order.
   The 256-descriptor envelope is generated from the actual product mix,
-  including 200 Hz `CAN_TX_RAW`: 250 ms requires 172 records and the declared
+  including 300 Hz `CAN_TX_RAW`: 250 ms requires 197 records and the declared
   fallback/maximum-frame guard requires five more, below the 252 normal slots.
   Descriptor and byte capacity are independent compile/link-time gates.
   Neither dimension may be enlarged without a measured production load

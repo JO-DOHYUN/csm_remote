@@ -147,8 +147,8 @@ for token in (
         fail(f"worker recovery/evidence contract is missing {token!r}")
 
 for token in (
-    "kProductEnabledWireBytesPerSecond == 111922",
-    "kProductEnabledRecordsPerSecond == 686",
+    "kProductEnabledWireBytesPerSecond == 115922",
+    "kProductEnabledRecordsPerSecond == 786",
     "kProductUplinkMinimumBytesPerSecond = 120000",
     "kProductUplinkDesignBytesPerSecond = 135000",
     "productSegmentWireBytesPerSecond",

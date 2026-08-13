@@ -93,7 +93,7 @@ def calculate() -> dict:
     require(queue_bytes == 49152, "product Wi-Fi byte envelope drift")
     require(reserve_records == 4, "critical descriptor reserve drift")
     require(reserve_bytes == 2112, "critical byte reserve drift")
-    require(usb_queue_records == 192, "product USB descriptor envelope drift")
+    require(usb_queue_records == 208, "product USB descriptor envelope drift")
     require(usb_queue_bytes == 40960, "product USB byte envelope drift")
     require(usb_transient_coverage_ms == 250,
             "USB transient queue coverage contract drift")
@@ -127,7 +127,7 @@ def calculate() -> dict:
         "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
         "BOARD_WIFI_CALL_STALL_TIMEOUT_MS=5000",
         "BOARD_WIFI_AP_STA_CONCUR=1",
-        "BOARD_USB_SINK_QUEUE_RECORDS=192",
+        "BOARD_USB_SINK_QUEUE_RECORDS=208",
         "BOARD_USB_SINK_QUEUE_BYTES=40960",
         "BOARD_USB_TRANSIENT_COVERAGE_MS=250",
     ):
@@ -252,8 +252,8 @@ def calculate() -> dict:
     legacy_can_queue_total = 2 * 4096 * can_item_bytes
 
     require(compact_rx == 88874, "aggregate CAN wire calculation regression")
-    require(compact_total == 111922, "enabled product wire calculation regression")
-    require(enabled_records == 686, "enabled product record calculation regression")
+    require(compact_total == 115922, "enabled product wire calculation regression")
+    require(enabled_records == 786, "enabled product record calculation regression")
     require(compact_total <= minimum_rate, "enabled profile exceeds minimum gate")
     require(minimum_rate < design_rate, "design envelope lacks headroom")
     require(dtcm_storage == 53248, "DTCM live FIFO calculation regression")

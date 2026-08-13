@@ -6,7 +6,7 @@
 #include "board/uplink/ProductUplinkEnvelope.h"
 
 #ifndef BOARD_USB_SINK_QUEUE_RECORDS
-#define BOARD_USB_SINK_QUEUE_RECORDS 192
+#define BOARD_USB_SINK_QUEUE_RECORDS 208
 #endif
 
 #ifndef BOARD_USB_SINK_QUEUE_BYTES
