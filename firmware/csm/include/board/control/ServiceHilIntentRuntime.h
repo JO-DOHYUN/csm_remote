@@ -26,6 +26,7 @@ static constexpr uint32_t kServiceHilEhbCanId = 0x364;
 static constexpr uint8_t kServiceHilEhbNeutral = 0;
 static constexpr uint8_t kServiceHilEhbMinimum = 1;
 static constexpr uint8_t kServiceHilEhbMaximum = 150;
+static constexpr uint8_t kServiceHilEhbOpenLoop = 0xFF;
 static constexpr uint8_t kServiceHilReleaseMaxFrames = 3;
 
 struct ServiceHilReleaseItem {
@@ -103,6 +104,7 @@ class ServiceHilIntentRuntime {
   uint32_t steering_updated_ms_ = 0;
   uint32_t ehb_updated_ms_ = 0;
   uint8_t ehb_request_ = kServiceHilEhbNeutral;
+  bool ehb_open_loop_ = false;
   bool configured_ = false;
 };
 

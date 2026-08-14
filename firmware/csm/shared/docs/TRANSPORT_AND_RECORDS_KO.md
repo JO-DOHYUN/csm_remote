@@ -527,7 +527,8 @@ Current board host TX policy:
   sets byte7 to `0x01` for 4 seconds, then returns to byte0 `130` and byte7 `0x00`.
   Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
   bounded steering overlay are validated before authority/safety admission. Standard
-  `0x364` DLC8 EHB intent has bytes0..6 fixed `0x00`; byte7 is neutral `0x00`
+  `0x364` DLC8 EHB intent uses byte0 `0x00` for normal mode or `0xFF` for
+  open-loop mode, bytes1..6 fixed `0x00`; byte7 is neutral `0x00`
   or the owner-approved Service/HIL request `0x01..0x96` (decimal 1..150).
   The removed
   `0x100/0x200` adapter is not accepted.

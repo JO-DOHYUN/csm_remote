@@ -104,6 +104,7 @@ void ServiceHilIntentRuntime::reset(uint32_t now_ms) {
   steering_updated_ms_ = now_ms;
   ehb_updated_ms_ = now_ms;
   ehb_request_ = kServiceHilEhbNeutral;
+  ehb_open_loop_ = false;
   limiter_.begin(now_ms);
 }
 
@@ -145,7 +146,8 @@ bool ServiceHilIntentRuntime::decode(uint32_t can_id, uint8_t dlc,
     return true;
   }
   if (can_id == kServiceHilEhbCanId) {
-    for (uint8_t index = 0; index < 7; ++index) {
+    if (data[0] != 0 && data[0] != kServiceHilEhbOpenLoop) return false;
+    for (uint8_t index = 1; index < 7; ++index) {
       if (data[index] != 0) return false;
     }
     const uint8_t request = data[7];
@@ -185,6 +187,7 @@ ServiceHilIntentResult ServiceHilIntentRuntime::accept(
     status_.steering_stale = false;
   } else if (can_id == kServiceHilEhbCanId) {
     ehb_request_ = data[7];
+    ehb_open_loop_ = data[0] == kServiceHilEhbOpenLoop;
     ehb_command_id_ = command_id;
     ehb_updated_ms_ = now_ms;
     status_.ehb_present = true;
@@ -265,6 +268,8 @@ ServiceHilReleaseBatch ServiceHilIntentRuntime::poll(uint32_t now_ms) {
     frame.bus = bus_;
     frame.can_id_flags = kServiceHilEhbCanId;
     frame.dlc = 8;
+    frame.data[0] = status_.ehb_stale || !ehb_open_loop_
+        ? 0 : kServiceHilEhbOpenLoop;
     frame.data[7] = status_.ehb_stale ? kServiceHilEhbNeutral : ehb_request_;
     frame.policy_id = policy_id_;
     addRelease(frame, ehb_command_id_, &batch);
