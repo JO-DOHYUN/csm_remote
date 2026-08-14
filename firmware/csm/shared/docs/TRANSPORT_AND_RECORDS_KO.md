@@ -527,9 +527,14 @@ Current board host TX policy:
   sets byte7 to `0x01` for 4 seconds, then returns to byte0 `130` and byte7 `0x00`.
   Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
   bounded steering overlay are validated before authority/safety admission. Standard
-  `0x364` DLC8 EHB intent uses byte0 `0x00` for normal mode or `0xFF` for
-  open-loop mode, bytes1..6 fixed `0x00`; byte7 is neutral `0x00`
-  or the owner-approved Service/HIL request `0x01..0x96` (decimal 1..150).
+  `0x364` DLC8 EHB semantic intent uses byte0 `0x00` for standard mode or
+  `0xFF` for open-loop mode. In standard mode byte1 is `0` for retained hold or
+  `1..255` for an exact physical-frame count; in open-loop mode byte1 is always
+  `0`. Bytes2..6 are fixed `0`; byte7 is neutral `0x00` or the owner-approved
+  Service/HIL request `0x01..0x96` (decimal 1..150). The physical CAN `0x364`
+  always strips byte1 back to `0`: counted standard intent emits exactly N
+  20 ms frames and then all-zero neutral, while retained hold continues until
+  replacement, stale, disarm, or safety closure.
   The removed
   `0x100/0x200` adapter is not accepted.
 - Service/HIL에서 이 레코드는 wire 호환 envelope일 뿐 direct raw-CAN 권한이

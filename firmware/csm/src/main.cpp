@@ -5141,10 +5141,16 @@ static bool __attribute__((unused)) is_valid_service_hil_payload(
   if (can_id == csm::board::control::kServiceHilEhbCanId) {
     if (data[0] != 0 &&
         data[0] != csm::board::control::kServiceHilEhbOpenLoop) return false;
-    for (uint8_t i = 1; i < 7; ++i) {
+    if (data[0] == csm::board::control::kServiceHilEhbOpenLoop && data[1] != 0) {
+      return false;
+    }
+    for (uint8_t i = 2; i < 7; ++i) {
       if (data[i] != 0) return false;
     }
-    return data[7] == csm::board::control::kServiceHilEhbNeutral ||
+    if (data[7] == csm::board::control::kServiceHilEhbNeutral) {
+      return data[1] == 0;
+    }
+    return
         (data[7] >= csm::board::control::kServiceHilEhbMinimum &&
          data[7] <= csm::board::control::kServiceHilEhbMaximum);
   }

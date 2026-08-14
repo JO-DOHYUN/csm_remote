@@ -1764,15 +1764,33 @@ void serviceHilEhbUsesIndependentTwentyMillisecondLane() {
     CHECK(ehb != nullptr && ehb->frame.data[index] == 0);
   }
 
+  // Standard-mode byte1 is a semantic pulse count. It is stripped from the
+  // physical frame, emits exactly N releases, then returns to all-zero.
+  request[0] = 0;
+  request[1] = 3;
+  request[7] = 80;
+  CHECK(runtime.accept(31, 83, kServiceHilEhbCanId, 8, request).accepted);
+  ehb = find_ehb(runtime.poll(50));
+  CHECK(ehb != nullptr && ehb->frame.data[0] == 0);
+  CHECK(ehb != nullptr && ehb->frame.data[1] == 0);
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 80);
+  ehb = find_ehb(runtime.poll(70));
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 80);
+  ehb = find_ehb(runtime.poll(90));
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 80);
+  ehb = find_ehb(runtime.poll(110));
+  CHECK(ehb != nullptr && ehb->frame.data[7] == 0);
+
   // Wire policy rejects the gap above neutral and every out-of-range byte.
+  request[1] = 0;
   request[0] = 1;
-  CHECK(!runtime.accept(31, 83, kServiceHilEhbCanId, 8, request).accepted);
+  CHECK(!runtime.accept(111, 84, kServiceHilEhbCanId, 8, request).accepted);
   request[0] = 0;
   request[7] = 151;
-  CHECK(!runtime.accept(32, 84, kServiceHilEhbCanId, 8, request).accepted);
+  CHECK(!runtime.accept(112, 85, kServiceHilEhbCanId, 8, request).accepted);
 
   // A stale host setpoint becomes all-zero on the next independent release.
-  batch = runtime.poll(330);
+  batch = runtime.poll(350);
   ehb = find_ehb(batch);
   CHECK(ehb != nullptr && ehb->frame.data[7] == 0);
   CHECK(batch.ehb_stale);

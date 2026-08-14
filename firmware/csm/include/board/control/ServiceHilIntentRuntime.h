@@ -105,6 +105,7 @@ class ServiceHilIntentRuntime {
   uint32_t ehb_updated_ms_ = 0;
   uint8_t ehb_request_ = kServiceHilEhbNeutral;
   bool ehb_open_loop_ = false;
+  uint8_t ehb_pulse_remaining_ = 0;
   bool configured_ = false;
 };
 
