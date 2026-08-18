@@ -70,10 +70,12 @@ approved vehicle profile과 실제 authority/safety evidence가 모두 유효할
 motion authority를 검토한다. 입력이 없는 경우 `Unknown/inhibit`가 정상 제품
 동작이다. bench-only release adapter는 capability/profile에 별도로 표시한다.
 
-ServiceHil의 wire request는 direct CAN frame permission이 아니다. adapter가
-허용된 payload를 semantic drive/steering/CENTER intent로 변환한 뒤 같은
-RealtimeCoordinator, authority, limiter, mapper와 absolute release schedule을
-통과한다. host가 CAN backend를 직접 호출하는 경로는 금지한다.
+ServiceHil의 wire request는 authority/safety 우회 permission이 아니다. Host raw
+path는 configured bus, standard ID/DLC/RTR allowlist를 검증하고 payload를
+byte-preserve한 뒤 sole `BuiltinCanTxOwner`에 한 번 제출한다. vehicle meaning,
+sequence, count, ramp, CENTER, EHB와 explicit neutral은 upper control SW가 소유한다.
+Host가 FDCAN driver를 직접 호출하거나 CSM이 request를 semantic intent로 변환하는
+두 경로 모두 금지한다.
 
 ServiceHil ARM은 명시적 operator 요청, 현재 epoch/boot identity, fresh health,
 RC/autonomy release, heartbeat/lease와 CAN backend ready를 요구한다. 존재하지 않는
@@ -151,9 +153,13 @@ profile은 회귀 기준으로 유지한다. reset/recovery 상세 경계는
 
 ```text
 hard-safety ISR ---------------------------> latched safety snapshot
-M4 RC latest / host latest / autonomy latest
+M4 RC latest / autonomy latest
   -> RealtimeCoordinator (absolute release timeline)
   -> authority -> safety -> limiter -> mapper
+  -> FdcanOwner -> hardware TX completion journal
+
+HostCanTxRequest
+  -> session/authority/lease/hard-safety + static frame allowlist
   -> FdcanOwner -> hardware TX completion journal
 
 FDCAN RX ISR ring / feeder UART DMA ring
@@ -162,9 +168,9 @@ FDCAN RX ISR ring / feeder UART DMA ring
   -> independent USB worker / independent Wi-Fi worker
 ```
 
-- `RealtimeCoordinator`만 authority와 control state를 갱신하고 control frame을
-  요청한다. RC, host, autonomy adapter는 latest-value snapshot 또는 ordered
-  command event만 제공하며 CAN driver를 직접 호출하지 않는다.
+- `RealtimeCoordinator`는 RC/autonomy semantic state와 release frame을 소유한다.
+  Host raw admission은 semantic coordinator를 통과하지 않지만 동일 M7 authority,
+  safety와 sole FDCAN owner를 우회하지 않는다.
 - `FdcanOwner`만 built-in FDCAN register/FIFO를 소유한다. enqueue 성공과 실제
   TX 완료를 구분하고 `CAN_TX_RAW` 성공 evidence는 hardware completion 뒤에만
   생성한다.
@@ -208,7 +214,8 @@ fault-injection, soak gate를 새로 통과하기 전까지 제품 계약이 아
 1. absolute periodic scheduler와 Wi-Fi bounded drain을 host contract로 고정한다.
 2. FDCAN 단일 owner와 direct-write 금지 guard를 세운다.
 3. RX ISR ring/FIFO-lost evidence와 TX completion journal을 연결한다.
-4. RC와 Service/HIL을 같은 coordinator/authority/mapper 경로로 통합한다.
+4. RC/autonomy semantic 경로와 Service/HIL Host raw 경로를 authority/safety 및
+   sole FDCAN owner 앞에서 합류시키고 mapper ownership은 분리한다.
 5. feeder reset, CRC, truncation, duplicate/reorder, ring/UART overflow를 주입한다.
 6. legacy direct path를 제거하고 `main.cpp`를 composition root로 축소한다.
 7. 동시 RC + feeder 2,000 frame/s + USB + Wi-Fi fault/soak를 통과한 뒤 제품

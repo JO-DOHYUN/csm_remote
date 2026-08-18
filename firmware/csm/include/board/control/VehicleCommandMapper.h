@@ -24,36 +24,6 @@ static constexpr uint8_t kRemoteSteeringCenter = 130;
 static constexpr uint8_t kRemoteSteeringMaximum = 250;
 static constexpr uint8_t kRemoteAuxiliaryNegative = 0x01;
 static constexpr uint8_t kRemoteAuxiliaryPositive = 0x80;
-static constexpr uint32_t kServiceSteeringCenterMaxHoldMs = 4000;
-
-struct ServiceSteeringCenterDecision {
-  uint8_t steering = kRemoteSteeringCenter;
-  uint8_t auxiliary = 0;
-  bool timeout_release = false;
-};
-
-// M7-owned lifetime guard for the Service/HIL CENTER overlay. It does not own
-// a queue or a CAN driver; main's existing host-control path applies the
-// decision and emits a one-shot release if the host stops sending commands.
-class ServiceSteeringCenterGuard {
- public:
-  void reset();
-  ServiceSteeringCenterDecision apply(uint32_t now_ms, uint8_t steering,
-                                      uint8_t requested_auxiliary);
-  bool pollTimeoutRelease(uint32_t now_ms, uint8_t* steering);
-
-  bool active() const { return active_; }
-  bool timedOut() const { return timed_out_; }
-
- private:
-  bool expired(uint32_t now_ms) const;
-
-  uint32_t started_ms_ = 0;
-  uint8_t steering_ = kRemoteSteeringCenter;
-  bool active_ = false;
-  bool timed_out_ = false;
-};
-
 enum class VehicleCommandMapping : uint8_t {
   None = 0,
   Vehicle0x005And0x007 = 1,

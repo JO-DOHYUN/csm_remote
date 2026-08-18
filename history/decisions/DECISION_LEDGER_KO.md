@@ -631,7 +631,8 @@
 
 - Date: 2026-08-05
 - Status: Active except its proposed external ArmKey/CAN-TX-gate requirements,
-  which are superseded by D-034. D-029~D-032 transport and reset evidence
+  which are superseded by D-034, and its common semantic Service/HIL execution
+  path, which is superseded by D-035. D-029~D-032 transport and reset evidence
   decisions remain unchanged.
 - Baseline audit: CSM `4583856`, feeder `1dfbdb3`, Android `bd31e75` were checked
   against the owner closeout input. Confirmed source defects are RC-loss
@@ -680,3 +681,27 @@
 - Cleanup: pin ownership, safety state, gateway input/decision, profile guards,
   tests and active hardware documentation for the removed interlocks are deleted.
   A source guard fails if those names return.
+
+## D-035 Make Service/HIL Host CAN a mechanical raw I/O boundary
+
+- Date: 2026-08-18
+- Status: Active; supersedes D-033 only for Service/HIL Host execution ownership.
+- Boundary: upper VSM/control software owns vehicle command meaning, sequence,
+  count, ramp, CENTER, EHB and explicit neutral. CSM owns session/authority/lease/
+  hard-safety admission, static bus/standard-ID/DLC/RTR policy, FDCAN admission
+  and actual HW evidence. RC/autonomy semantic limiter/mapper remains on M7.
+- Execution: N physical frames are N individual `HostCanTxRequest` records. Each
+  allowed payload is byte-preserved and submitted once through the existing
+  `BuiltinCanTxOwner`. No latest overwrite, repeat/count generation, implicit
+  retry, persistent Host FIFO, cadence scheduler or TX segment is introduced.
+- Evidence: ACK Accepted follows tracked HW FIFO admission. Each Accepted request
+  reaches one terminal record 23; transmitted success additionally requires
+  matching `CAN_TX_RAW`. Busy/journal-full/pre-HW failure is explicit rejection,
+  and nonterminal pending is not a terminal failure.
+- Failure: already-HW-owned requests are not silently flushed on session loss;
+  new Host ARM waits for terminal closure. Lease/safety closure rejects new work.
+  A vehicle watchdog or independent hard-safety on message cessation is a release
+  gate because CSM no longer generates Host stale-neutral frames.
+- Verification: payload identity, N attempt accounting, owner-full/reject/pending/
+  terminal behavior, old-session closure, RC regression, canonical consumers,
+  target build and combined external-analyzer HIL.

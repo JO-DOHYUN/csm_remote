@@ -105,6 +105,10 @@ if "completion.transmitted()" not in completion_body:
     fail("CAN_TX_RAW completion callback must require transmitted outcome")
 if completion_body.count("emit_can_tx_raw(") != 1:
     fail("completion callback must be the sole built-in CAN_TX_RAW publisher")
+if (
+    "if (completion.terminal && completion.frame.origin ==" not in completion_body
+):
+    fail("CONTROL_TX_EVIDENCE must be emitted only for a terminal Host outcome")
 if "noteCanTxCompletion(" not in completion_body:
     fail("remote CAN success/failure must be driven by hardware completion")
 if (
@@ -258,32 +262,43 @@ if pre_submit_poll < 0 or builtin_submit < 0 or pre_submit_poll > builtin_submit
     fail("host CAN admission must reap FDCAN completions before submission")
 if "static_cast<uint16_t>(tx_outcome.code) << 8u" not in host_tx_body:
     fail("host CAN enqueue failure evidence must retain the owner outcome code")
-
-payload_policy_begin = main.find(
-    "static bool __attribute__((unused)) is_valid_service_hil_payload("
-)
-payload_policy_end = main.find("\n}", payload_policy_begin)
-payload_policy = main[payload_policy_begin:payload_policy_end]
 for required in (
-    "for (uint8_t i = 1; i < 7; ++i)",
-    "data[7] == 0",
-    "data[7] == csm::board::control::kRemoteAuxiliaryNegative",
+    "memcpy(data, &payload[11], sizeof(data));",
+    "(frame_flags & ~0x03u) != 0",
+    "raw_can_id > 0x7FFu",
+    "submit_builtin_can_frame(",
+    "tx_outcome.fifoEnqueueAccepted()",
 ):
-    if required not in payload_policy:
-        fail(f"Service/HIL steering CENTER payload policy missing {required}")
-
-for required in (
-    "frame.data[0] = mapSteering(command.steer_permille);",
-    "kServiceSteeringCenterMaxHoldMs = 4000",
-    "class ServiceSteeringCenterGuard",
-    "ServiceSteeringCenterGuard::pollTimeoutRelease",
-    "service_steering_center_guard.apply(now_ms, data[0], data[7])",
-    "service_steering_center_guard.pollTimeoutRelease(now_ms, &steering)",
-    "service_steering_center_guard.reset();",
-    "service_steering_center_timeout();",
+    if required not in host_tx_body:
+        fail(f"Host raw single-attempt path missing {required}")
+if "static constexpr uint32_t kServiceHilAllowedEhbCanId = 0x364u;" not in main or \
+        "(can_id == kServiceHilAllowedEhbCanId && dlc == 8)" not in main:
+    fail("Service/HIL static CAN allowlist must retain EHB ID 0x364 with DLC 8")
+for forbidden in (
+    "ServiceHilIntentRuntime",
+    "ServiceSteeringCenterGuard",
+    "service_hil_intent_runtime",
+    "service_steering_center_guard",
+    "is_valid_service_hil_payload",
+    "service_service_hil_control",
+    "service_steering_center_timeout",
 ):
-    if required not in mapper_header + mapper_source + main:
-        fail(f"bounded Service/HIL steering overlay missing {required}")
+    if forbidden in main + mapper_header + mapper_source:
+        fail(f"Host raw path still contains semantic policy {forbidden}")
+if (root / "include" / "board" / "control" / "ServiceHilIntentRuntime.h").exists():
+    fail("retired Service/HIL semantic runtime header still exists")
+if (root / "src" / "board" / "control" / "ServiceHilIntentRuntime.cpp").exists():
+    fail("retired Service/HIL semantic runtime source still exists")
+if "BuiltinCanTxOwner::kJournalSlots" not in main:
+    fail("CAPABILITY host_tx_queue_size must expose the three tracked HW attempts")
+if (
+    "builtin_can_tx_owner.activeJournalSlots(\n"
+    "          csm::board::can::BuiltinCanTxOrigin::HostControl) != 0"
+    not in main
+):
+    fail("new Host ARM must wait for unresolved Host CAN attempts")
+if "frame.data[0] = mapSteering(command.steer_permille);" not in mapper_source:
+    fail("RC semantic mapper must remain intact")
 if "if (command.auxiliary_permille != 0) {\n    frame.data[7]" not in mapper_source:
     fail("RC auxiliary is not an overlay on the mapped steering command")
 

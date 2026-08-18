@@ -1,6 +1,23 @@
 # BRIEF
 
-Updated: 2026-08-05
+Updated: 2026-08-18
+
+## 2026-08-18 Host raw CAN I/O boundary
+
+- D-035 supersedes D-033's common semantic Service/HIL execution path. Upper
+  VSM/control software owns vehicle meaning, sequence, count, ramp, CENTER, EHB
+  and explicit neutral. RC/autonomy semantic limiter/mapper remains on M7.
+- CSM Host raw path owns session/authority/lease/hard-safety, static
+  bus/ID/DLC/RTR allowlist, byte-preserving one-shot FDCAN admission and terminal
+  HW evidence. N physical requests are N `HostCanTxRequest` records.
+- No Host cadence scheduler, persistent FIFO, latest overwrite, repeat/count
+  generation, implicit retry, TX segment or downlink budget increase is approved.
+- Source implementation is closed: legacy Host semantic runtime/CENTER guard are
+  removed, raw payload bytes reach `BuiltinCanTxOwner`, record 23 is terminal-only,
+  new ARM waits unresolved owner work, and capability reports three tracked HW
+  attempts. Native contract/guard and the successor Service/HIL build pass
+  (RAM 211,752 B, flash 367,224 B). Device/CAN-analyzer/HIL proof remains OPEN;
+  older HIL claims do not prove this new Host boundary.
 
 ## 2026-08-05 profile-scoped product closeout
 
@@ -10,11 +27,10 @@ Updated: 2026-08-05
 - `BENCH_005_007_V1` remains available only in explicit bench profiles.
   HNO1 Rev 0 defines a different 1 Mbit/s Driving-Line `0x005/0x007` contract
   and must not be mixed with it. `MdpsBench` is changed to `0x007` only.
-- Service/HIL raw requests move behind the common M7 coordinator/limiter/mapper,
-  and its ARM path requires explicit operator intent plus current authority,
-  health, heartbeat/lease and CAN-backend evidence. Release-capable control also
-  requires authenticated client credentials; absent credentials block that
-  profile rather than weakening Observer.
+- Superseded for Host execution by D-035: the 2026-08-05 implementation moved
+  Service/HIL requests behind the common coordinator/limiter/mapper. The current
+  decision detaches Host raw requests from semantic mapping while preserving ARM,
+  authority, health, heartbeat/lease, CAN-backend and credential gates.
 - CSM feeder-UART DMA error callback/main handoff is a real source defect and
   will use an atomic event with main-owned restart/stats. RP2040 SPSC/mailbox
   ownership is unchanged.

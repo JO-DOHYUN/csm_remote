@@ -155,6 +155,7 @@ class BuiltinCanTxOwner {
   bool configured() const { return configured_; }
   uint8_t ownedBus() const { return owned_bus_; }
   uint8_t activeJournalSlots() const;
+  uint8_t activeJournalSlots(BuiltinCanTxOrigin origin) const;
   bool trackingFaultLatched() const { return tracking_fault_latched_; }
   const BuiltinCanTxOwnerCounters& counters() const { return counters_; }
 #if defined(CSM_REMOTE_SHARED_MEMORY_TEST)

@@ -81,63 +81,6 @@ CanFrameRequest makeSteeringFrame(const OperatorCommand& command,
 
 }  // namespace
 
-void ServiceSteeringCenterGuard::reset() {
-  started_ms_ = 0;
-  steering_ = kRemoteSteeringCenter;
-  active_ = false;
-  timed_out_ = false;
-}
-
-bool ServiceSteeringCenterGuard::expired(uint32_t now_ms) const {
-  return active_ && now_ms - started_ms_ >= kServiceSteeringCenterMaxHoldMs;
-}
-
-ServiceSteeringCenterDecision ServiceSteeringCenterGuard::apply(
-    uint32_t now_ms, uint8_t steering, uint8_t requested_auxiliary) {
-  ServiceSteeringCenterDecision decision;
-  decision.steering = steering < kRemoteSteeringMinimum
-      ? kRemoteSteeringMinimum
-      : (steering > kRemoteSteeringMaximum ? kRemoteSteeringMaximum
-                                           : steering);
-
-  if (requested_auxiliary != kRemoteAuxiliaryNegative) {
-    reset();
-    decision.steering = steering < kRemoteSteeringMinimum
-        ? kRemoteSteeringMinimum
-        : (steering > kRemoteSteeringMaximum ? kRemoteSteeringMaximum
-                                             : steering);
-    decision.auxiliary = 0;
-    return decision;
-  }
-
-  steering_ = decision.steering;
-  if (timed_out_) {
-    decision.timeout_release = true;
-    return decision;
-  }
-  if (!active_) {
-    active_ = true;
-    started_ms_ = now_ms;
-  }
-  if (expired(now_ms)) {
-    active_ = false;
-    timed_out_ = true;
-    decision.timeout_release = true;
-    return decision;
-  }
-  decision.auxiliary = kRemoteAuxiliaryNegative;
-  return decision;
-}
-
-bool ServiceSteeringCenterGuard::pollTimeoutRelease(uint32_t now_ms,
-                                                    uint8_t* steering) {
-  if (!expired(now_ms)) return false;
-  active_ = false;
-  timed_out_ = true;
-  if (steering != nullptr) *steering = steering_;
-  return true;
-}
-
 void VehicleCommandMapper::begin(uint32_t) {
   profile_ = {};
 }

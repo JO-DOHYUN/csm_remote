@@ -450,17 +450,19 @@ software must not mark a frame as actually sent from `CONTROL_ACK` alone. Actual
 CAN TX success is proven by the matching `CAN_TX_RAW` audit record. The current
 MCP2515 profile emits `CONTROL_ACK status=1 reason=0` after the request is
 accepted into the MCP TX path, then emits `CAN_TX_RAW` only after the TX
-completion audit succeeds. The built-in CAN profile emits `CAN_TX_RAW` after the
-Arduino CAN API accepts the write. Future queued control lanes may keep the same
-payload size while refining status wording, but must preserve the rule that
-`CAN_TX_RAW` is the actual-send evidence.
+completion audit succeeds. The built-in CAN profile emits `CONTROL_ACK Accepted`
+only after the sole owner has accepted and tracked the FDCAN FIFO request, then
+emits terminal `CONTROL_TX_EVIDENCE` and `CAN_TX_RAW` from HW completion. ACK is
+not actual-send evidence.
 
 In the Service/HIL `0x005/0x007/0x364` profile, `CONTROL_ACK status=1 reason=0`
-means that the frame-shaped payload was validated and admitted as the latest
-semantic intent for that axis. It does not mean that CAN was written at TCP
-arrival time. The M7 release owner later produces `CONTROL_TX_EVIDENCE` and
-`CAN_TX_RAW` at the fixed vehicle cadence; only those records prove an actual
-release and hardware completion.
+means that this individual raw frame was accepted into the tracked FDCAN HW
+attempt. The board does not overwrite it with a latest target, interpret a
+repeat/count, mutate `DATA[0..7]`, generate additional frames, retry it, or own
+vehicle cadence. Busy, journal-full and pre-HW failures are explicit rejects.
+The static Service/HIL allowlist validates configured bus, standard ID
+`0x005/0x007/0x364`, DLC8 and RTR false; payload meaning remains the upper
+control software's contract.
 
 `CONTROL_TX_EVIDENCE` payload, 40 bytes:
 - `0..7 mono_us u64`
@@ -476,6 +478,18 @@ Service/HIL의 실제 송신 판정은 같은 bus/ID/DLC/data를 가진 `CAN_TX_
 `CONTROL_TX_EVIDENCE`가 일치할 때만 command_id에 귀속한다. ACK만으로 송신
 성공을 표시하지 않으며, terminal evidence가 없는 구형 펌웨어에서만 제한된
 FIFO 상관관계를 호환 경로로 사용한다.
+
+`CONTROL_TX_EVIDENCE` is terminal-only. `DeadlineExceededPending` retains the
+owner journal correlation and may produce diagnostic/fault evidence, but it is
+not encoded as outcome 0 until a terminal failure actually occurs. Every
+Accepted Host request reaches exactly one terminal record 23. A transmitted
+terminal additionally emits matching `CAN_TX_RAW`; a terminal failure does not.
+
+N requested physical frames are N individual `HOST_CAN_TX_REQUEST` records with
+unique command IDs. TCP may coalesce records, but the board does not add a TX
+segment or persistent Host FIFO. The capability `host_tx_queue_size` denotes the
+maximum outstanding tracked HW attempts (currently the three
+`BuiltinCanTxOwner` journal slots), not a replayable software queue.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -521,49 +535,29 @@ Current board host TX policy:
   MCP2515/TJA1050 and `bus=1` Mid Carrier J4/U2.
 - Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
 - Extended and RTR frames are rejected in this baseline.
-- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses an exact
-  bench allowlist: standard `0x005` DLC8 drive payload, standard `0x007` DLC8
-  steering payload described above. Service/HIL CENTER preserves steering byte0,
-  sets byte7 to `0x01` for 4 seconds, then returns to byte0 `130` and byte7 `0x00`.
-  Bytes1..6 remain zero. ID, DLC, fixed bytes, speed range, direction, and this
-  bounded steering overlay are validated before authority/safety admission. Standard
-  `0x364` DLC8 EHB semantic intent uses byte0 `0x00` for standard mode or
-  `0xFF` for open-loop mode. In standard mode byte1 is `0` for retained hold or
-  `1..255` for an exact physical-frame count; in open-loop mode byte1 is always
-  `0`. Bytes2..6 are fixed `0`; byte7 is neutral `0x00` or the owner-approved
-  Service/HIL request `0x01..0x96` (decimal 1..150). The physical CAN `0x364`
-  always strips byte1 back to `0`: counted standard intent emits exactly N
-  20 ms frames and then all-zero neutral, while retained hold continues until
-  replacement, stale, disarm, or safety closure.
-  The removed
-  `0x100/0x200` adapter is not accepted.
-- Service/HIL에서 이 레코드는 wire 호환 envelope일 뿐 direct raw-CAN 권한이
-  아니다. 보드는 `0x005/0x007`을 operator intent로 해석한 뒤 공통
-  `CommandLimiter`와 `VehicleCommandMapper`를 통과시켜 cadence, deadband,
-  ramp, reversal-to-zero와 neutral을 적용하고 새 CAN frame을 생성한다.
+- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses a static
+  raw-frame allowlist: configured built-in bus, standard `0x005`, `0x007` or
+  `0x364`, DLC8 and RTR false. Extended frames and the removed `0x100/0x200`
+  adapter are not accepted.
+- After that frame-format check, `DATA[0..7]` is opaque to CSM and is copied
+  byte-for-byte into one `BuiltinCanTxOwner` submission. Vehicle payload shape,
+  ramp, reversal, CENTER, EHB, repeat/count and neutral sequences belong to the
+  upper control software and its selected vehicle profile.
+- N requested physical frames are N individual downlink records. There is no
+  latest-target replacement, Host semantic runtime, persistent Host TX FIFO,
+  board-generated cadence, implicit retry or hidden replay.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
 - TCP arrival spacing is not a CAN cadence clock. Network batching may compress
-  valid host 5/20 ms writes, so CSM never rejects or disarms solely from the
-  observed socket-arrival interval. Range, ramp, authority, safety, and backend
-  admission remain board-owned.
-- Service/HIL keeps exactly one latest semantic intent per axis and has no
-  downlink-to-CAN queue. M7's existing absolute/no-catch-up release schedule
-  advances the limiter once per 5 ms control release, emits `0x005` every 5 ms,
-  emits `0x007` every 20 ms, and emits `0x364` every 20 ms. The EHB phase is
-  staggered 5 ms after steering so the three control frames do not contend for
-  the same FDCAN FIFO instant. A late cooperative poll consumes missed
-  deadlines and never replays them as an adjacent burst.
-- Limiter steps are specified by the product's 20 ms reference dynamics and
-  scaled to the 5 ms release (`50/200/30/50` -> `12/50/7/12` permille).
-  ARM therefore changes authority, not the wall-time ramp or mechanical demand.
-- Each axis intent is fresh for 300 ms. An independently stale drive or steering
-  lane converges to neutral through the fixed-time M7 limiter; stale EHB emits
-  exact zero at its next 20 ms release. The other lanes remain independent.
-  Heartbeat, lease, authority, safety, or backend
-  loss closes the whole Service/HIL release path and clears every retained
-  intent; a later ARM cannot inherit stale targets.
+  upper writes, but CSM neither infers nor repairs cadence from that spacing.
+  Authority, lease, hard-safety, static frame and backend admission remain
+  board-owned. Busy or journal-full is an explicit request reject, not delayed
+  execution.
+- Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
+  Already HW-owned attempts remain in the completion journal until terminal and
+  are never silently flushed or replayed. New Host ARM waits for old Host
+  terminal closure.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted

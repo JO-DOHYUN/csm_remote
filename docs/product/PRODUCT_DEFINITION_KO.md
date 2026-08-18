@@ -13,7 +13,9 @@ hard safety > upstream autonomy > RC remote > service host > monitoring
 ## 최종 제품 형태
 
 - Radiolink T16D/R16SM 입력은 M4가 수신·검증·정규화한다.
-- M7만 authority, safety, limiter, vehicle mapping, CAN TX를 소유한다.
+- M7만 공통 authority, hard-safety, CAN admission과 physical CAN TX를 소유한다.
+  RC/autonomy semantic 경로의 limiter/vehicle mapping은 M7에 남고, Service/HIL
+  Host raw 경로의 vehicle meaning/sequence는 상위 control SW가 소유한다.
 - Windows VSM은 USB CDC typed stream을 관측한다.
 - VSM Android는 Wi-Fi TCP typed stream을 관측한다.
 - USB와 Wi-Fi는 동일한 canonical record order와 identity를 소비하는 독립 sink다.
@@ -48,6 +50,9 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 - malformed CRSF, IPC integrity failure, M4 heartbeat loss는 authority를 해제하지 않는 fail-closed 상태다.
 - M4, VSM, parser, UI는 최종 CAN TX 권한을 가질 수 없다.
 - 모든 local motion TX는 M7 `CanTxGateway`의 authority, safety, frame policy와 실제 CAN backend 상태를 통과해야 한다.
+- Service/HIL Host raw request는 static bus/ID/DLC/RTR allowlist와 위 공통 gate를
+  통과한 뒤 sole `BuiltinCanTxOwner`에 한 번 제출한다. CSM은 허용 payload를
+  byte-preserve하며 차량 의미, count, ramp, CENTER, EHB 또는 neutral을 생성하지 않는다.
 - `CONTROL_ACK`는 요청 수락/거부 증거다. `CAN_TX_RAW`는 별도 TX evidence지만
   현재 built-in CAN의 driver FIFO enqueue 수락 직후 발행되는 경로는 물리 송신
   완료 증거가 아니다. release에서는 FDCAN TX completion/TXBTO와 상관된 record와
@@ -69,7 +74,8 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 
 ## 비목표
 
-- Wi-Fi를 RC 제어 경로로 사용하지 않는다.
+- Wi-Fi를 RC 제어 경로로 사용하지 않는다. 명시적 Service/HIL Host raw path는
+  별도 bench profile이다.
 - Android 전용 임의 protocol을 만들지 않는다.
 - USB 장애를 Wi-Fi가 기다리거나 Wi-Fi 장애를 USB가 기다리지 않는다.
 - production VSM에 raw vehicle control affordance를 제공하지 않는다.

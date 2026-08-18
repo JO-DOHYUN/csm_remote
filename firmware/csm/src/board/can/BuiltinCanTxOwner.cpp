@@ -204,6 +204,15 @@ uint8_t BuiltinCanTxOwner::activeJournalSlots() const {
   return count;
 }
 
+uint8_t BuiltinCanTxOwner::activeJournalSlots(
+    BuiltinCanTxOrigin origin) const {
+  uint8_t count = 0;
+  for (const JournalSlot& slot : journal_) {
+    if (slot.active && slot.frame.origin == origin) ++count;
+  }
+  return count;
+}
+
 bool BuiltinCanTxOwner::validRequestMask(uint32_t request_mask) {
   return request_mask != 0 &&
          (request_mask & ~kHardwareTxSlotMask) == 0 &&

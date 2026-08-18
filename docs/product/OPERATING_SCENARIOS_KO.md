@@ -57,10 +57,21 @@ raw unknown, reset 간격, LED만으로 watchdog이나 power fault를 확정하�
 ## 8. Service/HIL
 
 명시된 Full Instrumented artifact와 안전한 bench에서만 host 제어를 허용한다.
-source context, authority decision, `CONTROL_ACK`, `CAN_TX_RAW`, 외부 CAN analyzer를
-함께 기록한다. 현재 built-in driver의 enqueue 수락 직후 생성된 `CAN_TX_RAW`만으로
-physical bus TX 성공을 주장하지 않는다. production observer artifact로 같은
-시험을 수행하지 않는다.
+상위 control SW는 N개 physical frame을 N개 `HostCanTxRequest`로 생성한다. CSM은
+각 request의 authority/lease/hard-safety와 static bus/ID/DLC/RTR를 판정하고 허용
+payload를 바꾸지 않은 채 sole FDCAN owner에 한 번 제출한다. busy/journal-full은
+명시적으로 reject하며 overwrite, generated repeat/count, implicit retry와 Host
+backlog replay가 없다.
+
+source context, authority decision, `CONTROL_ACK`, terminal
+`CONTROL_TX_EVIDENCE`, `CAN_TX_RAW`, 외부 CAN analyzer를 함께 기록한다. ACK
+Accepted는 tracked HW attempt이지 physical bus TX 성공이 아니다. already-HW-owned
+request는 session loss에도 terminal outcome까지 추적하고 새 ARM은 그 closure를
+기다린다. production observer artifact로 같은 시험을 수행하지 않는다.
+
+CSM은 Host 차량 cadence나 stale-neutral을 생성하지 않는다. route loss 시 lease가
+새 request를 막으며, message cessation을 안전하게 만드는 vehicle watchdog 또는
+독립 hard-safety가 HIL로 확인되지 않은 profile은 release하지 않는다.
 
 ## 9. Reset 원인 분리 시험
 
