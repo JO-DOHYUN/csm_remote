@@ -456,10 +456,10 @@ emits terminal `CONTROL_TX_EVIDENCE` and `CAN_TX_RAW` from HW completion. ACK is
 not actual-send evidence.
 
 In the Service/HIL `0x005/0x007/0x364` profile, `CONTROL_ACK status=1 reason=0`
-means that this individual raw frame was accepted into the tracked FDCAN HW
-attempt. The board does not overwrite it with a latest target, interpret a
-repeat/count, mutate `DATA[0..7]`, generate additional frames, retry it, or own
-vehicle cadence. Busy, journal-full and pre-HW failures are explicit rejects.
+means that this individual raw frame was accepted into its bounded per-ID Host
+software queue. The board does not overwrite it with a latest target, interpret
+a repeat/count, mutate `DATA[0..7]`, generate additional frames, or own vehicle
+semantics. Queue-full rejects the newest request explicitly.
 The static Service/HIL allowlist validates configured bus, standard ID
 `0x005/0x007/0x364`, DLC8 and RTR false; payload meaning remains the upper
 control software's contract.
@@ -487,9 +487,9 @@ terminal additionally emits matching `CAN_TX_RAW`; a terminal failure does not.
 
 N requested physical frames are N individual `HOST_CAN_TX_REQUEST` records with
 unique command IDs. TCP may coalesce records, but the board does not add a TX
-segment or persistent Host FIFO. The capability `host_tx_queue_size` denotes the
-maximum outstanding tracked HW attempts (currently the three
-`BuiltinCanTxOwner` journal slots), not a replayable software queue.
+segment. The capability `host_tx_queue_size` denotes the total bounded Host
+software queue capacity (currently 24: three lanes x eight frames). The separate
+`BuiltinCanTxOwner` completion journal remains three slots.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -544,16 +544,18 @@ Current board host TX policy:
   ramp, reversal, CENTER, EHB, repeat/count and neutral sequences belong to the
   upper control software and its selected vehicle profile.
 - N requested physical frames are N individual downlink records. There is no
-  latest-target replacement, Host semantic runtime, persistent Host TX FIFO,
-  board-generated cadence, implicit retry or hidden replay.
+  latest-target replacement, Host semantic runtime, generated frame, semantic
+  retry or hidden replay. CSM uses only three static opaque mechanical lanes:
+  `0x005` capacity 8 at 5000 us, `0x007` capacity 8 at 20000 us and `0x364`
+  capacity 8 at 20000 us with a 5000 us first/restart phase.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
 - TCP arrival spacing is not a CAN cadence clock. Network batching may compress
-  upper writes, but CSM neither infers nor repairs cadence from that spacing.
-  Authority, lease, hard-safety, static frame and backend admission remain
-  board-owned. Busy or journal-full is an explicit request reject, not delayed
-  execution.
+  upper writes; the bounded raw lanes preserve same-ID FIFO and release due heads
+  without catch-up bursts. Authority, lease, hard-safety, static frame and backend
+  admission remain board-owned. Transient owner busy/journal-full retains the
+  already ACK-accepted head for a later service pass; queue full rejects newest.
 - Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
   Already HW-owned attempts remain in the completion journal until terminal and
   are never silently flushed or replayed. New Host ARM waits for old Host

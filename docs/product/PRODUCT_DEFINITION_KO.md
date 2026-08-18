@@ -51,8 +51,12 @@ bench 전용이다. 명시적 service host 동작과 진단 기능을 허용할 
 - M4, VSM, parser, UI는 최종 CAN TX 권한을 가질 수 없다.
 - 모든 local motion TX는 M7 `CanTxGateway`의 authority, safety, frame policy와 실제 CAN backend 상태를 통과해야 한다.
 - Service/HIL Host raw request는 static bus/ID/DLC/RTR allowlist와 위 공통 gate를
-  통과한 뒤 sole `BuiltinCanTxOwner`에 한 번 제출한다. CSM은 허용 payload를
-  byte-preserve하며 차량 의미, count, ramp, CENTER, EHB 또는 neutral을 생성하지 않는다.
+  통과한 뒤 ID별 fixed FIFO와 mechanical release gate를 거쳐 sole
+  `BuiltinCanTxOwner`에 제출한다. CSM은 허용 payload를 byte-preserve하며 차량 의미,
+  count, ramp, CENTER, EHB 또는 neutral을 생성하지 않는다.
+- `0x005/0x007/0x364` lane은 각각 capacity 8이며 same-ID FIFO, reject-newest-on-full,
+  one-HW-in-flight를 지킨다. 다른 lane은 독립 진행하고 late completion 뒤 catch-up
+  burst를 만들지 않는다.
 - `CONTROL_ACK`는 요청 수락/거부 증거다. `CAN_TX_RAW`는 별도 TX evidence지만
   현재 built-in CAN의 driver FIFO enqueue 수락 직후 발행되는 경로는 물리 송신
   완료 증거가 아니다. release에서는 FDCAN TX completion/TXBTO와 상관된 record와

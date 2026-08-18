@@ -16,6 +16,7 @@
 #include "board/StatusLed.h"
 #include "board/can/BuiltinFdcanDiagnostics.h"
 #include "board/can/BuiltinCanTxOwner.h"
+#include "board/can/CanTxCadenceQueue.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
@@ -448,11 +449,9 @@
 #define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 5000
 #endif
 #ifndef BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET
-// Pace the TCP byte stream into at most one complete control record per main
-// loop. TCP may coalesce heartbeat, lease, drive and steering records; draining
-// a large byte burst synchronously can otherwise fill all three FDCAN TX
-// elements before the next completion poll.
-#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 40
+// Bounded parser ingress budget. Physical CAN pacing is owned separately by
+// the fixed Host cadence queue and never inferred from TCP record spacing.
+#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 256
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -478,6 +477,9 @@
 #ifndef BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
 #define BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS 0
 #endif
+
+#define BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE \
+  (BOARD_ENABLE_HOST_CAN_TX_BUILTIN && BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS)
 
 #ifndef BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
 #define BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND 0
@@ -1055,6 +1057,17 @@ static uint32_t builtin_can_tx_failed_total = 0;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
 static csm::board::can::BuiltinCanTxOwner builtin_can_tx_owner;
 static bool builtin_can_tx_inhibit_latched = false;
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+static constexpr csm::board::can::CanTxCadenceLaneConfig
+    kServiceHilHostCanTxLanes[] = {
+        {BOARD_BUILTIN_CAN_BUS_ID, 0x005u, 8u, 5000u, 0u},
+        {BOARD_BUILTIN_CAN_BUS_ID, 0x007u, 8u, 20000u, 0u},
+        {BOARD_BUILTIN_CAN_BUS_ID, 0x364u, 8u, 20000u, 5000u},
+};
+static csm::board::can::CanTxCadenceQueue host_can_tx_cadence;
+static bool host_can_tx_cadence_ok = false;
+static uint8_t host_can_tx_cadence_round_robin = 0;
+#endif
 #endif
 #endif
 
@@ -2750,9 +2763,15 @@ static void emit_capability() {
   config.supported_downlink_records = 0;
 #endif
   config.safety_feature_flags = 0x0000000Fu;
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  config.host_tx_queue_size = host_can_tx_cadence_ok
+      ? csm::board::can::CanTxCadenceQueue::kTotalCapacity
+      : 0;
+#else
   config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY
       ? csm::board::can::BuiltinCanTxOwner::kJournalSlots
       : 0;
+#endif
   config.capability_v3_flags =
       csm::kCapabilityV3FlagCanonicalFanout |
       csm::kCapabilityV3FlagCompactCanRxSegment;
@@ -3455,8 +3474,61 @@ static void increment_builtin_can_counter(uint32_t* counter) {
   if (counter != nullptr && *counter != UINT32_MAX) ++(*counter);
 }
 
+static void emit_host_control_tx_evidence(
+    const csm::board::can::BuiltinCanTxFrame& frame, bool transmitted,
+    uint32_t submission_sequence, int32_t driver_result,
+    uint32_t request_mask) {
+  uint8_t payload[csm::kControlTxEvidencePayloadLen] = {};
+  wr_u64_le(&payload[csm::kControlTxEvidenceMonoUsOffset], mono64_us());
+  wr_u32_le(&payload[csm::kControlTxEvidenceCommandIdOffset],
+            frame.command_id);
+  wr_u32_le(&payload[csm::kControlTxEvidenceSubmissionSequenceOffset],
+            submission_sequence);
+  payload[csm::kControlTxEvidenceOutcomeOffset] = transmitted ? 1u : 0u;
+  payload[csm::kControlTxEvidenceOriginOffset] =
+      static_cast<uint8_t>(frame.origin);
+  payload[csm::kControlTxEvidenceBusOffset] = frame.bus;
+  payload[csm::kControlTxEvidenceDlcOffset] = frame.dlc;
+  wr_u32_le(&payload[csm::kControlTxEvidenceCanIdFlagsOffset],
+            frame.can_id_flags);
+  memcpy(&payload[csm::kControlTxEvidenceDataOffset], frame.data,
+         sizeof(frame.data));
+  wr_i32_le(&payload[csm::kControlTxEvidenceDriverResultOffset],
+            driver_result);
+  wr_u32_le(&payload[csm::kControlTxEvidenceRequestMaskOffset], request_mask);
+  emit_record(RecordType::ControlTxEvidence, payload, sizeof(payload));
+}
+
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+static void fail_and_flush_pending_host_can_tx(uint8_t reason) {
+  csm::board::can::BuiltinCanTxFrame frame;
+  const uint8_t failure_reason = reason == static_cast<uint8_t>(ControlReasonOk)
+      ? static_cast<uint8_t>(ControlReasonCanWriteFailed)
+      : reason;
+  const int32_t driver_result = -static_cast<int32_t>(failure_reason);
+  for (uint8_t lane = 0;
+       lane < csm::board::can::CanTxCadenceQueue::kMaxLanes; ++lane) {
+    while (host_can_tx_cadence.dropHead(lane, &frame)) {
+      increment_builtin_can_counter(&builtin_can_tx_failed_total);
+      emit_host_control_tx_evidence(frame, false, 0, driver_result, 0);
+    }
+  }
+  // dropHead emits one terminal result per ACKed pending command. This final
+  // clear is only structural and never touches an owner-held HW attempt.
+  host_can_tx_cadence.flushPending();
+}
+#endif
+
 static void builtin_can_tx_completion(
     void*, const csm::board::can::BuiltinCanTxCompletion& completion) {
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  bool host_cadence_completion_matched = true;
+  if (completion.frame.origin ==
+      csm::board::can::BuiltinCanTxOrigin::HostControl) {
+    host_cadence_completion_matched = host_can_tx_cadence.noteCompletion(
+        completion, completion.terminal_us);
+  }
+#endif
   const bool first_failure_evidence =
       !completion.transmitted() &&
       !completion.failure_previously_reported;
@@ -3478,33 +3550,26 @@ static void builtin_can_tx_completion(
   }
   if (completion.terminal && completion.frame.origin ==
       csm::board::can::BuiltinCanTxOrigin::HostControl) {
-    uint8_t payload[csm::kControlTxEvidencePayloadLen] = {};
-    wr_u64_le(&payload[csm::kControlTxEvidenceMonoUsOffset], mono64_us());
-    wr_u32_le(&payload[csm::kControlTxEvidenceCommandIdOffset],
-              completion.frame.command_id);
-    wr_u32_le(&payload[csm::kControlTxEvidenceSubmissionSequenceOffset],
-              completion.submission_sequence);
-    payload[csm::kControlTxEvidenceOutcomeOffset] =
-        completion.transmitted() ? 1u : 0u;
-    payload[csm::kControlTxEvidenceOriginOffset] =
-        static_cast<uint8_t>(completion.frame.origin);
-    payload[csm::kControlTxEvidenceBusOffset] = completion.frame.bus;
-    payload[csm::kControlTxEvidenceDlcOffset] = completion.frame.dlc;
-    wr_u32_le(&payload[csm::kControlTxEvidenceCanIdFlagsOffset],
-              completion.frame.can_id_flags);
-    memcpy(&payload[csm::kControlTxEvidenceDataOffset], completion.frame.data,
-           sizeof(completion.frame.data));
-    wr_i32_le(&payload[csm::kControlTxEvidenceDriverResultOffset],
-              completion.driver_result);
-    wr_u32_le(&payload[csm::kControlTxEvidenceRequestMaskOffset],
-              completion.request_mask);
-    emit_record(RecordType::ControlTxEvidence, payload, sizeof(payload));
+    emit_host_control_tx_evidence(
+        completion.frame, completion.transmitted(),
+        completion.submission_sequence, completion.driver_result,
+        completion.request_mask);
   }
 
   // DeadlineExceededPending is not a terminal result: TXBTO can still prove
   // that the frame won arbitration while cancellation was requested.
   if (terminal_failure) {
     builtin_can_tx_inhibit_latched = true;
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+    // A synchronous untracked-owner callback can arrive before the cadence
+    // service has popped its head. That path is closed by the submit outcome;
+    // only a matched in-flight completion flushes the remaining SW queue here.
+    if (completion.frame.origin ==
+            csm::board::can::BuiltinCanTxOrigin::HostControl &&
+        host_cadence_completion_matched) {
+      fail_and_flush_pending_host_can_tx(ControlReasonCanWriteFailed);
+    }
+#endif
   }
 #if BOARD_ENABLE_REMOTE_CONTROL
   if (completion.frame.origin ==
@@ -4312,8 +4377,7 @@ static bool __attribute__((unused)) recover_builtin_can_tx_for_deliberate_arm(ui
   if (!builtin_can_tx_ok) return false;
 
   service_builtin_can_tx_completions();
-  if (builtin_can_tx_owner.activeJournalSlots(
-          csm::board::can::BuiltinCanTxOrigin::HostControl) != 0 ||
+  if (builtin_can_tx_owner.activeJournalSlots() != 0 ||
       builtin_can_tx_owner.trackingFaultLatched()) {
     return false;
   }
@@ -4344,6 +4408,109 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
   return true;
 #endif
 }
+
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+static void service_host_can_tx_cadence() {
+  if (!host_can_tx_cadence_ok) return;
+
+  // Completion owns the in-flight correlation and must be observed before a
+  // lane can expose another due head.
+  service_builtin_can_tx_completions();
+
+  if (!host_control_authority_allowed()) {
+    fail_and_flush_pending_host_can_tx(ControlReasonAuthorityDenied);
+    return;
+  }
+
+  const uint32_t gate_now_ms = millis();
+  uint8_t gate_reason = ControlReasonOk;
+  if (!safety_supervisor.canAcceptTx(
+          gate_now_ms,
+          control_backend_ready_for_bus(BOARD_BUILTIN_CAN_BUS_ID),
+          &gate_reason)) {
+    fail_and_flush_pending_host_can_tx(gate_reason);
+    return;
+  }
+
+  const uint8_t first_lane = host_can_tx_cadence_round_robin;
+  host_can_tx_cadence_round_robin = static_cast<uint8_t>(
+      (host_can_tx_cadence_round_robin + 1u) %
+      csm::board::can::CanTxCadenceQueue::kMaxLanes);
+  for (uint8_t offset = 0;
+       offset < csm::board::can::CanTxCadenceQueue::kMaxLanes; ++offset) {
+    const uint8_t lane = static_cast<uint8_t>(
+        (first_lane + offset) %
+        csm::board::can::CanTxCadenceQueue::kMaxLanes);
+    const uint32_t due_now_us = micros();
+    csm::board::can::BuiltinCanTxFrame frame;
+    if (!host_can_tx_cadence.peekDue(lane, due_now_us, &frame)) continue;
+
+    // Authority and backend state can change after queue admission. Recheck at
+    // the sole transition into HW ownership.
+    if (!host_control_authority_allowed()) {
+      fail_and_flush_pending_host_can_tx(ControlReasonAuthorityDenied);
+      return;
+    }
+    uint8_t submit_reason = ControlReasonOk;
+    const uint32_t submit_now_ms = millis();
+    if (!safety_supervisor.canAcceptTx(
+            submit_now_ms,
+            control_backend_ready_for_bus(BOARD_BUILTIN_CAN_BUS_ID),
+            &submit_reason)) {
+      fail_and_flush_pending_host_can_tx(submit_reason);
+      return;
+    }
+
+    csm::board::can::CanBackendState backend;
+    backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
+    const csm::board::can::BuiltinCanTxOutcome tx_outcome =
+        submit_builtin_can_frame(
+            frame.bus, frame.can_id_flags, frame.dlc, frame.data,
+            csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
+            frame.command_id);
+    if (tx_outcome.fifoEnqueueAccepted() &&
+        tx_outcome.code ==
+            csm::board::can::BuiltinCanTxOutcomeCode::FifoEnqueueTracked) {
+      const uint32_t accepted_at_us = micros();
+      if (!host_can_tx_cadence.noteHwEnqueueAccepted(
+              lane, frame.command_id, accepted_at_us)) {
+        // The owner now holds the request; remove only its SW copy, retain HW
+        // correlation in the owner, and fail-close every other pending item.
+        csm::board::can::BuiltinCanTxFrame owned_frame;
+        (void)host_can_tx_cadence.dropHead(lane, &owned_frame);
+        builtin_can_tx_inhibit_latched = true;
+        fail_and_flush_pending_host_can_tx(ControlReasonCanWriteFailed);
+        return;
+      }
+      safety_supervisor.noteControlTx(millis());
+      continue;
+    }
+
+    if (tx_outcome.transientAdmissionFailure()) {
+      // Busy/journal-full/driver-busy retains the exact head for a later
+      // bounded pass. Other lanes still receive their one attempt this call.
+      continue;
+    }
+
+    csm::board::can::BuiltinCanTxFrame failed_frame;
+    const bool removed = host_can_tx_cadence.dropHead(lane, &failed_frame);
+    if (removed && !tx_outcome.fifo_enqueue_accepted) {
+      increment_builtin_can_counter(&builtin_can_tx_failed_total);
+      const int32_t driver_result = tx_outcome.driver_result != 0
+          ? tx_outcome.driver_result
+          : -static_cast<int32_t>(ControlReasonCanWriteFailed);
+      emit_host_control_tx_evidence(
+          failed_frame, false, tx_outcome.submission_sequence,
+          driver_result, 0);
+    }
+    // FifoEnqueueUntracked already emitted its single terminal owner evidence
+    // synchronously. In every terminal case, close the remaining SW work.
+    builtin_can_tx_inhibit_latched = true;
+    fail_and_flush_pending_host_can_tx(ControlReasonCanWriteFailed);
+    return;
+  }
+}
+#endif
 
 static csm::board::SafetyInputs read_safety_inputs() {
   csm::board::SafetyInputs inputs;
@@ -5390,9 +5557,48 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     return;
   }
 
-  // Reap hardware completions immediately before each host submission. The
-  // host downlink parser can dispatch more than one record in a service call,
-  // so the loop-entry poll alone is not a sufficient admission boundary.
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  if (!host_can_tx_cadence_ok || !builtin_can_tx_ok ||
+      builtin_can_tx_inhibit_latched) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady,
+                     bus, can_id_flags, dlc, host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, ControlReasonCanNotReady,
+                     host_can_tx_rejected_total);
+    return;
+  }
+
+  csm::board::can::BuiltinCanTxFrame frame;
+  frame.command_id = command_id;
+  frame.bus = bus;
+  frame.can_id_flags = can_id_flags;
+  frame.dlc = dlc;
+  memcpy(frame.data, data, sizeof(frame.data));
+  frame.origin = csm::board::can::BuiltinCanTxOrigin::HostControl;
+  const csm::board::can::CanTxCadenceEnqueueCode enqueue_code =
+      host_can_tx_cadence.enqueue(frame, micros());
+  if (enqueue_code !=
+      csm::board::can::CanTxCadenceEnqueueCode::Accepted) {
+    host_can_tx_rejected_total++;
+    const uint8_t reject_reason =
+        enqueue_code == csm::board::can::CanTxCadenceEnqueueCode::QueueFull
+            ? ControlReasonQueueFull
+            : ControlReasonUnsupportedFrame;
+    emit_control_ack(command_id, ControlAckRejected, reject_reason, bus,
+                     can_id_flags, dlc, host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, reject_reason,
+                     host_can_tx_rejected_total);
+    return;
+  }
+
+  // ACK confirms bounded Host software-queue admission only.
+  // CONTROL_TX_EVIDENCE reports command-correlated terminal execution.
+  // CAN_TX_RAW is emitted only after transmitted HW completion.
+  host_can_tx_accepted_total++;
+  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus,
+                   can_id_flags, dlc, host_can_tx_accepted_total);
+#else
+  // Legacy non-Service/HIL Host profiles retain direct tracked admission.
   service_builtin_can_tx_completions();
   if (!builtin_can_tx_ok || builtin_can_tx_inhibit_latched) {
     host_can_tx_rejected_total++;
@@ -5436,6 +5642,7 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
                    host_can_tx_accepted_total);
   safety_supervisor.noteControlTx(millis());
+#endif
 #else
   host_can_tx_rejected_total++;
   emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
@@ -5497,6 +5704,9 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
   uint8_t status = ControlAckAccepted;
   switch (action) {
     case csm::HostControlDisarm:
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+      fail_and_flush_pending_host_can_tx(ControlReasonNotArmed);
+#endif
       safety_supervisor.disarm(millis());
       break;
     case csm::HostControlArm:
@@ -5506,12 +5716,25 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         const uint8_t recovery_bus = requested_bus == 0xFF
             ? BOARD_BUILTIN_CAN_BUS_ID
             : requested_bus;
-        const bool recovered =
+        bool recovered =
             recover_builtin_can_tx_for_deliberate_arm(recovery_bus);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+        if (recovered) {
+          // A fresh authority epoch cannot inherit ACKed but not HW-owned work.
+          fail_and_flush_pending_host_can_tx(ControlReasonNotArmed);
+          recovered = host_can_tx_cadence.resetIfIdle();
+        }
+#endif
         const bool backend_ready = recovered &&
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
         reason = safety_supervisor.arm(millis(), lease_ms, backend_ready);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+        if (reason == ControlReasonOk && !host_can_tx_cadence.resetIfIdle()) {
+          safety_supervisor.disarm(millis());
+          reason = ControlReasonCanNotReady;
+        }
+#endif
       }
       break;
     case csm::HostControlRenewLease:
@@ -5634,6 +5857,9 @@ static void service_host_downlink(int budget) {
     // A transport epoch is also a control-authority epoch. A disconnected or
     // newly accepted Wi-Fi client must establish a fresh heartbeat and arm;
     // it cannot renew the prior client's lease.
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+    fail_and_flush_pending_host_can_tx(ControlReasonHostTimeout);
+#endif
     safety_supervisor.invalidateHostSession(millis());
     safety_state = safety_supervisor.state();
     last_wifi_epoch = wifi_epoch;
@@ -5968,6 +6194,13 @@ void setup() {
 
   safety_supervisor.begin(millis());
   safety_state = safety_supervisor.state();
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  host_can_tx_cadence_ok = host_can_tx_cadence.begin(
+      kServiceHilHostCanTxLanes,
+      static_cast<uint8_t>(sizeof(kServiceHilHostCanTxLanes) /
+                           sizeof(kServiceHilHostCanTxLanes[0])));
+  host_can_tx_cadence_round_robin = 0;
+#endif
   voltage_adc_ok = init_voltage_adc_lane();
 
 #if BOARD_ENABLE_ENCODER_IO
@@ -6036,7 +6269,11 @@ void setup() {
       builtin_can_tx_ok ? 1u : 0u);
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
     BOARD_ENABLE_REMOTE_CONTROL
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  builtin_can_tx_inhibit_latched = !host_can_tx_cadence_ok;
+#else
   builtin_can_tx_inhibit_latched = false;
+#endif
   if (!builtin_can_tx_owner.begin(
           BOARD_BUILTIN_CAN_BUS_ID, builtin_can_driver_write, nullptr,
           builtin_can_driver_cancel, nullptr,
@@ -6173,14 +6410,21 @@ void loop() {
   service_runtime_diagnostics();
 #endif
 #endif
-#if BOARD_ENABLE_FEEDER_UART
-  service_feeder_uart_to_queue(BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET);
-#endif
   poll_uplink_connections(millis());
   service_uplink_session_state();
+  update_safety_state();
+  record_runtime_breadcrumb(RuntimeStageHostDownlink);
+  service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
+  record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  service_host_can_tx_cadence();
+#endif
   service_recovered_runtime_breadcrumb();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
+#endif
+#if BOARD_ENABLE_FEEDER_UART
+  service_feeder_uart_to_queue(BOARD_FEEDER_UART_SERVICE_BYTE_BUDGET);
 #endif
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
@@ -6227,9 +6471,10 @@ void loop() {
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
 #endif
-  record_runtime_breadcrumb(RuntimeStageHostDownlink);
-  service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
-  record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  service_builtin_can_tx_completions();
+  service_host_can_tx_cadence();
+#endif
   update_safety_state();
   toggle_safety_watchdog_if_needed();
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -6266,6 +6511,10 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageBuiltinCanDrain);
   service_builtin_can_rx_to_queue(128);
   record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  service_builtin_can_tx_completions();
+  service_host_can_tx_cadence();
+#endif
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
@@ -6299,6 +6548,10 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageStatusAndSensors, 1);
   service_voltage_adc_lane();
   record_runtime_breadcrumb(RuntimeStageIdle);
+#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE
+  service_builtin_can_tx_completions();
+  service_host_can_tx_cadence();
+#endif
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS

@@ -685,7 +685,8 @@
 ## D-035 Make Service/HIL Host CAN a mechanical raw I/O boundary
 
 - Date: 2026-08-18
-- Status: Active; supersedes D-033 only for Service/HIL Host execution ownership.
+- Status: Active for the semantic/raw ownership split; its direct one-shot/no-FIFO
+  execution detail is superseded by D-036.
 - Boundary: upper VSM/control software owns vehicle command meaning, sequence,
   count, ramp, CENTER, EHB and explicit neutral. CSM owns session/authority/lease/
   hard-safety admission, static bus/standard-ID/DLC/RTR policy, FDCAN admission
@@ -705,3 +706,32 @@
 - Verification: payload identity, N attempt accounting, owner-full/reject/pending/
   terminal behavior, old-session closure, RC regression, canonical consumers,
   target build and combined external-analyzer HIL.
+
+## D-036 Add bounded opaque Host cadence lanes
+
+- Date: 2026-08-18
+- Status: Active; supersedes only D-035's direct submission/no persistent Host FIFO
+  detail. Upper vehicle semantics and N-request identity remain unchanged.
+- Verified defect: Android/TCP/main-loop timing reached direct Host FDCAN admission;
+  the 40-byte parser budget split coalesced control records across variable loops,
+  and all three IDs phase-locked at ARM.
+- Execution: add three static opaque lanes, each capacity 8: `0x005` at 5000 us,
+  `0x007` at 20000 us and `0x364` at 20000 us with 5000 us first/restart phase.
+  Same ID is FIFO, different lanes progress independently, and one lane has at
+  most one HW in-flight request. No payload decode, latest overwrite, generated
+  frame, semantic retry, TX segment, heap allocation or second FDCAN owner exists.
+- Admission/evidence: ACK Accepted means bounded SW-queue admission. Full rejects
+  newest without mutation. Each accepted command reaches terminal record 23;
+  transmitted truth also needs matching `CAN_TX_RAW`. Nonterminal pending keeps
+  correlation and late completion never creates a catch-up burst.
+- Failure: session/authority/lease/safety loss flushes only not-yet-HW pending
+  frames. HW-owned work stays journaled until terminal, and fresh ARM waits all
+  old owner-origin slots before resetting the Host queue epoch.
+- Origin exclusivity: while an admitted Host lease is active, RC parsing and
+  telemetry continue but `RemoteControlRuntime` emits neither RemoteControl nor
+  SafetyNeutral CAN frames. RC qualification must not be used as an extra
+  condition for this silence; otherwise identical 0x005/0x007 origin schedules
+  overlap and violate physical spacing.
+- Verification: FIFO/bytes/spacing/phase/fairness/in-flight/pending/full/flush/
+  wrap/parser native contracts, control guard, target build, external Kvaser
+  cadence and long nominal ARM/soak. Source/build success is not physical proof.

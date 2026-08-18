@@ -2,22 +2,22 @@
 
 Updated: 2026-08-18
 
-## 2026-08-18 Host raw CAN I/O boundary
+## 2026-08-18 Host raw CAN I/O boundary and mechanical cadence
 
 - D-035 supersedes D-033's common semantic Service/HIL execution path. Upper
   VSM/control software owns vehicle meaning, sequence, count, ramp, CENTER, EHB
   and explicit neutral. RC/autonomy semantic limiter/mapper remains on M7.
-- CSM Host raw path owns session/authority/lease/hard-safety, static
-  bus/ID/DLC/RTR allowlist, byte-preserving one-shot FDCAN admission and terminal
-  HW evidence. N physical requests are N `HostCanTxRequest` records.
-- No Host cadence scheduler, persistent FIFO, latest overwrite, repeat/count
-  generation, implicit retry, TX segment or downlink budget increase is approved.
-- Source implementation is closed: legacy Host semantic runtime/CENTER guard are
-  removed, raw payload bytes reach `BuiltinCanTxOwner`, record 23 is terminal-only,
-  new ARM waits unresolved owner work, and capability reports three tracked HW
-  attempts. Native contract/guard and the successor Service/HIL build pass
-  (RAM 211,752 B, flash 367,224 B). Device/CAN-analyzer/HIL proof remains OPEN;
-  older HIL claims do not prove this new Host boundary.
+- D-036 supersedes only D-035's direct one-shot/no-FIFO execution detail. CSM Host
+  raw path owns session/authority/lease/hard-safety, static bus/ID/DLC/RTR allowlist,
+  three independent static 8-frame opaque lanes and mechanical release:
+  `0x005` 5 ms, `0x007` 20 ms, `0x364` 20 ms with 5 ms first/restart phase.
+- N physical requests remain N `HostCanTxRequest` records. No Host semantic mapper,
+  latest overwrite, generated repeat/count/neutral, TX segment or second FDCAN
+  owner is approved. Full rejects newest; same-ID FIFO and other-lane progress are
+  mandatory.
+- ACK Accepted means bounded SW-queue admission. Terminal record 23 and matching
+  `CAN_TX_RAW` remain execution/on-bus truth. Source/build and external analyzer HIL
+  must be rerun for this D-036 candidate; older success does not prove it.
 
 ## 2026-08-05 profile-scoped product closeout
 

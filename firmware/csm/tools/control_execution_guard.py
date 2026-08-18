@@ -8,6 +8,15 @@ def fail(message: str) -> None:
 root = Path(__file__).resolve().parents[1]
 main = (root / "src" / "main.cpp").read_text(encoding="utf-8")
 platformio = (root / "platformio.ini").read_text(encoding="utf-8")
+host_parser_source = (root / "src" / "board" / "HostDownlinkParser.cpp").read_text(
+    encoding="utf-8"
+)
+cadence_header = (
+    root / "include" / "board" / "can" / "CanTxCadenceQueue.h"
+).read_text(encoding="utf-8")
+cadence_source = (
+    root / "src" / "board" / "can" / "CanTxCadenceQueue.cpp"
+).read_text(encoding="utf-8")
 
 
 def environment_body(name: str) -> str:
@@ -109,6 +118,8 @@ if (
     "if (completion.terminal && completion.frame.origin ==" not in completion_body
 ):
     fail("CONTROL_TX_EVIDENCE must be emitted only for a terminal Host outcome")
+if "host_can_tx_cadence.noteCompletion(" not in completion_body:
+    fail("every Host HW completion must update cadence in-flight correlation")
 if "noteCanTxCompletion(" not in completion_body:
     fail("remote CAN success/failure must be driven by hardware completion")
 if (
@@ -202,6 +213,10 @@ runtime_header = (
 runtime_source = (
     root / "src" / "board" / "control" / "RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
+if "if (inputs.host_service_active)" not in runtime_source:
+    fail("Host lease must silence every RemoteControl/SafetyNeutral CAN origin")
+if "inputs.host_service_active && status_.host_control_allowed" in runtime_source:
+    fail("Host silence must not depend on RC frontend qualification")
 mapper_header = (
     root / "include" / "board" / "control" / "VehicleCommandMapper.h"
 ).read_text(encoding="utf-8")
@@ -248,29 +263,51 @@ if "wifi_epoch != last_wifi_epoch" not in wifi_downlink_body:
     fail("Wi-Fi downlink parser must be scoped to a connection epoch")
 if "safety_supervisor.invalidateHostSession(millis());" not in wifi_downlink_body:
     fail("Wi-Fi epoch change must invalidate heartbeat, arm, and lease")
-if "#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 40" not in main:
-    fail("host downlink must remain paced below a multi-record TCP burst")
+if "fail_and_flush_pending_host_can_tx(ControlReasonHostTimeout);" not in wifi_downlink_body:
+    fail("Wi-Fi epoch change must terminal-fail pending Host commands")
+if "#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 256" not in main:
+    fail("host downlink must use the bounded multi-record ingress budget")
 if "service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);" not in loop_body:
     fail("loop must use the bounded host downlink byte budget")
+if "process();\n      if (len_ >= kBufferSize)" not in host_parser_source:
+    fail("Host parser must consume complete records before full-buffer resync")
+
+host_downlink_service = loop_body.find(
+    "service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);"
+)
+feeder_service = loop_body.find("service_feeder_uart_to_queue(")
+bulk_uplink_service = loop_body.find("service_uplink(1024);")
+if feeder_service >= 0 and host_downlink_service > feeder_service:
+    fail("Host downlink must precede feeder draining")
+if bulk_uplink_service >= 0 and host_downlink_service > bulk_uplink_service:
+    fail("Host downlink must precede bulk uplink draining")
+if loop_body.count("service_host_can_tx_cadence();") < 2:
+    fail("Host cadence must run at entry and after bounded bulk work")
 
 host_tx_begin = main.find("static void handle_host_can_tx_request(")
 host_tx_end = main.find("\n}", host_tx_begin)
 host_tx_body = main[host_tx_begin:host_tx_end]
-pre_submit_poll = host_tx_body.find("service_builtin_can_tx_completions();")
-builtin_submit = host_tx_body.find("submit_builtin_can_frame(")
-if pre_submit_poll < 0 or builtin_submit < 0 or pre_submit_poll > builtin_submit:
-    fail("host CAN admission must reap FDCAN completions before submission")
-if "static_cast<uint16_t>(tx_outcome.code) << 8u" not in host_tx_body:
-    fail("host CAN enqueue failure evidence must retain the owner outcome code")
 for required in (
     "memcpy(data, &payload[11], sizeof(data));",
     "(frame_flags & ~0x03u) != 0",
     "raw_can_id > 0x7FFu",
-    "submit_builtin_can_frame(",
-    "tx_outcome.fifoEnqueueAccepted()",
+    "memcpy(frame.data, data, sizeof(frame.data));",
+    "host_can_tx_cadence.enqueue(frame, micros())",
+    "ControlReasonQueueFull",
+    "ACK confirms bounded Host software-queue admission only",
 ):
     if required not in host_tx_body:
-        fail(f"Host raw single-attempt path missing {required}")
+        fail(f"Host raw queue-admission path missing {required}")
+service_hil_branch_begin = host_tx_body.find(
+    "#if BOARD_ENABLE_SERVICE_HIL_HOST_CAN_CADENCE"
+)
+service_hil_branch_end = host_tx_body.find("#else", service_hil_branch_begin)
+if service_hil_branch_begin < 0 or service_hil_branch_end < 0:
+    fail("Service/HIL Host cadence admission branch missing")
+if "submit_builtin_can_frame(" in host_tx_body[
+    service_hil_branch_begin:service_hil_branch_end
+]:
+    fail("Service/HIL Host admission must not submit directly to FDCAN")
 if "static constexpr uint32_t kServiceHilAllowedEhbCanId = 0x364u;" not in main or \
         "(can_id == kServiceHilAllowedEhbCanId && dlc == 8)" not in main:
     fail("Service/HIL static CAN allowlist must retain EHB ID 0x364 with DLC 8")
@@ -289,14 +326,34 @@ if (root / "include" / "board" / "control" / "ServiceHilIntentRuntime.h").exists
     fail("retired Service/HIL semantic runtime header still exists")
 if (root / "src" / "board" / "control" / "ServiceHilIntentRuntime.cpp").exists():
     fail("retired Service/HIL semantic runtime source still exists")
-if "BuiltinCanTxOwner::kJournalSlots" not in main:
-    fail("CAPABILITY host_tx_queue_size must expose the three tracked HW attempts")
-if (
-    "builtin_can_tx_owner.activeJournalSlots(\n"
-    "          csm::board::can::BuiltinCanTxOrigin::HostControl) != 0"
-    not in main
+if "CanTxCadenceQueue::kTotalCapacity" not in main:
+    fail("CAPABILITY host_tx_queue_size must expose the 24-frame SW queue")
+if "builtin_can_tx_owner.activeJournalSlots() != 0" not in main:
+    fail("new Host ARM must wait for unresolved CAN attempts of every origin")
+
+for required in (
+    "static constexpr uint8_t kMaxLanes = 3;",
+    "static constexpr uint8_t kLaneCapacity = 8;",
+    "BuiltinCanTxFrame q[kLaneCapacity]",
+    "static_cast<int32_t>(now_us - due_us) >= 0",
+    "selected.next_due_us = now_us + selected.config.period_us;",
+    "BuiltinCanTxCompletionCode::DeadlineExceededPending",
 ):
-    fail("new Host ARM must wait for unresolved Host CAN attempts")
+    if required not in cadence_header + cadence_source:
+        fail(f"Host cadence queue contract missing {required}")
+for forbidden in ("drive", "steering", "ehb", "repeat", "neutral"):
+    if forbidden in cadence_source.lower():
+        fail(f"generic Host cadence queue contains vehicle semantic {forbidden}")
+for required in (
+    "fail_and_flush_pending_host_can_tx",
+    "while (host_can_tx_cadence.dropHead(lane, &frame))",
+    "emit_host_control_tx_evidence(frame, false, 0, driver_result, 0);",
+    "host_can_tx_cadence.flushPending();",
+    "host_can_tx_cadence.noteHwEnqueueAccepted(",
+    "if (tx_outcome.transientAdmissionFailure())",
+):
+    if required not in main:
+        fail(f"Host cadence integration missing {required}")
 if "frame.data[0] = mapSteering(command.steer_permille);" not in mapper_source:
     fail("RC semantic mapper must remain intact")
 if "if (command.auxiliary_permille != 0) {\n    frame.data[7]" not in mapper_source:

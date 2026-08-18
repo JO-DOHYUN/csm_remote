@@ -2,8 +2,10 @@
 #include <cstring>
 
 #include "board/authority/AuthorityManager.h"
+#include "board/HostDownlinkParser.h"
 #include "board/SafetySupervisor.h"
 #include "board/can/BuiltinCanTxOwner.h"
+#include "board/can/CanTxCadenceQueue.h"
 #include "board/control/CanTxGateway.h"
 #include "board/control/CommandLimiter.h"
 #include "board/control/ControlReleaseSchedule.h"
@@ -16,6 +18,7 @@
 #include "board/remote/RcNormalizer.h"
 #include "board/remote/RemoteSharedMemory.h"
 #include "protocol/ControlProtocol.h"
+#include "protocol/TypedFrame.h"
 
 namespace {
 
@@ -217,6 +220,244 @@ void builtinCanTxOriginAccountingSeparatesRcFromHost() {
 
   owner.serviceCompletions(102, true, 0, 3, 0);
   CHECK(owner.activeJournalSlots() == 0);
+}
+
+csm::board::can::BuiltinCanTxFrame makeHostCadenceFrame(
+    uint32_t command_id, uint32_t can_id, uint8_t seed) {
+  csm::board::can::BuiltinCanTxFrame frame;
+  frame.command_id = command_id;
+  frame.bus = 1;
+  frame.can_id_flags = can_id;
+  frame.dlc = 8;
+  frame.origin = csm::board::can::BuiltinCanTxOrigin::HostControl;
+  for (uint8_t index = 0; index < sizeof(frame.data); ++index) {
+    frame.data[index] = static_cast<uint8_t>(seed + index);
+  }
+  return frame;
+}
+
+void hostCanCadenceQueuePreservesMechanicalContract() {
+  using namespace csm::board::can;
+  const CanTxCadenceLaneConfig configs[] = {
+      {1, 0x005u, 8, 5000u, 0u},
+      {1, 0x007u, 8, 20000u, 0u},
+      {1, 0x364u, 8, 20000u, 5000u},
+  };
+
+  // C1/C2/C5: EHB payload is opaque FIFO data and first/restart phase is 5 ms.
+  CanTxCadenceQueue ehb;
+  CHECK(ehb.begin(configs, 3));
+  for (uint8_t index = 0; index < 4; ++index) {
+    const BuiltinCanTxFrame frame =
+        makeHostCadenceFrame(100u + index, 0x364u,
+                             static_cast<uint8_t>(0x40u + index * 8u));
+    CHECK(ehb.enqueue(frame, 1000u) == CanTxCadenceEnqueueCode::Accepted);
+  }
+  BuiltinCanTxFrame due;
+  CHECK(!ehb.peekDue(2, 5999u, &due));
+  uint32_t ehb_due_us = 6000u;
+  for (uint8_t index = 0; index < 4; ++index) {
+    CHECK(ehb.peekDue(2, ehb_due_us, &due));
+    CHECK(due.command_id == 100u + index);
+    CHECK(due.data[0] == static_cast<uint8_t>(0x40u + index * 8u));
+    CHECK(due.data[1] == static_cast<uint8_t>(0x41u + index * 8u));
+    CHECK(ehb.noteHwEnqueueAccepted(2, due.command_id, ehb_due_us));
+    CHECK(!ehb.peekDue(2, ehb_due_us + 50000u, &due));
+    BuiltinCanTxCompletion completion;
+    completion.code = BuiltinCanTxCompletionCode::Transmitted;
+    completion.frame = due;
+    completion.terminal = true;
+    completion.terminal_us = ehb_due_us + 1u;
+    CHECK(ehb.noteCompletion(completion, completion.terminal_us));
+    ehb_due_us += 20000u;
+    if (index < 3) {
+      CHECK(!ehb.peekDue(2, ehb_due_us - 1u, &due));
+    }
+  }
+  CHECK(ehb.depth() == 0);
+  const BuiltinCanTxFrame restarted =
+      makeHostCadenceFrame(200, 0x364u, 0x90u);
+  CHECK(ehb.enqueue(restarted, 100000u) ==
+        CanTxCadenceEnqueueCode::Accepted);
+  CHECK(!ehb.peekDue(2, 104999u, &due));
+  CHECK(ehb.peekDue(2, 105000u, &due));
+
+  // C3/C4/C6/C7/C8/C9/C12: independent lanes, exact minimum spacing, one
+  // in-flight per lane, nonterminal pending retention and terminal release.
+  CanTxCadenceQueue lanes;
+  CHECK(lanes.begin(configs, 3));
+  const BuiltinCanTxFrame drive1 = makeHostCadenceFrame(1, 0x005u, 0x10u);
+  const BuiltinCanTxFrame drive2 = makeHostCadenceFrame(2, 0x005u, 0x20u);
+  const BuiltinCanTxFrame steer1 = makeHostCadenceFrame(3, 0x007u, 0x30u);
+  const BuiltinCanTxFrame ehb1 = makeHostCadenceFrame(4, 0x364u, 0x40u);
+  CHECK(lanes.enqueue(drive1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(lanes.enqueue(drive2, 1000u) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(lanes.enqueue(steer1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(lanes.enqueue(ehb1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(lanes.peekDue(0, 1000u, &due));
+  CHECK(lanes.noteHwEnqueueAccepted(0, drive1.command_id, 1000u));
+  CHECK(lanes.peekDue(1, 1000u, &due));
+  CHECK(due.command_id == steer1.command_id);
+  CHECK(!lanes.peekDue(2, 5999u, &due));
+  CHECK(lanes.peekDue(2, 6000u, &due));
+  CHECK(!lanes.peekDue(0, 51000u, &due));
+
+  BuiltinCanTxCompletion pending;
+  pending.code = BuiltinCanTxCompletionCode::DeadlineExceededPending;
+  pending.frame = drive1;
+  pending.terminal = false;
+  pending.terminal_us = 2000u;
+  CHECK(lanes.noteCompletion(pending, pending.terminal_us));
+  CHECK(lanes.hasInFlight());
+  CHECK(!lanes.peekDue(0, 51000u, &due));
+  // A transient owner rejection performs no queue mutation: the same head is
+  // still exposed after the current in-flight item closes.
+  BuiltinCanTxCompletion drive_done;
+  drive_done.code = BuiltinCanTxCompletionCode::Transmitted;
+  drive_done.frame = drive1;
+  drive_done.terminal = true;
+  drive_done.terminal_us = 2001u;
+  CHECK(lanes.noteCompletion(drive_done, drive_done.terminal_us));
+  CHECK(!lanes.peekDue(0, 5999u, &due));
+  CHECK(lanes.peekDue(0, 6000u, &due));
+  CHECK(due.command_id == drive2.command_id);
+  CHECK(lanes.peekDue(0, 6000u, &due));
+  CHECK(due.command_id == drive2.command_id);
+  CHECK(lanes.noteHwEnqueueAccepted(0, drive2.command_id, 6000u));
+  BuiltinCanTxCompletion drive_failed;
+  drive_failed.code = BuiltinCanTxCompletionCode::Cancelled;
+  drive_failed.frame = drive2;
+  drive_failed.terminal = true;
+  drive_failed.terminal_us = 6001u;
+  CHECK(lanes.noteCompletion(drive_failed, drive_failed.terminal_us));
+
+  CHECK(lanes.noteHwEnqueueAccepted(1, steer1.command_id, 1000u));
+  BuiltinCanTxCompletion steer_done;
+  steer_done.code = BuiltinCanTxCompletionCode::Transmitted;
+  steer_done.frame = steer1;
+  steer_done.terminal = true;
+  steer_done.terminal_us = 1001u;
+  CHECK(lanes.noteCompletion(steer_done, steer_done.terminal_us));
+  const BuiltinCanTxFrame steer2 = makeHostCadenceFrame(5, 0x007u, 0x50u);
+  CHECK(lanes.enqueue(steer2, 1002u) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(!lanes.peekDue(1, 20999u, &due));
+  CHECK(lanes.peekDue(1, 21000u, &due));
+
+  // C10: lane capacity is eight; newest excess is rejected with no overwrite.
+  CanTxCadenceQueue full;
+  CHECK(full.begin(configs, 3));
+  for (uint8_t index = 0; index < CanTxCadenceQueue::kLaneCapacity; ++index) {
+    CHECK(full.enqueue(makeHostCadenceFrame(300u + index, 0x005u,
+                                            static_cast<uint8_t>(index)), 0) ==
+          CanTxCadenceEnqueueCode::Accepted);
+  }
+  CHECK(full.enqueue(makeHostCadenceFrame(999, 0x005u, 0xFFu), 0) ==
+        CanTxCadenceEnqueueCode::QueueFull);
+  CHECK(full.depth() == CanTxCadenceQueue::kLaneCapacity);
+  for (uint8_t index = 0; index < CanTxCadenceQueue::kLaneCapacity; ++index) {
+    CHECK(full.dropHead(0, &due));
+    CHECK(due.command_id == 300u + index);
+    CHECK(due.data[0] == index);
+  }
+
+  // C11: flushing removes only SW work and retains owner correlation.
+  CanTxCadenceQueue flushed;
+  CHECK(flushed.begin(configs, 3));
+  CHECK(flushed.enqueue(drive1, 0) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(flushed.enqueue(drive2, 0) == CanTxCadenceEnqueueCode::Accepted);
+  CHECK(flushed.noteHwEnqueueAccepted(0, drive1.command_id, 0));
+  flushed.flushPending();
+  CHECK(flushed.depth() == 0);
+  CHECK(flushed.hasInFlight());
+  CHECK(flushed.noteCompletion(drive_done, 1));
+  CHECK(!flushed.hasInFlight());
+
+  // C13: wrap-safe due comparison.
+  CanTxCadenceQueue wrapped;
+  CHECK(wrapped.begin(configs, 3));
+  CHECK(wrapped.enqueue(ehb1, UINT32_MAX - 4997u) ==
+        CanTxCadenceEnqueueCode::Accepted);
+  CHECK(!wrapped.peekDue(2, 1u, &due));
+  CHECK(wrapped.peekDue(2, 2u, &due));
+
+  BuiltinCanTxFrame invalid = drive1;
+  invalid.dlc = 9;
+  CHECK(wrapped.enqueue(invalid, 0) ==
+        CanTxCadenceEnqueueCode::InvalidFrame);
+  CHECK(wrapped.enqueue(makeHostCadenceFrame(8, 0x123u, 0), 0) ==
+        CanTxCadenceEnqueueCode::UnsupportedLane);
+}
+
+struct FakeHostStream : Stream {
+  uint8_t bytes[256] = {};
+  uint16_t length = 0;
+  uint16_t position = 0;
+
+  int available() override {
+    return static_cast<int>(length - position);
+  }
+  int read() override {
+    return position < length ? bytes[position++] : -1;
+  }
+};
+
+struct HostParserCapture {
+  uint32_t command_ids[8] = {};
+  uint8_t first_data[8] = {};
+  uint8_t count = 0;
+  uint8_t crc_failures = 0;
+};
+
+void captureHostParserFrame(void* context, uint8_t version,
+                            uint8_t record_type, uint16_t,
+                            const uint8_t* payload, uint16_t len) {
+  HostParserCapture* capture = static_cast<HostParserCapture*>(context);
+  CHECK(capture != nullptr);
+  CHECK(version == csm::kProtocolVersion);
+  CHECK(record_type ==
+        static_cast<uint8_t>(csm::RecordType::HostCanTxRequest));
+  CHECK(len == 19);
+  if (capture == nullptr || capture->count >= 8 || len != 19) return;
+  capture->command_ids[capture->count] = csm::rd_u32_le(payload);
+  capture->first_data[capture->count] = payload[11];
+  ++capture->count;
+}
+
+void captureHostParserCrcFailure(void* context) {
+  HostParserCapture* capture = static_cast<HostParserCapture*>(context);
+  if (capture != nullptr) ++capture->crc_failures;
+}
+
+void hostDownlinkParserPreservesCoalescedBurstOverBufferSize() {
+  FakeHostStream stream;
+  for (uint8_t index = 0; index < 7; ++index) {
+    uint8_t payload[19] = {};
+    csm::wr_u32_le(payload, 700u + index);
+    payload[4] = 1;
+    csm::wr_u32_le(&payload[6], 0x005u);
+    payload[10] = 8;
+    payload[11] = static_cast<uint8_t>(0xA0u + index);
+    size_t written = 0;
+    CHECK(csm::encode_typed_frame(
+        &stream.bytes[stream.length], sizeof(stream.bytes) - stream.length,
+        csm::RecordType::HostCanTxRequest, payload, sizeof(payload), index,
+        0, &written));
+    stream.length = static_cast<uint16_t>(stream.length + written);
+  }
+  CHECK(stream.length > 192);
+  CHECK(stream.length <= sizeof(stream.bytes));
+
+  HostParserCapture capture;
+  csm::board::HostDownlinkParser parser(
+      captureHostParserFrame, captureHostParserCrcFailure, &capture);
+  parser.service(stream, 256);
+  CHECK(stream.available() == 0);
+  CHECK(capture.crc_failures == 0);
+  CHECK(capture.count == 7);
+  for (uint8_t index = 0; index < 7; ++index) {
+    CHECK(capture.command_ids[index] == 700u + index);
+    CHECK(capture.first_data[index] == static_cast<uint8_t>(0xA0u + index));
+  }
 }
 
 void builtinCanTxJournalCoversAllTerminalPaths() {
@@ -1226,6 +1467,9 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   CHECK(runtime.status().drive_permille == 1000);
   CHECK(runtime.status().steering_permille == -1000);
 
+  inputs.host_service_active = true;
+  CHECK(!runtime.service(5, inputs).frame_ready);
+  inputs.host_service_active = false;
   drain(5, &drive_frames, &steering_frames);
   CHECK(drive_frames == 1);
   CHECK(steering_frames == 0);
@@ -1626,6 +1870,8 @@ void runtimeHandoffLossAndFaultPolicy() {
 int main() {
   builtinCanTxOwnerHasExplicitEnqueueOutcome();
   builtinCanTxOriginAccountingSeparatesRcFromHost();
+  hostCanCadenceQueuePreservesMechanicalContract();
+  hostDownlinkParserPreservesCoalescedBurstOverBufferSize();
   builtinCanTxJournalCoversAllTerminalPaths();
   builtinCanInvalidSnapshotHoldsJournalFailClosed();
   builtinCanDuplicateMaskLatchesTrackingFault();

@@ -171,6 +171,18 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
     return output;
   }
 
+  // A live, admitted Host lease owns the built-in CAN output boundary. Keep
+  // RC parsing/telemetry current, but emit no RemoteControl or SafetyNeutral
+  // frame while Host raw requests are active. Authority handoff is resolved
+  // by the caller; the sole owner must never see two origin schedulers for the
+  // same vehicle IDs in one Host epoch.
+  if (inputs.host_service_active) {
+    pending_frame_index_ = pending_frame_count_ = 0;
+    require_silent_cycle_ = true;
+    immediate_stop_pending_ = false;
+    return output;
+  }
+
   const ControlReleaseBatch releases = release_schedule_.poll(now_ms);
   saturatingAdd(releases.steering.missed_releases,
                 &status_.steering_release_misses);
@@ -332,12 +344,6 @@ void RemoteControlRuntime::beginCycle(
     require_silent_cycle_ = true;
     return;
   }
-  if (inputs.host_service_active && status_.host_control_allowed &&
-      !status_.remote_reserved) {
-    pending_frame_index_ = pending_frame_count_ = 0;
-    return;
-  }
-
   cycle_sequence_ = drive_release_sequence;
   if (require_silent_cycle_) {
     if (scheduleSafetyStop(now_ms, inputs,

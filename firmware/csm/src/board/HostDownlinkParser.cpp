@@ -78,7 +78,13 @@ void HostDownlinkParser::service(Stream& stream, int budget) {
       break;
     }
     if (len_ >= kBufferSize) {
-      drop(1);
+      // A coalesced TCP read may be larger than the parser buffer even though
+      // every contained typed record is valid. Consume complete leading
+      // records before treating a still-full buffer as malformed resync data.
+      process();
+      if (len_ >= kBufferSize) {
+        drop(1);
+      }
     }
     buffer_[len_++] = static_cast<uint8_t>(value);
   }
