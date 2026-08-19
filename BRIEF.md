@@ -4,6 +4,11 @@ Updated: 2026-08-19
 
 ## 2026-08-19 Host raw FDCAN HW execution rebase
 
+- D-038 supersedes D-037's arbitrary timing constants and ambiguous terminal
+  failure handling. Current build is explicitly exploratory: timing and
+  transient-coverage thresholds are zero until measured/reviewed/frozen, so it
+  cannot be a product qualification PASS.
+
 - D-035 supersedes D-033's common semantic Service/HIL execution path. Upper
   VSM/control software owns vehicle meaning, sequence, count, ramp, CENTER, EHB
   and explicit neutral. RC/autonomy semantic limiter/mapper remains on M7.
@@ -13,12 +18,23 @@ Updated: 2026-08-19
   FDCAN FIFO. Busy/full rejects the current request without retention or retry.
 - N physical requests remain N `HostCanTxRequest` records. No Host semantic mapper,
   latest overwrite, generated repeat/count/neutral, TX segment or second FDCAN
-  owner is approved. Full rejects newest; same-ID FIFO and other-lane progress are
-  mandatory.
-- ACK Accepted means tracked FDCAN HW FIFO admission. Terminal record 23 and
-  matching latency-bounded `CAN_TX_RAW` remain execution/on-bus truth. Android owns
+  owner is approved. HW busy/full rejects the current request; no Host software
+  FIFO or hidden retry exists.
+- ACK Accepted means tracked FDCAN HW FIFO admission. Terminal record 23 schema 2
+  is command-correlated HW outcome and separates transmitted, intentional cancel,
+  HW failure and tracking failure. `CAN_TX_RAW` is an independent physical stream
+  and is not payload-FIFO correlated. Android owns
   absolute nominal 5/20/20 ms generation. New target build and four-window external
   Kvaser HIL are required; every D-036-era timing artifact is non-qualifying.
+- The enabled steady envelope is 1,086 records/s and 131,222 B/s. 120 kB/s is
+  invalid and 135 kB/s is not approved headroom. Host authority handoff closes
+  admission/epoch, drains reasoned HW cancellation terminals, then opens RC with
+  no overlap and no additional dead zone.
+- Host/native/uplink/Wi-Fi/CAPABILITY V7 guards pass. The current target build
+  source manifest is
+  `293b31ed737469fc84ae46ff748ab1902571fa4805dc828f1db5dc790d52cba4`,
+  RAM `211,880/523,624 B`, flash `369,216/786,432 B`; it has not been uploaded
+  or used for exploratory/qualification HIL.
 
 ## 2026-08-05 profile-scoped product closeout
 

@@ -95,12 +95,12 @@ def calculate() -> dict:
     require(reserve_bytes == 2112, "critical byte reserve drift")
     require(usb_queue_records == 208, "product USB descriptor envelope drift")
     require(usb_queue_bytes == 40960, "product USB byte envelope drift")
-    require(usb_transient_coverage_ms == 250,
-            "USB transient queue coverage contract drift")
+    require(usb_transient_coverage_ms == 0,
+            "USB transient coverage must remain exploratory")
     require(stall_ms == 5000, "no-progress timeout drift")
     require(call_stall_ms == 5000, "socket call-stall boundary drift")
-    require(transient_coverage_ms == 250,
-            "transient queue coverage contract drift")
+    require(transient_coverage_ms == 0,
+            "Wi-Fi transient coverage must remain exploratory")
     require(high_water_bytes == 32768, "byte high-water drift")
     require(low_water_bytes == 8192, "byte low-water drift")
     require(high_water_records == 192, "record high-water drift")
@@ -119,7 +119,7 @@ def calculate() -> dict:
         "BOARD_WIFI_SINK_QUEUE_RECORDS=256",
         "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
         "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-        "BOARD_WIFI_TRANSIENT_COVERAGE_MS=250",
+        "BOARD_WIFI_TRANSIENT_COVERAGE_MS=0",
         "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES=32768",
         "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES=8192",
         "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS=192",
@@ -129,7 +129,7 @@ def calculate() -> dict:
         "BOARD_WIFI_AP_STA_CONCUR=1",
         "BOARD_USB_SINK_QUEUE_RECORDS=208",
         "BOARD_USB_SINK_QUEUE_BYTES=40960",
-        "BOARD_USB_TRANSIENT_COVERAGE_MS=250",
+        "BOARD_USB_TRANSIENT_COVERAGE_MS=0",
     ):
         require(token in platformio, f"product environment missing {token}")
     for token in (
@@ -169,13 +169,6 @@ def calculate() -> dict:
     transport_diagnostic_fps = constexpr(
         product_profile, "kProductTransportDiagnosticRecordsPerSecond"
     )
-    minimum_rate = constexpr(
-        product_profile, "kProductUplinkMinimumBytesPerSecond"
-    )
-    design_rate = constexpr(
-        product_profile, "kProductUplinkDesignBytesPerSecond"
-    )
-
     def segmented_rate(
         fps: int, header: int, entry: int, frames_per_segment: int
     ) -> int:
@@ -192,6 +185,9 @@ def calculate() -> dict:
     control_ack = control_fps * (
         typed_overhead + constexpr(typed_records, "kControlAckPayloadLen")
     )
+    control_tx_evidence = control_fps * (
+        typed_overhead + constexpr(typed_records, "kControlTxEvidencePayloadLen")
+    )
     remote_state = remote_state_fps * (
         typed_overhead + constexpr(typed_records, "kRemoteControlStatePayloadLen")
     )
@@ -202,18 +198,19 @@ def calculate() -> dict:
         typed_overhead + transport_payload
     )
     fixed_product = (
-        can_tx + control_ack + remote_state + board_health + transport_diagnostic
+        can_tx + control_ack + control_tx_evidence + remote_state
+        + board_health + transport_diagnostic
     )
     compact_total = compact_rx + fixed_product
     compact_records = math.ceil(rx_fps / compact_max)
     enabled_records = (
-        compact_records + 2 * control_fps + remote_state_fps
+        compact_records + 3 * control_fps + remote_state_fps
         + board_health_fps + transport_diagnostic_fps
     )
 
     normal_bytes = queue_bytes - reserve_bytes
     normal_records = queue_records - reserve_records
-    target_rate = design_rate
+    target_rate = compact_total
     live_fifo_min_batches = 4
     live_fifo_required_bytes = batch_bytes * live_fifo_min_batches
     max_encoded_frame_bytes = 523
@@ -252,10 +249,8 @@ def calculate() -> dict:
     legacy_can_queue_total = 2 * 4096 * can_item_bytes
 
     require(compact_rx == 88874, "aggregate CAN wire calculation regression")
-    require(compact_total == 115922, "enabled product wire calculation regression")
-    require(enabled_records == 786, "enabled product record calculation regression")
-    require(compact_total <= minimum_rate, "enabled profile exceeds minimum gate")
-    require(minimum_rate < design_rate, "design envelope lacks headroom")
+    require(compact_total == 131222, "enabled product wire calculation regression")
+    require(enabled_records == 1086, "enabled product record calculation regression")
     require(dtcm_storage == 53248, "DTCM live FIFO calculation regression")
     require(
         normal_bytes >= live_fifo_required_bytes,
@@ -337,8 +332,6 @@ def calculate() -> dict:
         "throughput_bytes_per_second": {
             "aggregate_can_rx_4000fps": compact_rx,
             "enabled_profile_exact": compact_total,
-            "qualification_minimum": minimum_rate,
-            "design_envelope": design_rate,
             "enabled_records_per_second": enabled_records,
         },
         "live_fifo_envelope": {
@@ -394,14 +387,13 @@ def calculate() -> dict:
             ),
         },
         "gates": {
-            "enabled_profile_fits_minimum": compact_total <= minimum_rate,
-            "minimum_fits_design": minimum_rate < design_rate,
+            "threshold_qualification_complete": False,
             "live_fifo_holds_four_batches": normal_bytes
             >= live_fifo_required_bytes,
             "worker_pressure_precedes_reserve": high_water_bytes < normal_bytes,
             "worker_pressure_protects_reserve": pressure_headroom_bytes
             >= pressure_guard_bytes,
-            "worker_pump_services_design_ingress": max_bytes_per_pump
+            "worker_pump_services_enabled_ingress": max_bytes_per_pump
             >= fallback_ingress_bytes,
             "transient_byte_coverage": normal_bytes
             >= transient_ingress_bytes + max_encoded_frame_bytes
@@ -434,16 +426,10 @@ def markdown(report: dict) -> str:
             "PASS",
         ),
         (
-            "Enabled profile exact / minimum",
-            f"{throughput['enabled_profile_exact']:,} / "
-            f"{throughput['qualification_minimum']:,} B/s",
-            "PASS" if gates["enabled_profile_fits_minimum"] else "FAIL",
-        ),
-        (
-            "Qualification minimum / design envelope",
-            f"{throughput['qualification_minimum']:,} / "
-            f"{throughput['design_envelope']:,} B/s",
-            "PASS" if gates["minimum_fits_design"] else "FAIL",
+            "Enabled profile exact",
+            f"{throughput['enabled_profile_exact']:,} B/s, "
+            f"{throughput['enabled_records_per_second']:,} records/s",
+            "PASS",
         ),
         (
             "Four TCP batches / normal live FIFO",
@@ -452,28 +438,28 @@ def markdown(report: dict) -> str:
             "PASS" if gates["live_fifo_holds_four_batches"] else "FAIL",
         ),
         (
-            "250 ms byte transient / normal live FIFO",
+            "Exploratory byte coverage / normal live FIFO",
             f"{live_fifo['transient_ingress_bytes'] + live_fifo['max_encoded_frame_bytes'] + live_fifo['fallback_ingress_bytes']:,} / "
             f"{live_fifo['normal_admission_bytes']:,} B",
-            "PASS" if gates["transient_byte_coverage"] else "FAIL",
+            "OPEN",
         ),
         (
-            "250 ms record transient / normal descriptors",
+            "Exploratory record coverage / normal descriptors",
             f"{live_fifo['transient_ingress_records'] + 1 + live_fifo['fallback_ingress_records']:,} / "
             f"{live_fifo['normal_admission_records']:,}",
-            "PASS" if gates["transient_record_coverage"] else "FAIL",
+            "OPEN",
         ),
         (
-            "USB 250 ms byte transient / byte FIFO",
+            "USB exploratory byte coverage / byte FIFO",
             f"{usb_fifo['transient_ingress_bytes'] + usb_fifo['max_encoded_frame_bytes']:,} / "
             f"{usb_fifo['queue_bytes']:,} B",
-            "PASS" if gates["usb_transient_byte_coverage"] else "FAIL",
+            "OPEN",
         ),
         (
-            "USB 250 ms record transient / descriptors",
+            "USB exploratory record coverage / descriptors",
             f"{usb_fifo['transient_ingress_records'] + 1:,} / "
             f"{usb_fifo['queue_records']:,}",
-            "PASS" if gates["usb_transient_record_coverage"] else "FAIL",
+            "OPEN",
         ),
         (
             "Pressure headroom / max-frame + fallback ingress",
@@ -490,11 +476,11 @@ def markdown(report: dict) -> str:
             "PASS" if gates["pressure_hysteresis_valid"] else "FAIL",
         ),
         (
-            "Worker service capacity / design envelope",
+            "Worker service capacity / enabled exact rate",
             f"{live_fifo['worker_service_bytes_per_second']:,} / "
-            f"{throughput['design_envelope']:,} B/s",
+            f"{throughput['enabled_profile_exact']:,} B/s",
             "PASS"
-            if gates["worker_pump_services_design_ingress"]
+            if gates["worker_pump_services_enabled_ingress"]
             else "FAIL",
         ),
         (

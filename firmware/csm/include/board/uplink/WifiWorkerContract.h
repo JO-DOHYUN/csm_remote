@@ -86,7 +86,7 @@ static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
               "Wi-Fi startup retry interval must be non-zero");
 
 #ifndef BOARD_WIFI_TRANSIENT_COVERAGE_MS
-#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 250
+#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 0
 #endif
 
 #ifndef BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES
@@ -105,8 +105,8 @@ static_assert(BOARD_WIFI_STARTUP_RETRY_MS > 0,
 #define BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS 64
 #endif
 
-static_assert(BOARD_WIFI_TRANSIENT_COVERAGE_MS > 0,
-              "Wi-Fi transient coverage must be non-zero");
+static_assert(BOARD_WIFI_TRANSIENT_COVERAGE_MS < 0x80000000u,
+              "Wi-Fi transient coverage must remain wrap-safe");
 static_assert(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES <
                   BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES,
               "Wi-Fi byte pressure hysteresis is invalid");
@@ -114,15 +114,15 @@ static_assert(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS <
                   BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS,
               "Wi-Fi record pressure hysteresis is invalid");
 
-static constexpr uint32_t kWifiDesignIngressBytesPerFallback =
+static constexpr uint32_t kWifiEnabledIngressBytesPerFallback =
     (static_cast<uint64_t>(
-         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
+         csm::board::uplink::kProductEnabledWireBytesPerSecond) *
          BOARD_WIFI_CONNECTED_FALLBACK_MS +
      999u) /
     1000u;
 static_assert(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP >=
-                  kWifiDesignIngressBytesPerFallback,
-              "Wi-Fi worker pump cannot service the product design envelope");
+                  kWifiEnabledIngressBytesPerFallback,
+              "Wi-Fi worker pump cannot service the enabled wire envelope");
 static_assert(BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US <
                   BOARD_WIFI_CONNECTED_FALLBACK_MS * 1000u,
               "Wi-Fi worker pump may monopolize its fallback interval");

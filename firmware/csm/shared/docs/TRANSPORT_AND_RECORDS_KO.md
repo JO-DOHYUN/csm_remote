@@ -10,10 +10,9 @@ active.
   encoded bytes. Four descriptors and 2,112 bytes are reserved for critical
   evidence, leaving a 252-record/47,040-byte normal envelope. It is a
   scheduling-jitter buffer, not a journal.
-- At the generated 135,000 B/s and 686-record/s design envelope, the normal
-  capacity covers 250 ms plus one maximum encoded frame and one 5 ms fallback
-  interval in both dimensions. This bounded transient claim is not a sustained
-  throughput or outage-retention claim.
+- The enabled schema is generated exactly as 131,222 B/s and 1,086 records/s.
+  Queue-coverage thresholds remain exploratory until measurement, constant
+  freeze, and qualification HIL complete; no design-rate headroom is assumed.
 - 32,768 bytes or 192 records enters diagnostic pressure. Pressure recovers
   only at both 8,192 bytes or less and 64 records or less. High-water pressure
   changes batching/wake behavior and counters; it never closes a TCP epoch.
@@ -446,8 +445,7 @@ Current Mid Carrier MCP2515 CSM profile:
 - `24..27 rejected_total u32`
 
 `CONTROL_ACK` is request-decision evidence, not final CAN success evidence. Host
-software must not mark a frame as actually sent from `CONTROL_ACK` alone. Actual
-CAN TX success is proven by the matching `CAN_TX_RAW` audit record. The current
+software must not mark a frame as actually sent from `CONTROL_ACK` alone. The current
 MCP2515 profile emits `CONTROL_ACK status=1 reason=0` after the request is
 accepted into the MCP TX path, then emits `CAN_TX_RAW` only after the TX
 completion audit succeeds. The built-in CAN profile emits `CONTROL_ACK Accepted`
@@ -467,33 +465,40 @@ The static Service/HIL allowlist validates configured bus, standard ID
 `0x005/0x007/0x364`, DLC8 and RTR false; payload meaning remains the upper
 control software's contract.
 
-`CONTROL_TX_EVIDENCE` payload, 40 bytes:
+`CONTROL_TX_EVIDENCE` schema 2 payload, 40 bytes:
 - `0..7 mono_us u64`
 - `8..11 command_id u32`
 - `12..15 submission_sequence u32`
-- `16 outcome u8`: `1` terminal driver success, `0` terminal driver failure
+- `16 outcome u8`: `1 Transmitted`, `2 IntentionalCancelled`,
+  `3 HardwareFailure`, `4 TrackingFailure`
 - `17 origin u8`
 - `18 bus u8`, `19 dlc u8`
 - `20..23 can_id_flags u32`, `24..31 data[8]`
-- `32..35 driver_result i32`, `36..39 request_mask u32`
+- `32..35 driver_result i32`
+- `36 request_mask_low u8`, `37 cancel_reason u8`,
+  `38 completion_code u8`, `39 schema u8` (`2`)
 
-Service/HIL의 실제 송신 판정은 같은 bus/ID/DLC/data를 가진 `CAN_TX_RAW`와
-`CONTROL_TX_EVIDENCE`가 일치할 때만 command_id에 귀속한다. ACK만으로 송신
-성공을 표시하지 않으며, terminal evidence가 없는 구형 펌웨어에서만 제한된
-FIFO 상관관계를 호환 경로로 사용한다.
+Record 23 is the authoritative command-correlated terminal outcome. `CAN_TX_RAW`
+is the independent physical completion stream and is never paired to command ID
+by repeated-payload FIFO guessing. ACK alone is not actual TX. Service/HIL schema
+2 has no legacy terminal-evidence compatibility path and ARM is rejected when the
+advertised/echoed control schema is not 2.
 
 `CONTROL_TX_EVIDENCE` is terminal-only. `DeadlineExceededPending` retains the
 owner journal correlation and may produce diagnostic/fault evidence, but it is
 not encoded as outcome 0 until a terminal failure actually occurs. Every
 Accepted Host request reaches exactly one terminal record 23. A transmitted
 terminal additionally emits matching `CAN_TX_RAW`; a terminal failure does not.
+TXBCF with no policy cancel request, and TXBCF after a qualified HW deadline,
+are `HardwareFailure`; Host disarm/epoch/authority/lease/hard-safety aborts are
+`IntentionalCancelled`; correlation loss or tracking-fault abort is
+`TrackingFailure`.
 
 N requested physical frames are N individual `HOST_CAN_TX_REQUEST` records with
 unique command IDs. TCP may coalesce records, but the board does not add a TX
-segment. The capability `host_tx_queue_size` denotes the total bounded Host
-HW admission/correlation capacity for the selected backend (currently 3,
-matching Mbed FDCAN `TxFifoQueueElmtsNbr` and `BuiltinCanTxOwner`). It is not a
-Host software execution queue.
+segment. Legacy capability `host_tx_queue_size` is `0` and means Host software
+retention. CAPABILITY v7 separately advertises three physical HW TX slots and
+zero Host software retention.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -563,10 +568,17 @@ Current board host TX policy:
   admission remain board-owned. Owner busy/journal-full rejects that request and
   never retains it for a later service pass.
 - Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
-  Transport/Host-authority loss requests cancellation of Host-origin HW attempts;
+  Host-to-RC handoff is one ordered state transition: close Host admission,
+  terminate Host freshness/lease epoch, request cancellation and wait for every
+  admitted Host HW terminal, then allow RC. There is neither overlap nor an
+  artificial wait after the final terminal. Transport/Host-authority loss requests cancellation of Host-origin HW attempts;
   hard-safety requests cancellation of all application-control origins. Attempts
   remain journaled until transmitted/cancelled/faulted terminal truth, and new
   Host ARM waits for that closure.
+- Timing thresholds are not inferred from tests. An exploratory build advertises
+  qualification state `0`, threshold values `0`, performs monotonic/replay gates
+  and publishes observed maxima. Only measured/frozen nonzero product constants
+  advertise state `1`; qualification HIL begins after that freeze.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
@@ -621,12 +633,12 @@ Current board host TX policy:
   in-flight frame but never under-reports reserved storage. Mailbox health reads
   the queue's atomic producer/consumer cursors directly; it does not maintain a
   second cached snapshot that either side could overwrite out of order.
-  The 256-descriptor envelope is generated from the actual product mix,
-  including 300 Hz `CAN_TX_RAW`: 250 ms requires 197 records and the declared
-  fallback/maximum-frame guard requires five more, below the 252 normal slots.
-  Descriptor and byte capacity are independent compile/link-time gates.
-  Neither dimension may be enlarged without a measured production load
-  envelope and memory gate.
+  Descriptor and byte capacity are independent compile/link-time gates. With
+  record 23 included the enabled mix is 1086 records/s; the previous 250 ms /
+  197-record claim is invalid. Exploratory builds advertise transient coverage
+  `0` and cannot qualify. A nonzero coverage interval is frozen only after
+  measurement, at which point compile-time guards must prove both descriptor
+  and byte capacity. Neither dimension may be enlarged to make a test pass.
 - On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
   and then `CAN_TX_RAW` on the same bus.
 
@@ -636,6 +648,9 @@ Safety-gated control session:
   - `4..7 host_mono_ms u32`
   - `8..9 flags u16`
   - `10..11 reserved u16`
+  - `12..15 host_mono_ms u32`
+  - `16 control_schema u8`: `2` for ARM/renew; DISARM remains fail-safe.
+  - `17..23 reserved`
 - `HOST_CONTROL_SESSION` payload, 24 bytes:
   - `0..3 command_id u32`
   - `4 action u8`: `0` disarm, `1` arm, `2` renew lease, `3` install neutral profile reserved
@@ -991,6 +1006,34 @@ Extended 272-byte `CAPABILITY` payload:
 - `264..267 host_absent_gap_total u32`
 - `268..271 pre_session_payload_replay_total u32`
 
+Extended 332-byte `CAPABILITY` v7 payload:
+- `0..271`: same as the 272-byte payload.
+- `272 control_schema u8`: Service/HIL Host control schema, currently `2`.
+- `273 terminal_evidence_schema u8`: record 23 schema, currently `2`.
+- `274 threshold_qualification u8`: `0 Exploratory`, `1 Frozen`.
+- `275 physical_hw_tx_slots u8`: current tracked FDCAN slots, `3`.
+- `276..277 host_software_retention u16`: must be `0`.
+- `278..279 reserved`.
+- `280..283 hw_pending_stale_us u32`
+- `284..287 heartbeat_extra_lag_ms u32`
+- `288..291 command_age_ms u32`
+- `292..295 future_tolerance_ms u32`
+- `296..299 observed_heartbeat_extra_lag_ms u32`
+- `300..303 observed_command_age_ms u32`
+- `304..307 observed_command_future_lead_ms u32`
+- `308..311 permanent_admission_reject_total u32`
+- `312..315 transient_admission_reject_total u32`
+- `316..319 intentional_cancel_total u32`
+- `320..323 terminal_hardware_failure_total u32`
+- `324..327 terminal_tracking_failure_total u32`
+- `328..331 transmitted_complete_total u32`
+
+State `0` is measurement-only and is not a release approval. Values move to
+state `1` only in the order exploratory measurement -> reviewed value decision
+-> product constant freeze -> qualification HIL. `120000 B/s` is retired and
+`135000 B/s` is not an approved envelope. The enabled steady schema computes
+1086 records/s and exactly 131222 B/s before qualification headroom is chosen.
+
 The hardware fields above are advertised claims and artifact references. They
 do not by themselves prove vehicle-impact-free behavior. VSM may display them
 and use them for mismatch detection, but `verified_passive` requires external
@@ -1239,8 +1282,9 @@ Final CSM protocol freeze for VMS:
   and control permission from descriptors.
 - VMS may send `HOST_CAN_TX_REQUEST` only for allowlisted standard IDs
   `0x503` and `0x510..0x513`, DLC `0..8`, no RTR, no extended frame.
-- VMS must treat `CONTROL_ACK` as board decision evidence only. Actual sent
-  evidence is the matching `CAN_TX_RAW` on the requested bus.
+- VMS must treat `CONTROL_ACK` as board decision evidence only. Service/HIL
+  command terminal truth is record 23 schema 2; `CAN_TX_RAW` is the independent
+  physical completion stream and is not payload-FIFO correlated to command ID.
 
 RP2040 feeder successor profile major `4`:
 - descriptor 0 is `bus=0`, backend `5` RP2040 feeder UART, transceiver `4`

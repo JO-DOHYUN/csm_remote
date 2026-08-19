@@ -26,6 +26,7 @@ $sources = @(
   (Join-Path $project "src\board\control\CommandLimiter.cpp"),
   (Join-Path $project "src\board\control\ControlReleaseSchedule.cpp"),
   (Join-Path $project "src\board\control\HostCommandFreshness.cpp"),
+  (Join-Path $project "src\board\control\HostControlAuthorityGate.cpp"),
   (Join-Path $project "src\board\control\RemoteControlOrchestrator.cpp"),
   (Join-Path $project "src\board\control\RemoteControlRuntime.cpp"),
   (Join-Path $project "src\board\control\VehicleCommandMapper.cpp"),

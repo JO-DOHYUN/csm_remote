@@ -102,7 +102,7 @@ for token in (
     "BOARD_WIFI_SINK_QUEUE_RECORDS=256",
     "BOARD_WIFI_SINK_QUEUE_BYTES=49152",
     "BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES=2112",
-    "BOARD_WIFI_TRANSIENT_COVERAGE_MS=250",
+    "BOARD_WIFI_TRANSIENT_COVERAGE_MS=0",
     "BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES=32768",
     "BOARD_WIFI_PRESSURE_LOW_WATER_BYTES=8192",
     "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS=192",
@@ -115,7 +115,7 @@ for token in (
         fail(f"product throughput envelope is missing {token!r}")
 
 feeder_product = env_section(
-    "portenta_h7_m7_mid_feeder_uart_j4_remote_product_wifi"
+    "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi"
 )
 if "BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS=1" not in feeder_product:
     fail("final feeder product must publish bounded 1 Hz TRANSPORT_DIAGNOSTIC")
@@ -137,7 +137,7 @@ for token in (
     "#define BOARD_WIFI_CONNECTED_FALLBACK_MS 5",
     "#define BOARD_WIFI_TX_BATCH_MAX_LATENCY_MS 20",
     "#define BOARD_WIFI_TX_LATENCY_BOUND_MAX_MS 2",
-    "#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 250",
+    "#define BOARD_WIFI_TRANSIENT_COVERAGE_MS 0",
     "#define BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES 32768",
     "#define BOARD_WIFI_PRESSURE_LOW_WATER_BYTES 8192",
     "#define BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS 192",
@@ -147,17 +147,19 @@ for token in (
         fail(f"worker recovery/evidence contract is missing {token!r}")
 
 for token in (
-    "kProductEnabledWireBytesPerSecond == 115922",
-    "kProductEnabledRecordsPerSecond == 786",
-    "kProductUplinkMinimumBytesPerSecond = 120000",
-    "kProductUplinkDesignBytesPerSecond = 135000",
+    "kProductEnabledWireBytesPerSecond == 131222",
+    "kProductEnabledRecordsPerSecond == 1086",
     "productSegmentWireBytesPerSecond",
     "csm::kControlAckPayloadLen",
+    "csm::kControlTxEvidencePayloadLen",
 ):
     if token not in product_envelope:
         fail(f"schema-derived product envelope is missing {token!r}")
 if "BOARD_WIFI_PRODUCT_TARGET_BYTES_PER_SECOND" in contract + mailbox_header:
     fail("superseded hand-written Wi-Fi product rate remains in firmware")
+for retired in ("120000", "135000"):
+    if retired in product_envelope:
+        fail(f"retired/unapproved wire rate remains in product envelope: {retired}")
 
 for token in (
     "wifiStartupAttemptsExhausted(",

@@ -4,12 +4,20 @@ namespace csm::board::control {
 
 bool HostCommandFreshness::begin(
     const HostCommandFreshnessConfig& config) {
-  configured_ = config.heartbeat_max_extra_lag_ms > 0 &&
+  const bool all_zero = config.heartbeat_max_extra_lag_ms == 0 &&
+      config.command_max_age_ms == 0 &&
+      config.clock_future_tolerance_ms == 0;
+  const bool all_frozen = config.heartbeat_max_extra_lag_ms > 0 &&
       config.heartbeat_max_extra_lag_ms < 0x80000000u &&
       config.command_max_age_ms > 0 &&
       config.command_max_age_ms < 0x80000000u &&
       config.clock_future_tolerance_ms < 0x80000000u;
+  configured_ = all_zero || all_frozen;
+  timing_qualified_ = all_frozen;
   config_ = configured_ ? config : HostCommandFreshnessConfig{};
+  observed_heartbeat_extra_lag_ms_ = 0;
+  observed_command_age_ms_ = 0;
+  observed_command_future_lead_ms_ = 0;
   reset();
   return configured_;
 }
@@ -43,12 +51,19 @@ HostFreshnessResult HostCommandFreshness::acceptHeartbeat(
       host_mono_ms - last_heartbeat_host_mono_ms_;
   const uint32_t arrival_elapsed =
       arrival_ms - last_heartbeat_arrival_ms_;
-  if (static_cast<uint64_t>(arrival_elapsed) >
-          static_cast<uint64_t>(sender_elapsed) +
-              config_.heartbeat_max_extra_lag_ms ||
-      static_cast<uint64_t>(sender_elapsed) >
-          static_cast<uint64_t>(arrival_elapsed) +
-              config_.clock_future_tolerance_ms) {
+  if (arrival_elapsed > sender_elapsed) {
+    const uint32_t extra_lag = arrival_elapsed - sender_elapsed;
+    if (extra_lag > observed_heartbeat_extra_lag_ms_) {
+      observed_heartbeat_extra_lag_ms_ = extra_lag;
+    }
+  }
+  if (timing_qualified_ &&
+      (static_cast<uint64_t>(arrival_elapsed) >
+           static_cast<uint64_t>(sender_elapsed) +
+               config_.heartbeat_max_extra_lag_ms ||
+       static_cast<uint64_t>(sender_elapsed) >
+           static_cast<uint64_t>(arrival_elapsed) +
+               config_.clock_future_tolerance_ms)) {
     return latchFault();
   }
 
@@ -77,10 +92,20 @@ HostFreshnessResult HostCommandFreshness::acceptCommand(
       anchor_host_mono_ms_ + (arrival_ms - anchor_arrival_ms_);
   const int32_t signed_age =
       static_cast<int32_t>(estimated_host_now - host_mono_ms);
-  if (signed_age > static_cast<int32_t>(config_.command_max_age_ms)) {
+  if (signed_age >= 0) {
+    const uint32_t age = static_cast<uint32_t>(signed_age);
+    if (age > observed_command_age_ms_) observed_command_age_ms_ = age;
+  } else {
+    const uint32_t lead = static_cast<uint32_t>(-signed_age);
+    if (lead > observed_command_future_lead_ms_) {
+      observed_command_future_lead_ms_ = lead;
+    }
+  }
+  if (timing_qualified_ &&
+      signed_age > static_cast<int32_t>(config_.command_max_age_ms)) {
     return HostFreshnessResult::Stale;
   }
-  if (signed_age <
+  if (timing_qualified_ && signed_age <
       -static_cast<int32_t>(config_.clock_future_tolerance_ms)) {
     return HostFreshnessResult::Future;
   }

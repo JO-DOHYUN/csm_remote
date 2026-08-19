@@ -17,6 +17,7 @@
 #include "board/can/BuiltinFdcanDiagnostics.h"
 #include "board/can/BuiltinCanTxOwner.h"
 #include "board/control/HostCommandFreshness.h"
+#include "board/control/HostControlAuthorityGate.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
@@ -446,7 +447,7 @@
 #endif
 
 #ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
-#define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 5000
+#define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 0
 #endif
 #ifndef BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET
 // Bounded parser ingress budget. Host CAN requests are independent one-shot
@@ -455,13 +456,13 @@
 #endif
 
 #ifndef BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS
-#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 100
+#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 0
 #endif
 #ifndef BOARD_HOST_CAN_TX_MAX_AGE_MS
-#define BOARD_HOST_CAN_TX_MAX_AGE_MS 40
+#define BOARD_HOST_CAN_TX_MAX_AGE_MS 0
 #endif
 #ifndef BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS
-#define BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS 20
+#define BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS 0
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -742,7 +743,7 @@ using csm::kCapabilityV2PayloadLen;
 using csm::kCapabilityV3PayloadLen;
 using csm::kCapabilityV4PayloadLen;
 using csm::kCapabilityV5PayloadLen;
-using csm::kCapabilityV6PayloadLen;
+using csm::kCapabilityV7PayloadLen;
 using csm::kBoardHealthV2PayloadLen;
 using csm::kBoardHealthV4PayloadLen;
 using csm::kBoardHealthV6PayloadLen;
@@ -961,8 +962,11 @@ static uint32_t host_control_session_total = 0;
 static uint32_t host_can_tx_request_total = 0;
 static uint32_t __attribute__((unused)) host_can_tx_accepted_total = 0;
 static uint32_t host_can_tx_rejected_total = 0;
+static uint32_t host_can_tx_transient_rejected_total = 0;
+static uint8_t host_can_tx_last_transient_reason = 0xFFu;
 static csm::board::control::HostCommandFreshness host_command_freshness;
 static bool host_command_freshness_ok = false;
+static csm::board::control::HostControlAuthorityGate host_authority_gate;
 
 static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
@@ -1063,6 +1067,9 @@ static bool builtin_can_tx_ok = false;
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
 static uint32_t builtin_can_tx_total = 0;
 static uint32_t builtin_can_tx_failed_total = 0;
+static uint32_t builtin_can_tx_cancelled_total = 0;
+static uint32_t builtin_can_tx_hardware_failure_total = 0;
+static uint32_t builtin_can_tx_tracking_failure_total = 0;
 #if BOARD_ENABLE_BUILTIN_CAN_LANE
 static csm::board::can::BuiltinCanTxOwner builtin_can_tx_owner;
 static bool builtin_can_tx_inhibit_latched = false;
@@ -2761,9 +2768,9 @@ static void emit_capability() {
   config.supported_downlink_records = 0;
 #endif
   config.safety_feature_flags = 0x0000000Fu;
-  config.host_tx_queue_size = BOARD_ENABLE_HOST_CAN_TX_ANY
-      ? csm::board::can::BuiltinCanTxOwner::kJournalSlots
-      : 0;
+  // Legacy field now advertises Host software retention only. Physical
+  // FDCAN capacity is separately versioned in CAPABILITY v7.
+  config.host_tx_queue_size = 0;
   config.capability_v3_flags =
       csm::kCapabilityV3FlagCanonicalFanout |
       csm::kCapabilityV3FlagCompactCanRxSegment;
@@ -2776,6 +2783,7 @@ static void emit_capability() {
   config.include_v4 = true;
   config.include_v5 = true;
   config.include_v6 = true;
+  config.include_v7 = true;
   config.firmware_build_id = CSM_FW_BUILD_ID;
   config.firmware_identity_version = 1;
   config.firmware_dirty = CSM_FW_GIT_DIRTY != 0;
@@ -2827,6 +2835,34 @@ static void emit_capability() {
   config.usb_attach_quarantine_total = usb_attach_quarantine_total;
   config.host_absent_gap_total = host_absent_gap_total;
   config.pre_session_payload_replay_total = pre_session_payload_replay_total;
+  config.control_schema = csm::kHostControlSchema;
+  config.terminal_evidence_schema = csm::kControlTxEvidenceSchema;
+  config.threshold_qualification =
+      host_command_freshness.timingQualified() &&
+              BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US != 0 &&
+              BOARD_USB_TRANSIENT_COVERAGE_MS != 0 &&
+              BOARD_WIFI_TRANSIENT_COVERAGE_MS != 0
+          ? csm::kThresholdQualificationFrozen
+          : csm::kThresholdQualificationExploratory;
+  config.hardware_tx_slots = csm::board::can::BuiltinCanTxOwner::kJournalSlots;
+  config.host_software_retention = 0;
+  config.hw_pending_stale_us = BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US;
+  config.heartbeat_lag_ms = BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
+  config.command_age_ms = BOARD_HOST_CAN_TX_MAX_AGE_MS;
+  config.future_tolerance_ms = BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS;
+  config.observed_heartbeat_lag_ms =
+      host_command_freshness.observedHeartbeatExtraLagMs();
+  config.observed_command_age_ms =
+      host_command_freshness.observedCommandAgeMs();
+  config.observed_future_lead_ms =
+      host_command_freshness.observedCommandFutureLeadMs();
+  config.admission_reject_total =
+      host_can_tx_rejected_total - host_can_tx_transient_rejected_total;
+  config.transient_reject_total = host_can_tx_transient_rejected_total;
+  config.intentional_cancel_total = builtin_can_tx_cancelled_total;
+  config.hardware_failure_total = builtin_can_tx_hardware_failure_total;
+  config.tracking_failure_total = builtin_can_tx_tracking_failure_total;
+  config.tx_complete_total = builtin_can_tx_total;
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   config.capability_v2_flags |= (1u << 2);
 #endif
@@ -2968,7 +3004,7 @@ static void emit_capability() {
 #endif
 #endif
 
-  uint8_t payload[kCapabilityV6PayloadLen];
+  uint8_t payload[kCapabilityV7PayloadLen];
   const uint16_t payload_len = csm::board::build_capability_payload(config, payload, sizeof(payload));
   if (payload_len > 0) {
     emit_record(RecordType::Capability, payload, payload_len);
@@ -3467,7 +3503,9 @@ static void increment_builtin_can_counter(uint32_t* counter) {
 }
 
 static void emit_host_control_tx_evidence(
-    const csm::board::can::BuiltinCanTxFrame& frame, bool transmitted,
+    const csm::board::can::BuiltinCanTxFrame& frame, uint8_t outcome,
+    csm::board::can::BuiltinCanTxCancelReason cancel_reason,
+    csm::board::can::BuiltinCanTxCompletionCode completion_code,
     uint32_t submission_sequence, int32_t driver_result,
     uint32_t request_mask) {
   uint8_t payload[csm::kControlTxEvidencePayloadLen] = {};
@@ -3476,7 +3514,7 @@ static void emit_host_control_tx_evidence(
             frame.command_id);
   wr_u32_le(&payload[csm::kControlTxEvidenceSubmissionSequenceOffset],
             submission_sequence);
-  payload[csm::kControlTxEvidenceOutcomeOffset] = transmitted ? 1u : 0u;
+  payload[csm::kControlTxEvidenceOutcomeOffset] = outcome;
   payload[csm::kControlTxEvidenceOriginOffset] =
       static_cast<uint8_t>(frame.origin);
   payload[csm::kControlTxEvidenceBusOffset] = frame.bus;
@@ -3488,23 +3526,46 @@ static void emit_host_control_tx_evidence(
   wr_i32_le(&payload[csm::kControlTxEvidenceDriverResultOffset],
             driver_result);
   wr_u32_le(&payload[csm::kControlTxEvidenceRequestMaskOffset], request_mask);
+  payload[csm::kControlTxEvidenceCancelReasonOffset] =
+      static_cast<uint8_t>(cancel_reason);
+  payload[csm::kControlTxEvidenceCompletionCodeOffset] =
+      static_cast<uint8_t>(completion_code);
+  payload[csm::kControlTxEvidenceSchemaOffset] =
+      csm::kControlTxEvidenceSchema;
   emit_record(RecordType::ControlTxEvidence, payload, sizeof(payload));
 }
 
 static void builtin_can_tx_completion(
     void*, const csm::board::can::BuiltinCanTxCompletion& completion) {
-  const bool first_failure_evidence =
-      !completion.transmitted() &&
-      !completion.failure_previously_reported;
-  const bool terminal_failure =
-      completion.terminal && !completion.transmitted();
+  const bool cancelled = completion.terminal &&
+      completion.code ==
+          csm::board::can::BuiltinCanTxCompletionCode::Cancelled;
+  const bool hardware_failure = cancelled &&
+      (completion.cancel_reason ==
+           csm::board::can::BuiltinCanTxCancelReason::None ||
+       completion.cancel_reason ==
+           csm::board::can::BuiltinCanTxCancelReason::DeadlineExpired);
+  const bool intentional_cancel = cancelled && !hardware_failure &&
+      completion.cancel_reason !=
+          csm::board::can::BuiltinCanTxCancelReason::TrackingFault;
+  const bool tracking_failure = completion.terminal &&
+      !completion.transmitted() && !intentional_cancel && !hardware_failure;
   if (completion.transmitted()) {
     increment_builtin_can_counter(&builtin_can_tx_total);
     emit_can_tx_raw(completion.frame.bus, completion.frame.can_id_flags,
                     completion.frame.dlc, completion.frame.data,
                     builtin_can_tx_total, builtin_can_tx_failed_total);
-  } else if (first_failure_evidence) {
+  } else if (intentional_cancel) {
+    increment_builtin_can_counter(&builtin_can_tx_cancelled_total);
+  } else if (hardware_failure && !completion.failure_previously_reported) {
     increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    increment_builtin_can_counter(&builtin_can_tx_hardware_failure_total);
+    emit_board_event(EventBuiltinCanTxFailed,
+                     static_cast<uint16_t>(completion.code) << 8u,
+                     builtin_can_tx_failed_total);
+  } else if (tracking_failure && !completion.failure_previously_reported) {
+    increment_builtin_can_counter(&builtin_can_tx_failed_total);
+    increment_builtin_can_counter(&builtin_can_tx_tracking_failure_total);
     const uint16_t detail =
         (completion.terminal ? 0u : 0x8000u) |
         (static_cast<uint16_t>(completion.code) << 8u) |
@@ -3514,24 +3575,33 @@ static void builtin_can_tx_completion(
   }
   if (completion.terminal && completion.frame.origin ==
       csm::board::can::BuiltinCanTxOrigin::HostControl) {
+    const uint8_t outcome = completion.transmitted()
+        ? csm::kControlTxOutcomeTransmitted
+        : (intentional_cancel
+               ? csm::kControlTxOutcomeCancelled
+               : (hardware_failure ? csm::kControlTxOutcomeHardwareFailure
+                                   : csm::kControlTxOutcomeTrackingFailure));
     emit_host_control_tx_evidence(
-        completion.frame, completion.transmitted(),
+        completion.frame, outcome, completion.cancel_reason,
+        completion.code,
         completion.submission_sequence, completion.driver_result,
         completion.request_mask);
   }
 
   // DeadlineExceededPending is not a terminal result: TXBTO can still prove
   // that the frame won arbitration while cancellation was requested.
-  if (terminal_failure) {
+  if (hardware_failure || tracking_failure) {
     builtin_can_tx_inhibit_latched = true;
-    builtin_can_tx_owner.requestCancellationAll(completion.terminal_us);
+    builtin_can_tx_owner.requestCancellationAll(
+        csm::board::can::BuiltinCanTxCancelReason::TrackingFault,
+        completion.terminal_us);
   }
 #if BOARD_ENABLE_REMOTE_CONTROL
   if (completion.frame.origin ==
       csm::board::can::BuiltinCanTxOrigin::RemoteControl) {
     if (completion.transmitted()) {
       remote_control_runtime.noteCanTxCompletion(millis(), true);
-    } else if (terminal_failure) {
+    } else if (hardware_failure || tracking_failure) {
       remote_control_runtime.noteCanTxCompletion(millis(), false);
     }
   }
@@ -4364,13 +4434,70 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
 #endif
 }
 
-static void request_host_hw_cancellation() {
+static uint8_t active_host_hw_slots() {
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_REMOTE_CONTROL)
+  return builtin_can_tx_owner.activeJournalSlots(
+      csm::board::can::BuiltinCanTxOrigin::HostControl);
+#else
+  return 0;
+#endif
+}
+
+static csm::board::can::BuiltinCanTxCancelReason to_hw_cancel_reason(
+    csm::board::control::HostControlCloseReason reason) {
+  using csm::board::can::BuiltinCanTxCancelReason;
+  using csm::board::control::HostControlCloseReason;
+  switch (reason) {
+    case HostControlCloseReason::HostDisarm:
+      return BuiltinCanTxCancelReason::HostDisarm;
+    case HostControlCloseReason::TransportEpochClosed:
+      return BuiltinCanTxCancelReason::TransportEpochClosed;
+    case HostControlCloseReason::AuthorityPreempted:
+      return BuiltinCanTxCancelReason::AuthorityPreempted;
+    case HostControlCloseReason::LeaseExpired:
+      return BuiltinCanTxCancelReason::LeaseExpired;
+    case HostControlCloseReason::HardSafety:
+      return BuiltinCanTxCancelReason::HardSafety;
+    case HostControlCloseReason::FreshnessFault:
+      return BuiltinCanTxCancelReason::TrackingFault;
+    case HostControlCloseReason::None:
+      return BuiltinCanTxCancelReason::None;
+  }
+  return BuiltinCanTxCancelReason::TrackingFault;
+}
+
+static void close_host_control_epoch(
+    csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
+  // Required handoff order: close admission, end freshness/lease epoch,
+  // request HW cancellation, then wait for terminal journal truth.
+  host_authority_gate.beginClose(reason, active_host_hw_slots());
+  host_command_freshness.reset();
+  safety_supervisor.invalidateHostSession(now_ms);
+  safety_state = safety_supervisor.state();
 #if BOARD_ENABLE_BUILTIN_CAN_LANE && \
     (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
      BOARD_ENABLE_REMOTE_CONTROL)
   builtin_can_tx_owner.requestCancellation(
-      csm::board::can::BuiltinCanTxOrigin::HostControl, micros());
+      csm::board::can::BuiltinCanTxOrigin::HostControl,
+      to_hw_cancel_reason(reason), micros());
 #endif
+  host_authority_gate.observeHostSlots(active_host_hw_slots());
+}
+
+static void service_host_authority_boundary(uint32_t now_ms) {
+  service_builtin_can_tx_completions();
+  host_authority_gate.observeHostSlots(active_host_hw_slots());
+  if (!host_authority_gate.admissionOpen()) return;
+  if (!host_control_authority_allowed()) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::AuthorityPreempted,
+        now_ms);
+  } else if (!safety_supervisor.leaseAlive(now_ms)) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::LeaseExpired, now_ms);
+  }
 }
 
 static void enforce_hw_cancellation_boundaries(uint32_t now_ms) {
@@ -4379,10 +4506,12 @@ static void enforce_hw_cancellation_boundaries(uint32_t now_ms) {
      BOARD_ENABLE_REMOTE_CONTROL)
   if (safety_state == SafetyState::Estop ||
       safety_state == SafetyState::FaultLockout) {
-    builtin_can_tx_owner.requestCancellationAll(micros());
-  } else if (!host_control_authority_allowed() ||
-             !safety_supervisor.leaseAlive(now_ms)) {
-    request_host_hw_cancellation();
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::HardSafety, now_ms);
+    builtin_can_tx_owner.requestCancellationAll(
+        csm::board::can::BuiltinCanTxCancelReason::HardSafety, micros());
+  } else {
+    service_host_authority_boundary(now_ms);
   }
 #else
   (void)now_ms;
@@ -4437,9 +4566,9 @@ static void update_safety_state() {
 #if BOARD_ENABLE_REMOTE_CONTROL
 static void service_remote_control() {
   if (!remote_control_runtime_ok) return;
-  service_builtin_can_tx_completions();
 
   const uint32_t now_ms = millis();
+  service_host_authority_boundary(now_ms);
   const csm::board::SafetyInputs safety_inputs = read_safety_inputs();
   csm::board::control::RemoteControlRuntimeInputs inputs;
   inputs.estop_asserted = safety_inputs.estop_asserted;
@@ -4447,7 +4576,7 @@ static void service_remote_control() {
   inputs.hard_safety_allows = !inputs.estop_asserted &&
       safety_inputs.field_power_ok && !safety_inputs.encoder_fault &&
       !inputs.fault_lockout;
-  inputs.host_service_active = safety_supervisor.leaseAlive(now_ms);
+  inputs.host_output_reserved = !host_authority_gate.rcAllowed();
 #if BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
   // The provider owns freshness and positive inactive evidence. Until the
   // final vehicle adapter is bound this branch is intentionally unavailable.
@@ -4488,13 +4617,6 @@ static void service_remote_control() {
        ++frame_budget) {
     const csm::board::control::RemoteControlRuntimeOutput output =
         remote_control_runtime.service(now_ms, inputs);
-#if BOARD_ENABLE_REMOTE_AUTHORITY
-    if (frame_budget == 0 && safety_supervisor.leaseAlive(now_ms) &&
-        !remote_control_runtime.status().host_control_allowed) {
-      safety_supervisor.disarm(now_ms);
-      safety_state = safety_supervisor.state();
-    }
-#endif
     if (!output.frame_ready) break;
     const auto& frame = output.frame;
     const csm::board::can::BuiltinCanTxOutcome tx_outcome =
@@ -4979,6 +5101,9 @@ static bool __attribute__((unused)) init_builtin_can_lane() {
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
   builtin_can_tx_total = 0;
   builtin_can_tx_failed_total = 0;
+  builtin_can_tx_cancelled_total = 0;
+  builtin_can_tx_hardware_failure_total = 0;
+  builtin_can_tx_tracking_failure_total = 0;
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
   last_builtin_can_tx_ms = millis() - BOARD_BUILTIN_CAN_TX_PERIOD_MS;
@@ -5383,31 +5508,31 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
   }
 
   const uint32_t now_ms = millis();
+  service_host_authority_boundary(now_ms);
+  if (!host_authority_gate.admissionOpen()) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected,
+                     ControlReasonAuthorityDenied, bus, can_id_flags, dlc,
+                     host_can_tx_request_total);
+    emit_board_event(EventHostCanTxRejected, ControlReasonAuthorityDenied,
+                     host_can_tx_rejected_total);
+    return;
+  }
   const csm::board::control::HostFreshnessResult freshness =
       host_command_freshness.acceptCommand(
           command_id, host_mono_ms, now_ms);
   if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
     if (freshness ==
         csm::board::control::HostFreshnessResult::FaultLatched) {
-      safety_supervisor.invalidateHostSession(now_ms);
-      safety_state = safety_supervisor.state();
-      request_host_hw_cancellation();
+      close_host_control_epoch(
+          csm::board::control::HostControlCloseReason::FreshnessFault,
+          now_ms);
     }
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected,
                      csm::ControlReasonStaleCommand, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
     emit_board_event(EventHostCanTxRejected, csm::ControlReasonStaleCommand,
-                     host_can_tx_rejected_total);
-    return;
-  }
-
-  if (!host_control_authority_allowed()) {
-    request_host_hw_cancellation();
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonAuthorityDenied,
-                     bus, can_id_flags, dlc, host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonAuthorityDenied,
                      host_can_tx_rejected_total);
     return;
   }
@@ -5436,9 +5561,14 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
 
     if (!enqueue_mcp2515_tx(bus, can_id_flags, dlc, data)) {
       host_can_tx_rejected_total++;
+      host_can_tx_transient_rejected_total++;
       emit_control_ack(command_id, ControlAckRejected, ControlReasonQueueFull, bus, can_id_flags, dlc,
                        host_can_tx_request_total);
-      emit_board_event(EventHostCanTxRejected, ControlReasonQueueFull, host_can_tx_rejected_total);
+      if (host_can_tx_last_transient_reason != ControlReasonQueueFull) {
+        host_can_tx_last_transient_reason = ControlReasonQueueFull;
+        emit_board_event(EventHostCanTxRejected, ControlReasonQueueFull,
+                         host_can_tx_rejected_total);
+      }
       return;
     }
 
@@ -5490,8 +5620,17 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
         : ControlReasonCanWriteFailed;
     emit_control_ack(command_id, ControlAckRejected, reject_reason, bus, can_id_flags, dlc,
                      host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, reject_reason,
-                     host_can_tx_rejected_total);
+    if (tx_outcome.transientAdmissionFailure()) {
+      host_can_tx_transient_rejected_total++;
+      if (host_can_tx_last_transient_reason != reject_reason) {
+        host_can_tx_last_transient_reason = reject_reason;
+        emit_board_event(EventHostCanTxRejected, reject_reason,
+                         host_can_tx_rejected_total);
+      }
+    } else {
+      emit_board_event(EventHostCanTxRejected, reject_reason,
+                       host_can_tx_rejected_total);
+    }
     return;
   }
 
@@ -5533,9 +5672,9 @@ static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t
     safety_supervisor.heartbeat(now_ms);
   } else if (freshness !=
              csm::board::control::HostFreshnessResult::AnchorEstablished) {
-    safety_supervisor.invalidateHostSession(now_ms);
-    safety_state = safety_supervisor.state();
-    request_host_hw_cancellation();
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::FreshnessFault,
+        now_ms);
     emit_control_ack(command_id, ControlAckRejected,
                      csm::ControlReasonStaleCommand, 0xFF, 0, 0,
                      host_heartbeat_total);
@@ -5576,6 +5715,8 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
   lease_ms = rd_u16_le(&payload[csm::kHostControlSessionLeaseMsOffset]);
   host_mono_ms =
       rd_u32_le(&payload[csm::kHostControlSessionMonoMsOffset]);
+  const uint8_t control_schema =
+      payload[csm::kHostControlSessionSchemaOffset];
 
   const uint32_t now_ms = millis();
   const csm::board::SafetyInputs inputs = read_safety_inputs();
@@ -5584,6 +5725,19 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
 
   uint8_t reason = ControlReasonOk;
   uint8_t status = ControlAckAccepted;
+  if (action != csm::HostControlDisarm &&
+      control_schema != csm::kHostControlSchema) {
+    host_can_tx_rejected_total++;
+    emit_control_ack(command_id, ControlAckRejected,
+                     csm::ControlReasonBadProtocol, requested_bus, 0, 0,
+                     host_control_session_total);
+    emit_board_event(
+        EventHostControlSession,
+        (static_cast<uint16_t>(action) << 8) |
+            csm::ControlReasonBadProtocol,
+        host_control_session_total);
+    return;
+  }
   if (action != csm::HostControlDisarm) {
     const csm::board::control::HostFreshnessResult freshness =
         host_command_freshness.acceptCommand(
@@ -5591,9 +5745,9 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
     if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
       if (freshness ==
           csm::board::control::HostFreshnessResult::FaultLatched) {
-        safety_supervisor.invalidateHostSession(now_ms);
-        safety_state = safety_supervisor.state();
-        request_host_hw_cancellation();
+        close_host_control_epoch(
+            csm::board::control::HostControlCloseReason::FreshnessFault,
+            now_ms);
       }
       host_can_tx_rejected_total++;
       emit_control_ack(command_id, ControlAckRejected,
@@ -5609,13 +5763,15 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
   }
   switch (action) {
     case csm::HostControlDisarm:
-      request_host_hw_cancellation();
+      close_host_control_epoch(
+          csm::board::control::HostControlCloseReason::HostDisarm, now_ms);
       safety_supervisor.disarm(now_ms);
-      safety_supervisor.invalidateHostSession(now_ms);
       break;
     case csm::HostControlArm:
       if (!host_control_authority_allowed()) {
-        request_host_hw_cancellation();
+        close_host_control_epoch(
+            csm::board::control::HostControlCloseReason::AuthorityPreempted,
+            now_ms);
         reason = ControlReasonAuthorityDenied;
       } else {
         const uint8_t recovery_bus = requested_bus == 0xFF
@@ -5627,11 +5783,21 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
         reason = safety_supervisor.arm(now_ms, lease_ms, backend_ready);
+        if (reason == ControlReasonOk &&
+            !host_authority_gate.activate(
+                safety_supervisor.leaseAlive(now_ms),
+                host_control_authority_allowed(), active_host_hw_slots())) {
+          safety_supervisor.disarm(now_ms);
+          reason = ControlReasonTxBusy;
+        }
       }
       break;
     case csm::HostControlRenewLease:
-      if (!host_control_authority_allowed()) {
-        request_host_hw_cancellation();
+      if (!host_control_authority_allowed() ||
+          !host_authority_gate.admissionOpen()) {
+        close_host_control_epoch(
+            csm::board::control::HostControlCloseReason::AuthorityPreempted,
+            now_ms);
         reason = ControlReasonAuthorityDenied;
       } else {
         reason = safety_supervisor.renewLease(now_ms, lease_ms);
@@ -5750,10 +5916,9 @@ static void service_host_downlink(int budget) {
     // A transport epoch is also a control-authority epoch. A disconnected or
     // newly accepted Wi-Fi client must establish a fresh heartbeat and arm;
     // it cannot renew the prior client's lease.
-    request_host_hw_cancellation();
-    host_command_freshness.reset();
-    safety_supervisor.invalidateHostSession(millis());
-    safety_state = safety_supervisor.state();
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::TransportEpochClosed,
+        millis());
     last_wifi_epoch = wifi_epoch;
   }
   Stream* stream = wifi_tcp_sink.downlinkStream();
@@ -6085,6 +6250,7 @@ void setup() {
 #endif
 
   safety_supervisor.begin(millis());
+  host_authority_gate.reset();
   safety_state = safety_supervisor.state();
   csm::board::control::HostCommandFreshnessConfig freshness_config;
   freshness_config.heartbeat_max_extra_lag_ms =

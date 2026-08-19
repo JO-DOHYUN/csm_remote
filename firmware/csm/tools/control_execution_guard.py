@@ -120,26 +120,22 @@ if (
     fail("CONTROL_TX_EVIDENCE must be emitted only for a terminal Host outcome")
 if "noteCanTxCompletion(" not in completion_body:
     fail("remote CAN success/failure must be driven by hardware completion")
-if (
-    "const bool first_failure_evidence =" not in completion_body
-    or "!completion.failure_previously_reported" not in completion_body
-):
-    fail("completion callback must identify the first failure per submission")
-if (
-    "const bool terminal_failure =" not in completion_body
-    or "completion.terminal && !completion.transmitted()" not in completion_body
-):
-    fail("completion callback must distinguish terminal failure from a pending deadline")
+if "const bool intentional_cancel =" not in completion_body:
+    fail("completion callback must classify intentional cancellation")
+if "const bool hardware_failure =" not in completion_body:
+    fail("completion callback must classify hardware failure separately")
+if "const bool tracking_failure =" not in completion_body:
+    fail("completion callback must classify tracking failure separately")
 if completion_body.count(
     "increment_builtin_can_counter(&builtin_can_tx_failed_total);"
-) != 1:
-    fail("each submission failure must be counted at exactly one callback site")
-if "else if (first_failure_evidence)" not in completion_body:
-    fail("nonterminal first failure must enter failure accounting")
-if "if (terminal_failure) {\n    builtin_can_tx_inhibit_latched = true;" not in completion_body:
-    fail("only terminal failure may latch local CAN TX inhibit")
-if "else if (terminal_failure) {\n      remote_control_runtime.noteCanTxCompletion(millis(), false);" not in completion_body:
-    fail("terminal failure must reach remote runtime failure accounting")
+) != 2:
+    fail("hardware and tracking terminal failures need separate accounting")
+if "else if (intentional_cancel)" not in completion_body:
+    fail("intentional cancellation must have independent accounting")
+if "if (hardware_failure || tracking_failure) {\n    builtin_can_tx_inhibit_latched = true;" not in completion_body:
+    fail("hardware/tracking failure must latch local CAN TX inhibit")
+if "else if (hardware_failure || tracking_failure) {\n      remote_control_runtime.noteCanTxCompletion(millis(), false);" not in completion_body:
+    fail("hardware/tracking failure must reach remote runtime failure accounting")
 if main.count("builtin_can_runtime_ready_for_health()") != 4:
     fail("CAN inhibit must feed its health helper, LED, and both health flags")
 health_ready_begin = main.find(
@@ -211,10 +207,8 @@ runtime_header = (
 runtime_source = (
     root / "src" / "board" / "control" / "RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
-if "if (inputs.host_service_active)" not in runtime_source:
-    fail("Host lease must silence every RemoteControl/SafetyNeutral CAN origin")
-if "inputs.host_service_active && status_.host_control_allowed" in runtime_source:
-    fail("Host silence must not depend on RC frontend qualification")
+if "if (inputs.host_output_reserved)" not in runtime_source:
+    fail("Host active/draining phase must silence every RC CAN origin")
 mapper_header = (
     root / "include" / "board" / "control" / "VehicleCommandMapper.h"
 ).read_text(encoding="utf-8")
@@ -259,12 +253,8 @@ if "BOARD_HOST_DOWNLINK_TRANSPORT_WIFI" not in wifi_downlink_body:
     fail("host downlink transport branch missing")
 if "wifi_epoch != last_wifi_epoch" not in wifi_downlink_body:
     fail("Wi-Fi downlink parser must be scoped to a connection epoch")
-if "safety_supervisor.invalidateHostSession(millis());" not in wifi_downlink_body:
-    fail("Wi-Fi epoch change must invalidate heartbeat, arm, and lease")
-if "request_host_hw_cancellation();" not in wifi_downlink_body:
-    fail("Wi-Fi epoch change must request cancellation of Host HW attempts")
-if "host_command_freshness.reset();" not in wifi_downlink_body:
-    fail("Wi-Fi epoch change must reset Host sender-time qualification")
+if "HostControlCloseReason::TransportEpochClosed" not in wifi_downlink_body:
+    fail("Wi-Fi epoch change must atomically close Host admission/epoch/HW")
 if "#define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 256" not in main:
     fail("host downlink must use the bounded multi-record ingress budget")
 if "service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);" not in loop_body:
@@ -314,8 +304,10 @@ if (root / "include" / "board" / "control" / "ServiceHilIntentRuntime.h").exists
     fail("retired Service/HIL semantic runtime header still exists")
 if (root / "src" / "board" / "control" / "ServiceHilIntentRuntime.cpp").exists():
     fail("retired Service/HIL semantic runtime source still exists")
-if "? csm::board::can::BuiltinCanTxOwner::kJournalSlots" not in main:
-    fail("CAPABILITY host_tx_queue_size must expose the physical 3-slot journal")
+if "config.host_tx_queue_size = 0;" not in main:
+    fail("legacy Host software retention capability must be zero")
+if "config.hardware_tx_slots = csm::board::can::BuiltinCanTxOwner::kJournalSlots;" not in main:
+    fail("CAPABILITY v7 must expose physical FDCAN slots separately")
 if "builtin_can_tx_owner.activeJournalSlots() != 0" not in main:
     fail("new Host ARM must wait for unresolved CAN attempts of every origin")
 
@@ -344,10 +336,31 @@ for required in (
         fail(f"Host sender-time freshness contract missing {required}")
 for required in (
     "requestCancellation(BuiltinCanTxOrigin origin",
-    "requestCancellationAll(uint32_t now_us)",
+    "requestCancellationAll(BuiltinCanTxCancelReason reason",
 ):
     if required not in owner_header + owner_source:
         fail(f"FDCAN owner cancellation boundary missing {required}")
+for required in (
+    "#define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 0",
+    "#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 0",
+    "#define BOARD_HOST_CAN_TX_MAX_AGE_MS 0",
+    "kThresholdQualificationExploratory",
+):
+    if required not in main:
+        fail(f"exploratory threshold qualification contract missing {required}")
+envelope = (
+    root / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
+).read_text(encoding="utf-8")
+for required in (
+    "kProductEnabledRecordsPerSecond == 1086",
+    "kProductEnabledWireBytesPerSecond == 131222",
+    "kControlTxEvidencePayloadLen",
+):
+    if required not in envelope:
+        fail(f"enabled uplink envelope missing {required}")
+for forbidden in ("120000", "135000"):
+    if forbidden in envelope:
+        fail(f"unapproved uplink qualification number remains: {forbidden}")
 uplink_policy = (
     root / "src" / "board" / "uplink" / "UplinkPriorityPolicy.cpp"
 ).read_text(encoding="utf-8")

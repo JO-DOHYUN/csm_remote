@@ -36,13 +36,13 @@ static constexpr uint32_t kWifiNormalQueueRecords =
     BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS;
 static constexpr uint32_t kWifiFallbackIngressBytes =
     (static_cast<uint64_t>(
-         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
+         csm::board::uplink::kProductEnabledWireBytesPerSecond) *
          BOARD_WIFI_CONNECTED_FALLBACK_MS +
     999u) /
     1000u;
 static constexpr uint32_t kWifiTransientIngressBytes =
     (static_cast<uint64_t>(
-         csm::board::uplink::kProductUplinkDesignBytesPerSecond) *
+         csm::board::uplink::kProductEnabledWireBytesPerSecond) *
          BOARD_WIFI_TRANSIENT_COVERAGE_MS +
      999u) /
     1000u;

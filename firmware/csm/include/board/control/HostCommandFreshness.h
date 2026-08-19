@@ -35,7 +35,15 @@ class HostCommandFreshness {
                                     uint32_t arrival_ms);
 
   bool qualified() const { return qualified_; }
+  bool timingQualified() const { return timing_qualified_; }
   bool faultLatched() const { return fault_latched_; }
+  uint32_t observedHeartbeatExtraLagMs() const {
+    return observed_heartbeat_extra_lag_ms_;
+  }
+  uint32_t observedCommandAgeMs() const { return observed_command_age_ms_; }
+  uint32_t observedCommandFutureLeadMs() const {
+    return observed_command_future_lead_ms_;
+  }
 
  private:
   static bool forward(uint32_t previous, uint32_t current);
@@ -45,6 +53,7 @@ class HostCommandFreshness {
 
   HostCommandFreshnessConfig config_ = {};
   bool configured_ = false;
+  bool timing_qualified_ = false;
   bool anchor_valid_ = false;
   bool qualified_ = false;
   bool fault_latched_ = false;
@@ -53,6 +62,9 @@ class HostCommandFreshness {
   uint32_t last_heartbeat_host_mono_ms_ = 0;
   uint32_t last_heartbeat_arrival_ms_ = 0;
   uint32_t last_command_id_ = 0;
+  uint32_t observed_heartbeat_extra_lag_ms_ = 0;
+  uint32_t observed_command_age_ms_ = 0;
+  uint32_t observed_command_future_lead_ms_ = 0;
 };
 
 }  // namespace csm::board::control

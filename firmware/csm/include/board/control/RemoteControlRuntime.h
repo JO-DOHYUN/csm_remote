@@ -42,7 +42,9 @@ struct RemoteControlRuntimeInputs {
   bool estop_asserted = false;
   bool fault_lockout = false;
   bool local_tx_inhibit_latched = true;
-  bool host_service_active = false;
+  // True while Host owns admission or its admitted HW work is draining.
+  // RC output is permitted only after this becomes false.
+  bool host_output_reserved = false;
   authority::AutonomyAuthorityState autonomy_state =
       authority::AutonomyAuthorityState::Unknown;
   can::CanBackendState backend_state = {};

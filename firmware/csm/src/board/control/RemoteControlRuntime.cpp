@@ -176,7 +176,7 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
   // frame while Host raw requests are active. Authority handoff is resolved
   // by the caller; the sole owner must never see two origin schedulers for the
   // same vehicle IDs in one Host epoch.
-  if (inputs.host_service_active) {
+  if (inputs.host_output_reserved) {
     pending_frame_index_ = pending_frame_count_ = 0;
     require_silent_cycle_ = true;
     immediate_stop_pending_ = false;

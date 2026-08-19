@@ -9,6 +9,7 @@
 #include "board/control/CommandLimiter.h"
 #include "board/control/ControlReleaseSchedule.h"
 #include "board/control/HostCommandFreshness.h"
+#include "board/control/HostControlAuthorityGate.h"
 #include "board/control/RemoteControlOrchestrator.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control/VehicleCommandMapper.h"
@@ -344,6 +345,48 @@ void hostFreshnessLatchesHeartbeatTimelineFaultUntilReset() {
         HostFreshnessResult::AnchorEstablished);
 }
 
+void exploratoryFreshnessMeasuresWithoutInventingThresholds() {
+  using namespace csm::board::control;
+  HostCommandFreshness freshness;
+  HostCommandFreshnessConfig config;
+  CHECK(freshness.begin(config));
+  CHECK(!freshness.timingQualified());
+  CHECK(freshness.acceptHeartbeat(1, 1000, 5000) ==
+        HostFreshnessResult::AnchorEstablished);
+  CHECK(freshness.acceptHeartbeat(2, 1100, 5200) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.observedHeartbeatExtraLagMs() == 100);
+  CHECK(freshness.acceptCommand(3, 1090, 5210) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.observedCommandAgeMs() == 20);
+  CHECK(freshness.acceptCommand(4, 1300, 5220) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.observedCommandFutureLeadMs() == 180);
+}
+
+void hostAuthorityGateHasNoRcOverlapOrArtificialDeadZone() {
+  using namespace csm::board::control;
+  HostControlAuthorityGate gate;
+  gate.reset();
+  CHECK(gate.rcAllowed());
+  CHECK(gate.activate(true, true, 0));
+  CHECK(gate.admissionOpen());
+  CHECK(!gate.rcAllowed());
+  CHECK(gate.beginClose(HostControlCloseReason::AuthorityPreempted, 2));
+  CHECK(!gate.admissionOpen());
+  CHECK(!gate.rcAllowed());
+  gate.observeHostSlots(1);
+  CHECK(!gate.rcAllowed());
+  gate.observeHostSlots(0);
+  CHECK(gate.rcAllowed());
+  CHECK(!gate.admissionOpen());
+
+  gate.reset();
+  CHECK(gate.activate(true, true, 0));
+  CHECK(gate.beginClose(HostControlCloseReason::LeaseExpired, 0));
+  CHECK(gate.rcAllowed());
+}
+
 void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
   using namespace csm::board::can;
   FakeBuiltinCanDriver driver;
@@ -366,7 +409,8 @@ void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
   driver.next_request_mask = 2;
   CHECK(owner.submit(frame, backend, 101).completion_tracked);
 
-  owner.requestCancellation(BuiltinCanTxOrigin::HostControl, 102);
+  owner.requestCancellation(BuiltinCanTxOrigin::HostControl,
+                            BuiltinCanTxCancelReason::HostDisarm, 102);
   CHECK(driver.cancel_calls == 1);
   CHECK(driver.last_cancel_mask == 2);
   CHECK(owner.activeJournalSlots() == 2);
@@ -384,7 +428,7 @@ void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
   frame.origin = BuiltinCanTxOrigin::HostControl;
   driver.next_request_mask = 2;
   CHECK(owner.submit(frame, backend, 201).completion_tracked);
-  owner.requestCancellationAll(202);
+  owner.requestCancellationAll(BuiltinCanTxCancelReason::HardSafety, 202);
   CHECK(driver.cancel_calls == 3);
   CHECK(owner.activeJournalSlots() == 2);
   owner.serviceCompletions(203, true, 0, 0, 3);
@@ -392,6 +436,10 @@ void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
   CHECK(completions.count == 2);
   CHECK(completions.items[0].code == BuiltinCanTxCompletionCode::Cancelled);
   CHECK(completions.items[1].code == BuiltinCanTxCompletionCode::Cancelled);
+  CHECK(completions.items[0].cancel_reason ==
+        BuiltinCanTxCancelReason::HardSafety);
+  CHECK(completions.items[1].cancel_reason ==
+        BuiltinCanTxCancelReason::HardSafety);
 }
 
 struct FakeHostStream : Stream {
@@ -596,6 +644,8 @@ void builtinCanTxJournalCoversAllTerminalPaths() {
   CHECK(owner.counters().tracking_fault_rejects == 1);
   CHECK(owner.counters().journal_full_rejects == 1);
   CHECK(owner.counters().tx_cancelled == 2);
+  CHECK(owner.counters().terminal_hardware_failures == 2);
+  CHECK(owner.counters().intentional_cancellations == 0);
   CHECK(owner.counters().tx_deadline_exceeded == 2);
   CHECK(owner.counters().tx_disappeared == 1);
   CHECK(owner.counters().tx_completed == 5);
@@ -739,7 +789,7 @@ void builtinCanCancelFailureAndIdentityWrapFailClosed() {
   outcome = owner.submit(frame, backend, 10);
   CHECK(outcome.completion_tracked);
   owner.serviceCompletions(20, true, 4, 0, 0);
-  CHECK(owner.trackingFaultLatched());
+  CHECK(!owner.trackingFaultLatched());
   CHECK(owner.activeJournalSlots() == 1);
   CHECK(driver.cancel_calls == 1);
   CHECK(driver.last_cancel_mask == 4);
@@ -747,6 +797,13 @@ void builtinCanCancelFailureAndIdentityWrapFailClosed() {
         BuiltinCanTxCompletionCode::DeadlineExceededPending);
   CHECK(!completions.items[2].terminal);
   CHECK(!completions.items[2].failure_previously_reported);
+  // First cancel rejection is not a terminal result. The next valid HW
+  // snapshot observes TXBRP and performs one bounded retry.
+  owner.serviceCompletions(21, true, 4, 0, 0);
+  CHECK(driver.cancel_calls == 2);
+  CHECK(!owner.trackingFaultLatched());
+  owner.serviceCompletions(22, true, 4, 0, 0);
+  CHECK(owner.trackingFaultLatched());
   CHECK(completions.items[3].code ==
         BuiltinCanTxCompletionCode::CancelRequestFailed);
   CHECK(!completions.items[3].terminal);
@@ -754,16 +811,16 @@ void builtinCanCancelFailureAndIdentityWrapFailClosed() {
   CHECK(completions.items[3].cancel_driver_result == 1);
 
   const uint32_t calls_before_reject = driver.calls;
-  outcome = owner.submit(frame, backend, 21);
+  outcome = owner.submit(frame, backend, 23);
   CHECK(outcome.code == BuiltinCanTxOutcomeCode::RejectedTrackingFault);
   CHECK(driver.calls == calls_before_reject);
 
-  owner.serviceCompletions(22, true, 0, 0, 4);
+  owner.serviceCompletions(24, true, 0, 0, 4);
   CHECK(owner.activeJournalSlots() == 0);
   CHECK(completions.items[4].code == BuiltinCanTxCompletionCode::Cancelled);
   CHECK(completions.items[4].terminal);
   CHECK(completions.items[4].failure_previously_reported);
-  CHECK(owner.counters().cancel_request_failures == 1);
+  CHECK(owner.counters().cancel_request_failures == 2);
 }
 
 void hostTransportEpochInvalidatesHeartbeatAndLease() {
@@ -1478,9 +1535,9 @@ void runtimeReleasePhasesSurviveCooperativeLoopGap() {
   CHECK(runtime.status().drive_permille == 1000);
   CHECK(runtime.status().steering_permille == -1000);
 
-  inputs.host_service_active = true;
+  inputs.host_output_reserved = true;
   CHECK(!runtime.service(5, inputs).frame_ready);
-  inputs.host_service_active = false;
+  inputs.host_output_reserved = false;
   drain(5, &drive_frames, &steering_frames);
   CHECK(drive_frames == 1);
   CHECK(steering_frames == 0);
@@ -1884,6 +1941,8 @@ int main() {
   builtinCanTxOwnerUsesThreeRealSlotsWithoutHiddenRetry();
   hostFreshnessRequiresCoherentAnchorAndRejectsOldWork();
   hostFreshnessLatchesHeartbeatTimelineFaultUntilReset();
+  exploratoryFreshnessMeasuresWithoutInventingThresholds();
+  hostAuthorityGateHasNoRcOverlapOrArtificialDeadZone();
   builtinCanCancellationTargetsOriginWithoutErasingTruth();
   hostDownlinkParserPreservesCoalescedBurstOverBufferSize();
   builtinCanTxJournalCoversAllTerminalPaths();

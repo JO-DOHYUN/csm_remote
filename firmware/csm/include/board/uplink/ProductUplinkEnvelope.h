@@ -12,17 +12,12 @@ namespace csm::board::uplink {
 // calculation; encoded byte sizes come only from the canonical wire schema.
 static constexpr uint32_t kProductCanBusCount = 2;
 static constexpr uint32_t kProductCanRxFramesPerSecondPerBus = 2000;
-// 0x005 at 100 Hz plus 0x007/0x364 at 50 Hz each. Keep the envelope tied to
+// 0x005 at 200 Hz plus 0x007/0x364 at 50 Hz each. Keep the envelope tied to
 // every enabled Service/HIL release lane, not the pre-EHB two-lane profile.
 static constexpr uint32_t kProductControlCommandsPerSecond = 300;
 static constexpr uint32_t kProductRemoteStateRecordsPerSecond = 10;
 static constexpr uint32_t kProductBoardHealthRecordsPerSecond = 1;
 static constexpr uint32_t kProductTransportDiagnosticRecordsPerSecond = 1;
-
-// Qualification and design limits deliberately bound the calculated enabled
-// profile instead of replacing it with a hand-written observed rate.
-static constexpr uint32_t kProductUplinkMinimumBytesPerSecond = 120000;
-static constexpr uint32_t kProductUplinkDesignBytesPerSecond = 135000;
 
 constexpr uint32_t productSegmentRecordRate(uint32_t can_frames_per_second) {
   return (can_frames_per_second + csm::kCanRxSegmentMaxFrames - 1u) /
@@ -65,6 +60,7 @@ static constexpr uint32_t kProductEnabledRecordsPerSecond =
     kProductCanRxSegmentRecordsPerSecond +
     kProductControlCommandsPerSecond +  // CAN_TX_RAW
     kProductControlCommandsPerSecond +  // CONTROL_ACK
+    kProductControlCommandsPerSecond +  // CONTROL_TX_EVIDENCE
     kProductRemoteStateRecordsPerSecond +
     kProductBoardHealthRecordsPerSecond +
     kProductTransportDiagnosticRecordsPerSecond;
@@ -73,6 +69,8 @@ static constexpr uint32_t kProductEnabledWireBytesPerSecond =
     productTypedRecordWireBytes(csm::kCanRawPayloadLen,
                                 kProductControlCommandsPerSecond) +
     productTypedRecordWireBytes(csm::kControlAckPayloadLen,
+                                kProductControlCommandsPerSecond) +
+    productTypedRecordWireBytes(csm::kControlTxEvidencePayloadLen,
                                 kProductControlCommandsPerSecond) +
     productTypedRecordWireBytes(csm::kRemoteControlStatePayloadLen,
                                 kProductRemoteStateRecordsPerSecond) +
@@ -85,15 +83,9 @@ static_assert(kProductCanRxSegmentRecordsPerSecond == 174,
               "enabled product CAN segment record-rate regression");
 static_assert(kProductCanRxWireBytesPerSecond == 88874,
               "enabled product CAN wire-rate regression");
-static_assert(kProductEnabledRecordsPerSecond == 786,
+static_assert(kProductEnabledRecordsPerSecond == 1086,
               "enabled product record-rate regression");
-static_assert(kProductEnabledWireBytesPerSecond == 115922,
+static_assert(kProductEnabledWireBytesPerSecond == 131222,
               "enabled product wire-rate regression");
-static_assert(kProductEnabledWireBytesPerSecond <=
-                  kProductUplinkMinimumBytesPerSecond,
-              "enabled product exceeds the minimum qualification envelope");
-static_assert(kProductUplinkMinimumBytesPerSecond <
-                  kProductUplinkDesignBytesPerSecond,
-              "product uplink design envelope must retain qualification headroom");
 
 }  // namespace csm::board::uplink

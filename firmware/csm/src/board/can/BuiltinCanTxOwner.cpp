@@ -51,8 +51,7 @@ bool BuiltinCanTxOwner::begin(uint8_t owned_bus,
   submission_sequence_ = 0;
   configured_ = owned_bus != 0xFFu && write_fn != nullptr &&
                  cancel_fn != nullptr &&
-                 completion_timeout_us > 0 &&
-                completion_timeout_us < 0x80000000u &&
+                 completion_timeout_us < 0x80000000u &&
                 completion_fn != nullptr;
   if (!configured_) {
     owned_bus_ = 0xFFu;
@@ -137,12 +136,19 @@ BuiltinCanTxOutcome BuiltinCanTxOwner::submit(
   journal_slot->submission_sequence = sequence;
   journal_slot->driver_sequence = write_result.driver_sequence;
   journal_slot->request_mask = write_result.request_mask;
-  journal_slot->deadline_us = now_us + completion_timeout_us_;
+  journal_slot->deadline_us = completion_timeout_us_ == 0
+      ? 0u
+      : now_us + completion_timeout_us_;
   journal_slot->driver_result = write_result.driver_result;
   journal_slot->write_duration_us = write_result.write_duration_us;
   journal_slot->deadline_reported = false;
   journal_slot->failure_reported = false;
   journal_slot->cancel_requested = false;
+  journal_slot->cancel_request_accepted = false;
+  journal_slot->cancel_resnapshot_required = false;
+  journal_slot->cancel_retry_used = false;
+  journal_slot->cancel_failure_reported = false;
+  journal_slot->cancel_reason = BuiltinCanTxCancelReason::None;
   journal_slot->identity_compromised = false;
   journal_slot->frame = frame;
   return makeOutcome(BuiltinCanTxOutcomeCode::FifoEnqueueTracked, sequence,
@@ -170,7 +176,8 @@ void BuiltinCanTxOwner::serviceCompletions(
         complete(&slot, BuiltinCanTxCompletionCode::TrackingCompromised,
                  now_us);
       } else {
-        requestSlotCancellation(&slot, now_us);
+        requestSlotCancellation(&slot, BuiltinCanTxCancelReason::TrackingFault,
+                                now_us);
       }
     } else if (transmitted) {
       // M_CAN defines TXBTO+TXBCF as a successful transmission in spite of a
@@ -178,14 +185,44 @@ void BuiltinCanTxOwner::serviceCompletions(
       complete(&slot, BuiltinCanTxCompletionCode::Transmitted, now_us);
     } else if (cancelled) {
       complete(&slot, BuiltinCanTxCompletionCode::Cancelled, now_us);
-    } else if (timeReached(now_us, slot.deadline_us)) {
+    } else if (slot.cancel_resnapshot_required) {
+      // A rejected abort API call is never itself a terminal HW outcome.
+      // Re-read TXBTO/TXBCF/TXBRP first, then perform one bounded retry. If
+      // that retry also fails while TXBRP remains set, keep the journal entry
+      // alive, latch tracking fault and wait for observable HW truth.
+      slot.cancel_resnapshot_required = false;
+      if (pending && !slot.cancel_retry_used) {
+        slot.cancel_retry_used = true;
+        slot.cancel_requested = false;
+        requestSlotCancellation(&slot, slot.cancel_reason, now_us);
+      } else if (pending && !slot.cancel_failure_reported) {
+        reportUntracked(
+            slot.frame, slot.submission_sequence, slot.request_mask,
+            BuiltinCanTxCompletionCode::CancelRequestFailed, now_us, false,
+            slot.deadline_reported, slot.failure_reported,
+            slot.driver_sequence, slot.driver_result,
+            slot.cancel_driver_result, slot.write_duration_us);
+        slot.failure_reported = true;
+        slot.cancel_failure_reported = true;
+        increment(&counters_.terminal_tracking_failures);
+        latchTrackingFault(now_us, false);
+      } else if (!pending) {
+        complete(&slot,
+                 BuiltinCanTxCompletionCode::DisappearedWithoutOutcome,
+                 now_us);
+        latchTrackingFault(now_us, true);
+      }
+    } else if (completion_timeout_us_ != 0 &&
+               timeReached(now_us, slot.deadline_us)) {
       if (pending) {
         if (!slot.deadline_reported) {
           reportIntermediate(
               &slot, BuiltinCanTxCompletionCode::DeadlineExceededPending,
               now_us);
         }
-        requestSlotCancellation(&slot, now_us);
+        requestSlotCancellation(&slot,
+                                BuiltinCanTxCancelReason::DeadlineExpired,
+                                now_us);
       } else {
         complete(&slot,
                   BuiltinCanTxCompletionCode::DisappearedWithoutOutcome,
@@ -214,17 +251,19 @@ uint8_t BuiltinCanTxOwner::activeJournalSlots(
 }
 
 void BuiltinCanTxOwner::requestCancellation(
-    BuiltinCanTxOrigin origin, uint32_t now_us) {
+    BuiltinCanTxOrigin origin, BuiltinCanTxCancelReason reason,
+    uint32_t now_us) {
   for (JournalSlot& slot : journal_) {
     if (slot.active && slot.frame.origin == origin) {
-      requestSlotCancellation(&slot, now_us);
+      requestSlotCancellation(&slot, reason, now_us);
     }
   }
 }
 
-void BuiltinCanTxOwner::requestCancellationAll(uint32_t now_us) {
+void BuiltinCanTxOwner::requestCancellationAll(
+    BuiltinCanTxCancelReason reason, uint32_t now_us) {
   for (JournalSlot& slot : journal_) {
-    if (slot.active) requestSlotCancellation(&slot, now_us);
+    if (slot.active) requestSlotCancellation(&slot, reason, now_us);
   }
 }
 
@@ -264,16 +303,27 @@ void BuiltinCanTxOwner::complete(JournalSlot* slot,
       break;
     case BuiltinCanTxCompletionCode::Cancelled:
       increment(&counters_.tx_cancelled);
+      if (slot->cancel_reason == BuiltinCanTxCancelReason::None ||
+          slot->cancel_reason == BuiltinCanTxCancelReason::DeadlineExpired) {
+        increment(&counters_.terminal_hardware_failures);
+      } else if (slot->cancel_reason ==
+                 BuiltinCanTxCancelReason::TrackingFault) {
+        increment(&counters_.terminal_tracking_failures);
+      } else {
+        increment(&counters_.intentional_cancellations);
+      }
       break;
     case BuiltinCanTxCompletionCode::DeadlineExceededPending:
       break;
     case BuiltinCanTxCompletionCode::DisappearedWithoutOutcome:
       increment(&counters_.tx_disappeared);
+      increment(&counters_.terminal_tracking_failures);
       break;
     case BuiltinCanTxCompletionCode::AmbiguousHardwareStatus:
     case BuiltinCanTxCompletionCode::TrackingCompromised:
     case BuiltinCanTxCompletionCode::CancelRequestFailed:
       increment(&counters_.tx_ambiguous);
+      increment(&counters_.terminal_tracking_failures);
       break;
     case BuiltinCanTxCompletionCode::InvalidRequestMask:
       break;
@@ -284,6 +334,7 @@ void BuiltinCanTxOwner::complete(JournalSlot* slot,
   const uint32_t request_mask = slot->request_mask;
   const int32_t driver_result = slot->driver_result;
   const int32_t cancel_driver_result = slot->cancel_driver_result;
+  const BuiltinCanTxCancelReason cancel_reason = slot->cancel_reason;
   const uint32_t write_duration_us = slot->write_duration_us;
   const bool deadline_reported = slot->deadline_reported;
   const bool failure_reported = slot->failure_reported;
@@ -298,6 +349,7 @@ void BuiltinCanTxOwner::complete(JournalSlot* slot,
     completion.terminal_us = now_us;
     completion.driver_result = driver_result;
     completion.cancel_driver_result = cancel_driver_result;
+    completion.cancel_reason = cancel_reason;
     completion.write_duration_us = write_duration_us;
     completion.terminal = true;
     completion.deadline_previously_reported = deadline_reported;
@@ -337,6 +389,10 @@ void BuiltinCanTxOwner::reportUntracked(
   completion.terminal_us = now_us;
   completion.driver_result = driver_result;
   completion.cancel_driver_result = cancel_driver_result;
+  // Untracked reports produced from an active slot are overwritten by the
+  // caller-facing terminal completion. They intentionally carry no invented
+  // cancellation reason here.
+  completion.cancel_reason = BuiltinCanTxCancelReason::None;
   completion.write_duration_us = write_duration_us;
   completion.terminal = terminal;
   completion.deadline_previously_reported =
@@ -366,8 +422,15 @@ void BuiltinCanTxOwner::latchTrackingFault(
 }
 
 void BuiltinCanTxOwner::requestSlotCancellation(JournalSlot* slot,
+                                                 BuiltinCanTxCancelReason reason,
                                                  uint32_t now_us) {
-  if (slot == nullptr || !slot->active || slot->cancel_requested) return;
+  if (slot == nullptr || !slot->active ||
+      reason == BuiltinCanTxCancelReason::None ||
+      slot->cancel_request_accepted) return;
+  if (slot->cancel_reason == BuiltinCanTxCancelReason::None) {
+    slot->cancel_reason = reason;
+  }
+  if (slot->cancel_requested && !slot->cancel_resnapshot_required) return;
   slot->cancel_requested = true;
   increment(&counters_.cancel_requests);
   const BuiltinCanTxCancelResult cancel_result =
@@ -375,18 +438,13 @@ void BuiltinCanTxOwner::requestSlotCancellation(JournalSlot* slot,
   slot->cancel_driver_result = cancel_result.driver_result;
   if (cancel_result.request_accepted) {
     increment(&counters_.cancel_request_accepts);
+    slot->cancel_request_accepted = true;
+    slot->cancel_resnapshot_required = false;
     return;
   }
 
   increment(&counters_.cancel_request_failures);
-  reportUntracked(
-      slot->frame, slot->submission_sequence, slot->request_mask,
-      BuiltinCanTxCompletionCode::CancelRequestFailed, now_us, false,
-      slot->deadline_reported, slot->failure_reported,
-      slot->driver_sequence, slot->driver_result,
-      slot->cancel_driver_result, slot->write_duration_us);
-  slot->failure_reported = true;
-  latchTrackingFault(now_us, false);
+  slot->cancel_resnapshot_required = true;
 }
 
 bool BuiltinCanTxOwner::validFrame(const BuiltinCanTxFrame& frame) {

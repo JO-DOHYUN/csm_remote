@@ -766,3 +766,25 @@
   pass a test. External Kvaser release requires idle, active steering, endurance
   and stop windows with nominal rate/count plus median/p95/p99/max and duplicate
   catch-up gates; D-036 artifacts cannot qualify D-037.
+
+## D-038 Separate HW admission, terminal taxonomy and measured qualification
+
+- Date: 2026-08-19
+- Status: Exploratory candidate; supersedes D-037's fixed 100/40/20 ms and
+  5000 us values and its cancellation-as-failure ambiguity. D-035's boundary
+  and D-037's immediate one-attempt FDCAN execution remain active.
+- Threshold rule: exploratory measurement -> reviewed value decision -> product
+  constant freeze -> qualification HIL. Current timing and transient-coverage
+  thresholds are zero and CAPABILITY reports `Exploratory`; no release PASS is
+  possible from this build.
+- Authority rule: one Host `Inactive/Active/Draining` owner closes admission,
+  terminates freshness/lease, requests reasoned Host HW cancellation and waits
+  terminal closure before RC. Final terminal opens RC without extra delay.
+- Evidence rule: ACK Accepted means tracked HW admission. Record 23 schema 2
+  carries Transmitted/IntentionalCancelled/HardwareFailure/TrackingFailure,
+  cancellation reason and completion code. Intentional cancellation never
+  increments HW failure or latches global TX inhibit. CAN_TX_RAW is independent
+  physical truth and never receives a guessed command ID from payload FIFO.
+- Capacity: exact steady enabled schema is 1086 records/s and 131222 B/s. The
+  old 120 kB/s claim is removed; 135 kB/s is unapproved. Descriptor/byte
+  transient coverage must be re-frozen from measurement, not enlarged to pass.

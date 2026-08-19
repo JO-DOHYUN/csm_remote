@@ -216,38 +216,28 @@ void testFreshAnchorPartialCompletionBoundary() {
   CHECK(static_cast<uint32_t>(kAcceptedPastWireWrap) == 1023u);
 }
 
-void testQueueEnvelopeCoversDeclaredTransient() {
+void testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds() {
   using namespace csm::board::uplink;
-  CHECK(kProductEnabledWireBytesPerSecond == 115922);
-  CHECK(kProductEnabledRecordsPerSecond == 786);
-  CHECK(kProductUplinkMinimumBytesPerSecond == 120000);
-  CHECK(kProductUplinkDesignBytesPerSecond == 135000);
+  CHECK(kProductEnabledWireBytesPerSecond == 131222);
+  CHECK(kProductEnabledRecordsPerSecond == 1086);
   CHECK(BOARD_WIFI_SINK_QUEUE_BYTES == 49152);
   CHECK(BOARD_WIFI_SINK_QUEUE_RECORDS == 256);
-  CHECK(BOARD_WIFI_TRANSIENT_COVERAGE_MS == 250);
+  CHECK(BOARD_WIFI_TRANSIENT_COVERAGE_MS == 0);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES == 32768);
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES == 8192);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS == 192);
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS == 64);
-  CHECK(kWifiFallbackIngressBytes == 675);
-  CHECK(kWifiTransientIngressBytes == 33750);
-  CHECK(kWifiFallbackIngressRecords == 4);
-  CHECK(kWifiTransientIngressRecords == 197);
+  CHECK(kWifiFallbackIngressBytes == 657);
+  CHECK(kWifiTransientIngressBytes == 0);
+  CHECK(kWifiFallbackIngressRecords == 6);
+  CHECK(kWifiTransientIngressRecords == 0);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_BYTES +
             csm::encoded_typed_frame_len(csm::kMaxPayloadLen) +
             kWifiFallbackIngressBytes <=
         BOARD_WIFI_SINK_QUEUE_BYTES -
             BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES);
-  const uint32_t normal_bytes = BOARD_WIFI_SINK_QUEUE_BYTES -
-      BOARD_WIFI_SINK_CRITICAL_RESERVE_BYTES;
-  const uint32_t normal_records = BOARD_WIFI_SINK_QUEUE_RECORDS -
-      BOARD_WIFI_SINK_CRITICAL_RESERVE_RECORDS;
-  CHECK((static_cast<uint64_t>(normal_bytes) * 1000u) /
-            kProductUplinkDesignBytesPerSecond >= 250u);
-  CHECK((static_cast<uint64_t>(normal_records) * 1000u) /
-            kProductEnabledRecordsPerSecond >= 250u);
   CHECK(BOARD_WIFI_TX_MAX_BYTES_PER_PUMP >=
-        kWifiDesignIngressBytesPerFallback);
+        kWifiEnabledIngressBytesPerFallback);
 }
 
 void testPressureTrackerUsesHysteresisWithoutEpochClose() {
@@ -641,7 +631,7 @@ int main() {
   testQueueHighWaterAndAbortGeneration();
   testPumpBudgetBoundsWritesAndBytes();
   testFreshAnchorPartialCompletionBoundary();
-  testQueueEnvelopeCoversDeclaredTransient();
+  testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds();
   testPressureTrackerUsesHysteresisWithoutEpochClose();
   testSustainedProducerStaysWithinPumpEnvelope();
   testHighWaterIsObservableBoundaryBeforeReserve();

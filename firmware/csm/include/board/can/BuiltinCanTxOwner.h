@@ -13,6 +13,17 @@ enum class BuiltinCanTxOrigin : uint8_t {
   BuiltinTest = 3,
 };
 
+enum class BuiltinCanTxCancelReason : uint8_t {
+  None = 0,
+  HostDisarm = 1,
+  TransportEpochClosed = 2,
+  AuthorityPreempted = 3,
+  LeaseExpired = 4,
+  HardSafety = 5,
+  DeadlineExpired = 6,
+  TrackingFault = 7,
+};
+
 struct BuiltinCanTxFrame {
   uint32_t command_id = 0;
   uint8_t bus = 0xFFu;
@@ -72,6 +83,9 @@ struct BuiltinCanTxOwnerCounters {
   uint32_t cancel_requests = 0;
   uint32_t cancel_request_accepts = 0;
   uint32_t cancel_request_failures = 0;
+  uint32_t intentional_cancellations = 0;
+  uint32_t terminal_hardware_failures = 0;
+  uint32_t terminal_tracking_failures = 0;
   uint32_t tx_completed = 0;
   uint32_t tx_cancelled = 0;
   uint32_t tx_deadline_exceeded = 0;
@@ -121,6 +135,7 @@ struct BuiltinCanTxCompletion {
   uint32_t terminal_us = 0;
   int32_t driver_result = 0;
   int32_t cancel_driver_result = 0;
+  BuiltinCanTxCancelReason cancel_reason = BuiltinCanTxCancelReason::None;
   uint32_t write_duration_us = 0;
   bool terminal = true;
   bool deadline_previously_reported = false;
@@ -151,8 +166,11 @@ class BuiltinCanTxOwner {
                              uint32_t now_us);
   void serviceCompletions(uint32_t now_us, bool snapshot_valid,
                           uint32_t txbrp, uint32_t txbto, uint32_t txbcf);
-  void requestCancellation(BuiltinCanTxOrigin origin, uint32_t now_us);
-  void requestCancellationAll(uint32_t now_us);
+  void requestCancellation(BuiltinCanTxOrigin origin,
+                           BuiltinCanTxCancelReason reason,
+                           uint32_t now_us);
+  void requestCancellationAll(BuiltinCanTxCancelReason reason,
+                              uint32_t now_us);
 
   bool configured() const { return configured_; }
   uint8_t ownedBus() const { return owned_bus_; }
@@ -179,6 +197,11 @@ class BuiltinCanTxOwner {
     bool deadline_reported = false;
     bool failure_reported = false;
     bool cancel_requested = false;
+    bool cancel_request_accepted = false;
+    bool cancel_resnapshot_required = false;
+    bool cancel_retry_used = false;
+    bool cancel_failure_reported = false;
+    BuiltinCanTxCancelReason cancel_reason = BuiltinCanTxCancelReason::None;
     bool identity_compromised = false;
     BuiltinCanTxFrame frame = {};
   };
@@ -206,7 +229,9 @@ class BuiltinCanTxOwner {
                        int32_t driver_result,
                        int32_t cancel_driver_result,
                        uint32_t write_duration_us);
-  void requestSlotCancellation(JournalSlot* slot, uint32_t now_us);
+  void requestSlotCancellation(JournalSlot* slot,
+                               BuiltinCanTxCancelReason reason,
+                               uint32_t now_us);
   void latchTrackingFault(uint32_t now_us, bool compromise_active_slots);
 
   uint8_t owned_bus_ = 0xFFu;

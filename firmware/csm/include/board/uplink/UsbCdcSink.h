@@ -14,7 +14,7 @@
 #endif
 
 #ifndef BOARD_USB_TRANSIENT_COVERAGE_MS
-#define BOARD_USB_TRANSIENT_COVERAGE_MS 250
+#define BOARD_USB_TRANSIENT_COVERAGE_MS 0
 #endif
 
 #ifndef BOARD_SERIAL_TX_CHUNK_BYTES
@@ -24,7 +24,7 @@
 namespace csm::board::uplink {
 
 static constexpr uint32_t kUsbTransientIngressBytes =
-    (static_cast<uint64_t>(kProductUplinkDesignBytesPerSecond) *
+    (static_cast<uint64_t>(kProductEnabledWireBytesPerSecond) *
          BOARD_USB_TRANSIENT_COVERAGE_MS +
      999u) /
     1000u;

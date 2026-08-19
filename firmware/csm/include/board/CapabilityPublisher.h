@@ -38,6 +38,7 @@ struct CapabilityPayloadConfig {
   bool include_v4 = false;
   bool include_v5 = false;
   bool include_v6 = false;
+  bool include_v7 = false;
   uint8_t bus_count = 0;
   uint16_t capability_v2_flags = 0;
   uint32_t supported_uplink_records = 0;
@@ -90,6 +91,24 @@ struct CapabilityPayloadConfig {
   uint32_t usb_attach_quarantine_total = 0;
   uint32_t host_absent_gap_total = 0;
   uint32_t pre_session_payload_replay_total = 0;
+  uint8_t control_schema = 0;
+  uint8_t terminal_evidence_schema = 0;
+  uint8_t threshold_qualification = 0;
+  uint8_t hardware_tx_slots = 0;
+  uint16_t host_software_retention = 0;
+  uint32_t hw_pending_stale_us = 0;
+  uint32_t heartbeat_lag_ms = 0;
+  uint32_t command_age_ms = 0;
+  uint32_t future_tolerance_ms = 0;
+  uint32_t observed_heartbeat_lag_ms = 0;
+  uint32_t observed_command_age_ms = 0;
+  uint32_t observed_future_lead_ms = 0;
+  uint32_t admission_reject_total = 0;
+  uint32_t transient_reject_total = 0;
+  uint32_t intentional_cancel_total = 0;
+  uint32_t hardware_failure_total = 0;
+  uint32_t tracking_failure_total = 0;
+  uint32_t tx_complete_total = 0;
   CapabilityBusDescriptor buses[2] = {};
 };
 

@@ -37,7 +37,11 @@
 - typed record는 canonical publisher에서 한 번 순서화·직렬화한 뒤 USB와 Wi-Fi의 독립 bounded sink로 fanout한다.
 - 느리거나 끊긴 sink는 RC, CAN, publisher, 다른 sink를 막거나 공유 버퍼를 무기한 점유할 수 없다.
 - sink별 queue, drop, high-water, epoch, close reason을 숨기지 않는다.
-- `CONTROL_ACK`는 요청 판정 증거다. matching `CAN_TX_RAW` 없이는 실제 CAN 송신 성공으로 표시하지 않는다.
+- `CONTROL_ACK`는 HW admission 판정이다. `CONTROL_TX_EVIDENCE`는 command별 최종
+  HW terminal outcome이며 cancellation과 HW/tracking failure를 구분한다.
+  `CAN_TX_RAW`는 독립 physical stream이고 반복 payload로 command ID를 추정하지 않는다.
+- threshold는 exploratory 계측, 값 결정, product constant 동결, qualification HIL
+  순서 외에는 만들지 않는다. 시험에 맞춘 상수 조정은 금지한다.
 - heap 기반 hot-path 할당, 무제한 backlog, 조용한 손실, 암묵적 재전송을 금지한다.
 
 ## 구현 규칙

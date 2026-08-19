@@ -224,6 +224,41 @@ void capability_advertises_the_emitted_segment_schema() {
         csm::kCanRxSegmentMaxFrames);
 }
 
+void capability_v7_advertises_control_and_qualification_truth() {
+  csm::board::CapabilityPayloadConfig config;
+  config.include_v2 = true;
+  config.include_v3 = true;
+  config.include_v4 = true;
+  config.include_v5 = true;
+  config.include_v6 = true;
+  config.include_v7 = true;
+  config.control_schema = csm::kHostControlSchema;
+  config.terminal_evidence_schema = csm::kControlTxEvidenceSchema;
+  config.threshold_qualification = 0;
+  config.hardware_tx_slots = 3;
+  config.host_software_retention = 0;
+  config.observed_heartbeat_lag_ms = 17;
+  config.intentional_cancel_total = 2;
+  config.hardware_failure_total = 3;
+  config.tracking_failure_total = 4;
+
+  uint8_t payload[csm::kCapabilityV7PayloadLen] = {};
+  CHECK(csm::board::build_capability_payload(
+            config, payload, sizeof(payload)) ==
+        csm::kCapabilityV7PayloadLen);
+  CHECK(payload[csm::kCapabilityControlSchemaOffset] ==
+        csm::kHostControlSchema);
+  CHECK(payload[csm::kCapabilityTerminalEvidenceSchemaOffset] ==
+        csm::kControlTxEvidenceSchema);
+  CHECK(payload[csm::kCapabilityThresholdQualificationOffset] == 0);
+  CHECK(payload[csm::kCapabilityHardwareTxSlotsOffset] == 3);
+  CHECK(csm::rd_u16_le(&payload[csm::kCapabilityHostSoftwareRetentionOffset]) == 0);
+  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityObservedHeartbeatLagMsOffset]) == 17);
+  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityIntentionalCancelTotalOffset]) == 2);
+  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityHardwareFailureTotalOffset]) == 3);
+  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityTrackingFailureTotalOffset]) == 4);
+}
+
 void two_bus_queue_selection_preserves_global_capture_order() {
   using namespace csm::board::uplink;
   CHECK(select_can_rx_queue_index(false, 0, false, 0) ==
@@ -242,6 +277,7 @@ int main() {
   builder_splits_before_compact_delta_overflow();
   regressing_timestamps_use_the_segment_minimum_base();
   capability_advertises_the_emitted_segment_schema();
+  capability_v7_advertises_control_and_qualification_truth();
   two_bus_queue_selection_preserves_global_capture_order();
   if (failures != 0) {
     return 1;

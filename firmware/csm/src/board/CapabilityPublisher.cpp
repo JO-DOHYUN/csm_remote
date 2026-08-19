@@ -178,7 +178,45 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
   wr_u32_le(&payload[264], config.host_absent_gap_total);
   wr_u32_le(&payload[268], config.pre_session_payload_replay_total);
 
-  return kCapabilityV6PayloadLen;
+  if (!config.include_v7 || capacity < kCapabilityV7PayloadLen) {
+    return kCapabilityV6PayloadLen;
+  }
+
+  payload[kCapabilityControlSchemaOffset] = config.control_schema;
+  payload[kCapabilityTerminalEvidenceSchemaOffset] =
+      config.terminal_evidence_schema;
+  payload[kCapabilityThresholdQualificationOffset] =
+      config.threshold_qualification;
+  payload[kCapabilityHardwareTxSlotsOffset] = config.hardware_tx_slots;
+  wr_u16_le(&payload[kCapabilityHostSoftwareRetentionOffset],
+            config.host_software_retention);
+  wr_u32_le(&payload[kCapabilityHwPendingStaleUsOffset],
+            config.hw_pending_stale_us);
+  wr_u32_le(&payload[kCapabilityHeartbeatLagMsOffset],
+            config.heartbeat_lag_ms);
+  wr_u32_le(&payload[kCapabilityCommandAgeMsOffset], config.command_age_ms);
+  wr_u32_le(&payload[kCapabilityFutureToleranceMsOffset],
+            config.future_tolerance_ms);
+  wr_u32_le(&payload[kCapabilityObservedHeartbeatLagMsOffset],
+            config.observed_heartbeat_lag_ms);
+  wr_u32_le(&payload[kCapabilityObservedCommandAgeMsOffset],
+            config.observed_command_age_ms);
+  wr_u32_le(&payload[kCapabilityObservedFutureLeadMsOffset],
+            config.observed_future_lead_ms);
+  wr_u32_le(&payload[kCapabilityAdmissionRejectTotalOffset],
+            config.admission_reject_total);
+  wr_u32_le(&payload[kCapabilityTransientRejectTotalOffset],
+            config.transient_reject_total);
+  wr_u32_le(&payload[kCapabilityIntentionalCancelTotalOffset],
+            config.intentional_cancel_total);
+  wr_u32_le(&payload[kCapabilityHardwareFailureTotalOffset],
+            config.hardware_failure_total);
+  wr_u32_le(&payload[kCapabilityTrackingFailureTotalOffset],
+            config.tracking_failure_total);
+  wr_u32_le(&payload[kCapabilityTxCompleteTotalOffset],
+            config.tx_complete_total);
+
+  return kCapabilityV7PayloadLen;
 }
 
 }  // namespace csm::board
