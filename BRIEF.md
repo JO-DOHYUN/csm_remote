@@ -1,23 +1,24 @@
 # BRIEF
 
-Updated: 2026-08-18
+Updated: 2026-08-19
 
-## 2026-08-18 Host raw CAN I/O boundary and mechanical cadence
+## 2026-08-19 Host raw FDCAN HW execution rebase
 
 - D-035 supersedes D-033's common semantic Service/HIL execution path. Upper
   VSM/control software owns vehicle meaning, sequence, count, ramp, CENTER, EHB
   and explicit neutral. RC/autonomy semantic limiter/mapper remains on M7.
-- D-036 supersedes only D-035's direct one-shot/no-FIFO execution detail. CSM Host
-  raw path owns session/authority/lease/hard-safety, static bus/ID/DLC/RTR allowlist,
-  three independent static 8-frame opaque lanes and mechanical release:
-  `0x005` 5 ms, `0x007` 20 ms, `0x364` 20 ms with 5 ms first/restart phase.
+- D-037 supersedes D-036's Host software cadence/FIFO. CSM Host raw path owns
+  sender-time freshness/replay, session/authority/lease/hard-safety, static
+  bus/ID/DLC/RTR validation and immediate tracked admission to the actual 3-slot
+  FDCAN FIFO. Busy/full rejects the current request without retention or retry.
 - N physical requests remain N `HostCanTxRequest` records. No Host semantic mapper,
   latest overwrite, generated repeat/count/neutral, TX segment or second FDCAN
   owner is approved. Full rejects newest; same-ID FIFO and other-lane progress are
   mandatory.
-- ACK Accepted means bounded SW-queue admission. Terminal record 23 and matching
-  `CAN_TX_RAW` remain execution/on-bus truth. Source/build and external analyzer HIL
-  must be rerun for this D-036 candidate; older success does not prove it.
+- ACK Accepted means tracked FDCAN HW FIFO admission. Terminal record 23 and
+  matching latency-bounded `CAN_TX_RAW` remain execution/on-bus truth. Android owns
+  absolute nominal 5/20/20 ms generation. New target build and four-window external
+  Kvaser HIL are required; every D-036-era timing artifact is non-qualifying.
 
 ## 2026-08-05 profile-scoped product closeout
 

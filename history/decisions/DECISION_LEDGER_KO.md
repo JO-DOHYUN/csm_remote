@@ -710,8 +710,8 @@
 ## D-036 Add bounded opaque Host cadence lanes
 
 - Date: 2026-08-18
-- Status: Active; supersedes only D-035's direct submission/no persistent Host FIFO
-  detail. Upper vehicle semantics and N-request identity remain unchanged.
+- Status: Superseded by D-037. Retained only as the rejected historical design;
+  upper vehicle semantics and N-request identity remain valid through D-035/D-037.
 - Verified defect: Android/TCP/main-loop timing reached direct Host FDCAN admission;
   the 40-byte parser budget split coalesced control records across variable loops,
   and all three IDs phase-locked at ARM.
@@ -735,3 +735,34 @@
 - Verification: FIFO/bytes/spacing/phase/fairness/in-flight/pending/full/flush/
   wrap/parser native contracts, control guard, target build, external Kvaser
   cadence and long nominal ARM/soak. Source/build success is not physical proof.
+
+## D-037 Rebase Host raw execution onto the actual FDCAN HW FIFO
+
+- Date: 2026-08-19
+- Status: Implemented candidate; target build/device/four-window external Kvaser
+  evidence determines release. Supersedes D-036 Host execution policy while
+  preserving D-035's semantic/raw boundary, parser coalescing fix and Host-lease
+  RC/SafetyNeutral silence.
+- Defect: equal-rate producer/consumer queues plus completion-observation release
+  rebasing created a non-draining Host backlog and converted software/evidence
+  delay into physical cadence drift. A 24-frame actuator backlog also increased
+  stale traffic already admitted below the application boundary.
+- Execution: Android owns absolute nominal 5000/20000/20000 us request creation.
+  CSM has no Host SW execution FIFO, ID lane, phase or scheduler. Each fresh,
+  authorized, statically valid raw record is byte-preserved and submitted once in
+  parser order to `BuiltinCanTxOwner`; current HW/journal busy/full is an explicit
+  reject with no retention/retry. ACK Accepted follows only tracked admission to
+  the real 3-element Mbed FDCAN TX FIFO.
+- Freshness/safety: two coherent heartbeat samples qualify the transport epoch.
+  Sender-time age/future/replay is rejected with reason 26; excessive heartbeat
+  timeline divergence latches until a new epoch. DISARM/epoch/Host-authority loss
+  requests Host-origin HW cancellation, hard safety requests all-origin
+  cancellation, and owner slots remain until hardware terminal truth.
+- Evidence: Host terminal record 23 and matching `CAN_TX_RAW` remain separate from
+  ACK. `CAN_TX_RAW` delivery is latency-bounded; its timestamp remains completion
+  observation, not proven start-of-frame time.
+- Fixed product budgets: heartbeat extra-lag 100 ms, Host command max age 40 ms,
+  future tolerance 20 ms. These precede HIL and must not be loosened merely to
+  pass a test. External Kvaser release requires idle, active steering, endurance
+  and stop windows with nominal rate/count plus median/p95/p99/max and duplicate
+  catch-up gates; D-036 artifacts cannot qualify D-037.

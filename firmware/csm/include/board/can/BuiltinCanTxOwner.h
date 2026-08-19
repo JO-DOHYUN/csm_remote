@@ -151,6 +151,8 @@ class BuiltinCanTxOwner {
                              uint32_t now_us);
   void serviceCompletions(uint32_t now_us, bool snapshot_valid,
                           uint32_t txbrp, uint32_t txbto, uint32_t txbcf);
+  void requestCancellation(BuiltinCanTxOrigin origin, uint32_t now_us);
+  void requestCancellationAll(uint32_t now_us);
 
   bool configured() const { return configured_; }
   uint8_t ownedBus() const { return owned_bus_; }
@@ -204,7 +206,7 @@ class BuiltinCanTxOwner {
                        int32_t driver_result,
                        int32_t cancel_driver_result,
                        uint32_t write_duration_us);
-  void requestCancellation(JournalSlot* slot, uint32_t now_us);
+  void requestSlotCancellation(JournalSlot* slot, uint32_t now_us);
   void latchTrackingFault(uint32_t now_us, bool compromise_active_slots);
 
   uint8_t owned_bus_ = 0xFFu;

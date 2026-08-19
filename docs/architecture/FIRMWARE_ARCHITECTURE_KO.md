@@ -72,9 +72,10 @@ motion authority를 검토한다. 입력이 없는 경우 `Unknown/inhibit`가 �
 
 ServiceHil의 wire request는 authority/safety 우회 permission이 아니다. Host raw
 path는 configured bus, standard ID/DLC/RTR allowlist를 검증하고 payload를
-byte-preserve한 뒤 ID별 fixed cadence queue를 거쳐 sole `BuiltinCanTxOwner`에
-제출한다. vehicle meaning, sequence, count, ramp, CENTER, EHB와 explicit neutral은
-upper control SW가 소유한다.
+byte-preserve한 뒤 sole `BuiltinCanTxOwner`의 실제 3-slot FDCAN FIFO에 즉시 한 번
+제출한다. vehicle meaning, nominal cadence, sequence, count, ramp, CENTER, EHB와
+explicit neutral은 upper control SW가 소유한다. CSM은 Host 실행 FIFO·retry·retiming을
+두지 않고 현재 HW admission 불가를 명시적으로 reject한다.
 Host가 FDCAN driver를 직접 호출하거나 CSM이 request를 semantic intent로 변환하는
 두 경로 모두 금지한다.
 
@@ -160,8 +161,8 @@ M4 RC latest / autonomy latest
   -> FdcanOwner -> hardware TX completion journal
 
 HostCanTxRequest
-  -> session/authority/lease/hard-safety + static frame allowlist
-  -> 0x005/0x007/0x364 independent fixed raw cadence lanes
+  -> sender-time freshness/replay + session/authority/lease/hard-safety
+  -> static frame allowlist -> immediate tracked HW FIFO admission
   -> FdcanOwner -> hardware TX completion journal
 
 FDCAN RX ISR ring / feeder UART DMA ring
@@ -173,10 +174,11 @@ FDCAN RX ISR ring / feeder UART DMA ring
 - `RealtimeCoordinator`는 RC/autonomy semantic state와 release frame을 소유한다.
   Host raw admission은 semantic coordinator를 통과하지 않지만 동일 M7 authority,
   safety와 sole FDCAN owner를 우회하지 않는다.
-- Host raw cadence queue는 static opaque bytes와 command identity만 보존한다. lane별
-  capacity 8, same-ID FIFO, one HW in-flight, reject-newest-on-full이며 다른 lane의
-  진행을 막지 않는다. `0x005`는 5000 us, `0x007/0x364`는 20000 us이고 `0x364`
-  first/restart phase는 5000 us다.
+- Host raw path에는 software execution backlog와 ID별 scheduler가 없다. parser는
+  stream order로 record를 복원하고 각 fresh request를 실제 3-slot HW FIFO에 한 번만
+  제출한다. Accepted는 tracked HW admission이며 busy/full reject는 저장·재시도되지
+  않는다. transport epoch/authority/safety closure는 아직 pending인 HW request에
+  bounded cancellation을 요청하되 terminal truth 전까지 owner slot을 지우지 않는다.
 - `FdcanOwner`만 built-in FDCAN register/FIFO를 소유한다. enqueue 성공과 실제
   TX 완료를 구분하고 `CAN_TX_RAW` 성공 evidence는 hardware completion 뒤에만
   생성한다.

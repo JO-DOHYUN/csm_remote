@@ -170,7 +170,7 @@ void BuiltinCanTxOwner::serviceCompletions(
         complete(&slot, BuiltinCanTxCompletionCode::TrackingCompromised,
                  now_us);
       } else {
-        requestCancellation(&slot, now_us);
+        requestSlotCancellation(&slot, now_us);
       }
     } else if (transmitted) {
       // M_CAN defines TXBTO+TXBCF as a successful transmission in spite of a
@@ -185,7 +185,7 @@ void BuiltinCanTxOwner::serviceCompletions(
               &slot, BuiltinCanTxCompletionCode::DeadlineExceededPending,
               now_us);
         }
-        requestCancellation(&slot, now_us);
+        requestSlotCancellation(&slot, now_us);
       } else {
         complete(&slot,
                   BuiltinCanTxCompletionCode::DisappearedWithoutOutcome,
@@ -211,6 +211,21 @@ uint8_t BuiltinCanTxOwner::activeJournalSlots(
     if (slot.active && slot.frame.origin == origin) ++count;
   }
   return count;
+}
+
+void BuiltinCanTxOwner::requestCancellation(
+    BuiltinCanTxOrigin origin, uint32_t now_us) {
+  for (JournalSlot& slot : journal_) {
+    if (slot.active && slot.frame.origin == origin) {
+      requestSlotCancellation(&slot, now_us);
+    }
+  }
+}
+
+void BuiltinCanTxOwner::requestCancellationAll(uint32_t now_us) {
+  for (JournalSlot& slot : journal_) {
+    if (slot.active) requestSlotCancellation(&slot, now_us);
+  }
 }
 
 bool BuiltinCanTxOwner::validRequestMask(uint32_t request_mask) {
@@ -350,8 +365,8 @@ void BuiltinCanTxOwner::latchTrackingFault(
   }
 }
 
-void BuiltinCanTxOwner::requestCancellation(JournalSlot* slot,
-                                             uint32_t now_us) {
+void BuiltinCanTxOwner::requestSlotCancellation(JournalSlot* slot,
+                                                 uint32_t now_us) {
   if (slot == nullptr || !slot->active || slot->cancel_requested) return;
   slot->cancel_requested = true;
   increment(&counters_.cancel_requests);

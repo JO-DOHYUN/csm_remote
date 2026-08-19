@@ -12,8 +12,7 @@ enum class UplinkPriority : uint8_t {
 };
 
 // Admission importance and delivery latency are independent contracts.
-// Critical evidence may still be batchable (for example periodic CAN_TX_RAW),
-// while an ordinary event can require a bounded delivery delay.
+// Admission importance and the bounded delivery contract remain independent.
 enum class UplinkDeliveryClass : uint8_t {
   Batchable = 0,
   LatencyBounded = 1,

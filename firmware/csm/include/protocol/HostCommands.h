@@ -13,6 +13,13 @@ enum HostControlSessionAction : uint8_t {
 
 static constexpr uint16_t kHostHeartbeatPayloadLen = 12;
 static constexpr uint16_t kHostControlSessionPayloadLen = 24;
+static constexpr uint8_t kHostHeartbeatCommandIdOffset = 0;
+static constexpr uint8_t kHostHeartbeatMonoMsOffset = 4;
+static constexpr uint8_t kHostControlSessionCommandIdOffset = 0;
+static constexpr uint8_t kHostControlSessionActionOffset = 4;
+static constexpr uint8_t kHostControlSessionBusOffset = 5;
+static constexpr uint8_t kHostControlSessionLeaseMsOffset = 8;
+static constexpr uint8_t kHostControlSessionMonoMsOffset = 12;
 static constexpr uint16_t kHostSetControlPolicyMinPayloadLen = 8;
 static constexpr uint16_t kHostClearFaultLockoutPayloadLen = 4;
 static constexpr uint16_t kAppRxCommitAckPayloadLen = 16;

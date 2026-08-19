@@ -59,21 +59,20 @@ raw unknown, reset 간격, LED만으로 watchdog이나 power fault를 확정하�
 명시된 Full Instrumented artifact와 안전한 bench에서만 host 제어를 허용한다.
 상위 control SW는 N개 physical frame을 N개 `HostCanTxRequest`로 생성한다. CSM은
 각 request의 authority/lease/hard-safety와 static bus/ID/DLC/RTR를 판정하고 허용
-payload를 바꾸지 않은 채 ID별 capacity-8 FIFO에 admission한다. full이면 newest를
-명시적으로 reject하고 older frame을 overwrite하지 않는다. same-ID는 strict FIFO,
-다른 ID는 독립 lane이며 due frame만 sole FDCAN owner에 제출한다. generated
-repeat/count/neutral, semantic retry와 Host backlog replay가 없다.
+payload를 바꾸지 않은 채 실제 3-slot FDCAN FIFO에 즉시 한 번 admission한다. HW나
+tracking capacity가 없으면 현재 request를 명시적으로 reject하고 저장·overwrite·retry
+하지 않는다. generated repeat/count/neutral, semantic retry와 Host backlog replay가
+없다. Android가 nominal absolute 5/20/20 ms request timeline을 소유한다.
 
 source context, authority decision, `CONTROL_ACK`, terminal
 `CONTROL_TX_EVIDENCE`, `CAN_TX_RAW`, 외부 CAN analyzer를 함께 기록한다. ACK
-Accepted는 bounded Host SW queue admission이지 physical bus TX 성공이 아니다.
+Accepted는 tracked FDCAN HW FIFO admission이지 physical bus TX 성공이 아니다.
 already-HW-owned
 request는 session loss에도 terminal outcome까지 추적하고 새 ARM은 그 closure를
 기다린다. production observer artifact로 같은 시험을 수행하지 않는다.
 
-CSM은 vehicle 의미나 stale-neutral을 생성하지 않는다. Host raw mechanical lane은
-`0x005` 5 ms, `0x007/0x364` 20 ms minimum release와 `0x364` 5 ms initial phase만
-보장한다. route loss 시 lease가
+CSM은 vehicle 의미, cadence나 stale-neutral을 생성하지 않는다. sender-time expiry와
+transport epoch가 stale backlog를 차단하고 route loss 시 lease가
 새 request를 막으며, message cessation을 안전하게 만드는 vehicle watchdog 또는
 독립 hard-safety가 HIL로 확인되지 않은 profile은 release하지 않는다.
 

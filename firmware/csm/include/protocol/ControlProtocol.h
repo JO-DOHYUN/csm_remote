@@ -36,6 +36,7 @@ enum ControlAckReason : uint8_t {
   ControlReasonRateLimited = 23,
   ControlReasonUnsupportedCommand = 24,
   ControlReasonAuthorityDenied = 25,
+  ControlReasonStaleCommand = 26,
 };
 
 }  // namespace csm

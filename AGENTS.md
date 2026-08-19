@@ -29,8 +29,9 @@
 - M4는 RC 수신·파싱·정규화만 담당하고 M7만 공통 권한·hard-safety·CAN admission과
   physical CAN TX를 소유한다. RC/autonomy semantic mapping은 M7에 남는다. 명시적
   Service/HIL Host raw profile에서는 upper control SW가 vehicle meaning/sequence와
-  N개 request 생성을 소유한다. CSM은 허용 payload를 byte-preserve해 ID별 bounded
-  raw FIFO와 mechanical cadence를 거쳐 sole FDCAN owner로 제출한다.
+  nominal cadence/N개 request 생성을 소유한다. CSM은 fresh/authorized payload를
+  byte-preserve해 sole owner의 실제 3-slot FDCAN FIFO에 즉시 한 번만 admission한다.
+  busy/full은 현재 request를 reject하며 Host SW 실행 FIFO나 cadence scheduler가 없다.
 - Production VSM은 observer-only다. host 제어는 명시적인 Service/HIL profile에서만 허용한다.
 - RC/권한/CAN 수신 hot path는 USB·Wi-Fi telemetry보다 항상 우선한다.
 - typed record는 canonical publisher에서 한 번 순서화·직렬화한 뒤 USB와 Wi-Fi의 독립 bounded sink로 fanout한다.

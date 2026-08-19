@@ -62,6 +62,7 @@ UplinkPriority priority_for_board_event(uint16_t event_code) {
 
 UplinkDeliveryClass default_delivery_for_record(csm::RecordType type) {
   switch (type) {
+    case csm::RecordType::CanTxRaw:
     case csm::RecordType::ControlAck:
     case csm::RecordType::ControlTxEvidence:
     case csm::RecordType::StreamSession:

@@ -5,10 +5,10 @@
 #include "board/HostDownlinkParser.h"
 #include "board/SafetySupervisor.h"
 #include "board/can/BuiltinCanTxOwner.h"
-#include "board/can/CanTxCadenceQueue.h"
 #include "board/control/CanTxGateway.h"
 #include "board/control/CommandLimiter.h"
 #include "board/control/ControlReleaseSchedule.h"
+#include "board/control/HostCommandFreshness.h"
 #include "board/control/RemoteControlOrchestrator.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control/VehicleCommandMapper.h"
@@ -19,6 +19,7 @@
 #include "board/remote/RemoteSharedMemory.h"
 #include "protocol/ControlProtocol.h"
 #include "protocol/TypedFrame.h"
+#include "protocol/TypedRecords.h"
 
 namespace {
 
@@ -44,6 +45,7 @@ struct FakeBuiltinCanDriver {
   uint32_t cancel_calls = 0;
   uint32_t last_cancel_mask = 0;
   csm::board::can::BuiltinCanTxFrame last_frame = {};
+  csm::board::can::BuiltinCanTxFrame frames[16] = {};
 };
 
 struct BuiltinCanCompletionCapture {
@@ -60,6 +62,7 @@ csm::board::can::BuiltinCanTxDriverResult fakeBuiltinCanWrite(
   if (driver == nullptr) return result;
   ++driver->calls;
   driver->last_frame = frame;
+  if (driver->calls <= 16) driver->frames[driver->calls - 1] = frame;
   result.driver_result = driver->next_result;
   result.request_mask = driver->next_request_mask;
   result.driver_sequence = driver->override_driver_sequence
@@ -222,170 +225,173 @@ void builtinCanTxOriginAccountingSeparatesRcFromHost() {
   CHECK(owner.activeJournalSlots() == 0);
 }
 
-csm::board::can::BuiltinCanTxFrame makeHostCadenceFrame(
-    uint32_t command_id, uint32_t can_id, uint8_t seed) {
-  csm::board::can::BuiltinCanTxFrame frame;
-  frame.command_id = command_id;
+void builtinCanTxOwnerUsesThreeRealSlotsWithoutHiddenRetry() {
+  using namespace csm::board::can;
+  FakeBuiltinCanDriver driver;
+  BuiltinCanCompletionCapture completions;
+  BuiltinCanTxOwner owner;
+  CHECK(owner.begin(1, fakeBuiltinCanWrite, &driver, fakeBuiltinCanCancel,
+                    &driver, 10, captureBuiltinCanCompletion, &completions));
+  CanBackendState backend;
+  backend.ready = true;
+  BuiltinCanTxFrame frame;
   frame.bus = 1;
-  frame.can_id_flags = can_id;
+  frame.can_id_flags = 0x005u;
   frame.dlc = 8;
-  frame.origin = csm::board::can::BuiltinCanTxOrigin::HostControl;
-  for (uint8_t index = 0; index < sizeof(frame.data); ++index) {
-    frame.data[index] = static_cast<uint8_t>(seed + index);
+  frame.origin = BuiltinCanTxOrigin::HostControl;
+
+  for (uint8_t index = 0; index < 3; ++index) {
+    frame.command_id = 100u + index;
+    frame.data[0] = static_cast<uint8_t>(0xA0u + index);
+    driver.next_request_mask = 1u << index;
+    const BuiltinCanTxOutcome accepted = owner.submit(frame, backend, 100 + index);
+    CHECK(accepted.code == BuiltinCanTxOutcomeCode::FifoEnqueueTracked);
   }
-  return frame;
+  CHECK(driver.calls == 3);
+  CHECK(owner.activeJournalSlots() == 3);
+  for (uint8_t index = 0; index < 3; ++index) {
+    CHECK(driver.frames[index].command_id == 100u + index);
+    CHECK(driver.frames[index].data[0] == static_cast<uint8_t>(0xA0u + index));
+  }
+
+  frame.command_id = 103;
+  frame.data[0] = 0xA3u;
+  const BuiltinCanTxOutcome rejected = owner.submit(frame, backend, 104);
+  CHECK(rejected.code == BuiltinCanTxOutcomeCode::RejectedJournalFull);
+  CHECK(rejected.transientAdmissionFailure());
+  CHECK(driver.calls == 3);
+  CHECK(owner.activeJournalSlots() == 3);
+
+  owner.serviceCompletions(105, true, 6, 1, 0);
+  CHECK(owner.activeJournalSlots() == 2);
+  frame.command_id = 104;
+  frame.data[0] = 0xA4u;
+  driver.next_request_mask = 1;
+  CHECK(owner.submit(frame, backend, 106).completion_tracked);
+  CHECK(driver.calls == 4);
+  CHECK(driver.frames[3].command_id == 104);
+  CHECK(driver.frames[3].data[0] == 0xA4u);
+  CHECK(owner.counters().submissions == 5);
+  CHECK(owner.counters().journal_full_rejects == 1);
 }
 
-void hostCanCadenceQueuePreservesMechanicalContract() {
+void hostFreshnessRequiresCoherentAnchorAndRejectsOldWork() {
+  using csm::board::control::HostCommandFreshness;
+  using csm::board::control::HostCommandFreshnessConfig;
+  using csm::board::control::HostFreshnessResult;
+
+  HostCommandFreshness freshness;
+  HostCommandFreshnessConfig config;
+  config.heartbeat_max_extra_lag_ms = 100;
+  config.command_max_age_ms = 40;
+  config.clock_future_tolerance_ms = 20;
+  CHECK(freshness.begin(config));
+
+  CHECK(freshness.acceptHeartbeat(10, 1000, 5000) ==
+        HostFreshnessResult::AnchorEstablished);
+  CHECK(!freshness.qualified());
+  CHECK(freshness.acceptCommand(11, 1001, 5001) ==
+        HostFreshnessResult::NotQualified);
+  CHECK(freshness.acceptHeartbeat(11, 1100, 5100) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.qualified());
+
+  CHECK(freshness.acceptCommand(12, 1110, 5110) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.acceptCommand(12, 1110, 5110) ==
+        HostFreshnessResult::Replay);
+  CHECK(freshness.acceptCommand(13, 1069, 5110) ==
+        HostFreshnessResult::Stale);
+  CHECK(freshness.acceptCommand(13, 1131, 5110) ==
+        HostFreshnessResult::Future);
+  CHECK(freshness.acceptCommand(13, 1090, 5110) ==
+        HostFreshnessResult::Accepted);
+
+  freshness.reset();
+  CHECK(freshness.acceptHeartbeat(20, UINT32_MAX - 49u,
+                                  UINT32_MAX - 49u) ==
+        HostFreshnessResult::AnchorEstablished);
+  CHECK(freshness.acceptHeartbeat(21, 50, 50) ==
+        HostFreshnessResult::Accepted);
+  CHECK(freshness.acceptCommand(22, 60, 60) ==
+        HostFreshnessResult::Accepted);
+}
+
+void hostFreshnessLatchesHeartbeatTimelineFaultUntilReset() {
+  using csm::board::control::HostCommandFreshness;
+  using csm::board::control::HostCommandFreshnessConfig;
+  using csm::board::control::HostFreshnessResult;
+
+  HostCommandFreshness freshness;
+  HostCommandFreshnessConfig config;
+  config.heartbeat_max_extra_lag_ms = 100;
+  config.command_max_age_ms = 40;
+  config.clock_future_tolerance_ms = 20;
+  CHECK(freshness.begin(config));
+  CHECK(freshness.acceptHeartbeat(1, 100, 1000) ==
+        HostFreshnessResult::AnchorEstablished);
+  CHECK(freshness.acceptHeartbeat(2, 200, 1201) ==
+        HostFreshnessResult::FaultLatched);
+  CHECK(freshness.faultLatched());
+  CHECK(freshness.acceptHeartbeat(3, 300, 1300) ==
+        HostFreshnessResult::FaultLatched);
+  CHECK(freshness.acceptCommand(4, 300, 1300) ==
+        HostFreshnessResult::FaultLatched);
+
+  freshness.reset();
+  CHECK(!freshness.faultLatched());
+  CHECK(freshness.acceptHeartbeat(5, 500, 2000) ==
+        HostFreshnessResult::AnchorEstablished);
+}
+
+void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
   using namespace csm::board::can;
-  const CanTxCadenceLaneConfig configs[] = {
-      {1, 0x005u, 8, 5000u, 0u},
-      {1, 0x007u, 8, 20000u, 0u},
-      {1, 0x364u, 8, 20000u, 5000u},
-  };
+  FakeBuiltinCanDriver driver;
+  BuiltinCanCompletionCapture completions;
+  BuiltinCanTxOwner owner;
+  CHECK(owner.begin(1, fakeBuiltinCanWrite, &driver, fakeBuiltinCanCancel,
+                    &driver, 10, captureBuiltinCanCompletion, &completions));
 
-  // C1/C2/C5: EHB payload is opaque FIFO data and first/restart phase is 5 ms.
-  CanTxCadenceQueue ehb;
-  CHECK(ehb.begin(configs, 3));
-  for (uint8_t index = 0; index < 4; ++index) {
-    const BuiltinCanTxFrame frame =
-        makeHostCadenceFrame(100u + index, 0x364u,
-                             static_cast<uint8_t>(0x40u + index * 8u));
-    CHECK(ehb.enqueue(frame, 1000u) == CanTxCadenceEnqueueCode::Accepted);
-  }
-  BuiltinCanTxFrame due;
-  CHECK(!ehb.peekDue(2, 5999u, &due));
-  uint32_t ehb_due_us = 6000u;
-  for (uint8_t index = 0; index < 4; ++index) {
-    CHECK(ehb.peekDue(2, ehb_due_us, &due));
-    CHECK(due.command_id == 100u + index);
-    CHECK(due.data[0] == static_cast<uint8_t>(0x40u + index * 8u));
-    CHECK(due.data[1] == static_cast<uint8_t>(0x41u + index * 8u));
-    CHECK(ehb.noteHwEnqueueAccepted(2, due.command_id, ehb_due_us));
-    CHECK(!ehb.peekDue(2, ehb_due_us + 50000u, &due));
-    BuiltinCanTxCompletion completion;
-    completion.code = BuiltinCanTxCompletionCode::Transmitted;
-    completion.frame = due;
-    completion.terminal = true;
-    completion.terminal_us = ehb_due_us + 1u;
-    CHECK(ehb.noteCompletion(completion, completion.terminal_us));
-    ehb_due_us += 20000u;
-    if (index < 3) {
-      CHECK(!ehb.peekDue(2, ehb_due_us - 1u, &due));
-    }
-  }
-  CHECK(ehb.depth() == 0);
-  const BuiltinCanTxFrame restarted =
-      makeHostCadenceFrame(200, 0x364u, 0x90u);
-  CHECK(ehb.enqueue(restarted, 100000u) ==
-        CanTxCadenceEnqueueCode::Accepted);
-  CHECK(!ehb.peekDue(2, 104999u, &due));
-  CHECK(ehb.peekDue(2, 105000u, &due));
+  CanBackendState backend;
+  backend.ready = true;
+  BuiltinCanTxFrame frame;
+  frame.bus = 1;
+  frame.can_id_flags = 0x005u;
+  frame.dlc = 8;
 
-  // C3/C4/C6/C7/C8/C9/C12: independent lanes, exact minimum spacing, one
-  // in-flight per lane, nonterminal pending retention and terminal release.
-  CanTxCadenceQueue lanes;
-  CHECK(lanes.begin(configs, 3));
-  const BuiltinCanTxFrame drive1 = makeHostCadenceFrame(1, 0x005u, 0x10u);
-  const BuiltinCanTxFrame drive2 = makeHostCadenceFrame(2, 0x005u, 0x20u);
-  const BuiltinCanTxFrame steer1 = makeHostCadenceFrame(3, 0x007u, 0x30u);
-  const BuiltinCanTxFrame ehb1 = makeHostCadenceFrame(4, 0x364u, 0x40u);
-  CHECK(lanes.enqueue(drive1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(lanes.enqueue(drive2, 1000u) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(lanes.enqueue(steer1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(lanes.enqueue(ehb1, 1000u) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(lanes.peekDue(0, 1000u, &due));
-  CHECK(lanes.noteHwEnqueueAccepted(0, drive1.command_id, 1000u));
-  CHECK(lanes.peekDue(1, 1000u, &due));
-  CHECK(due.command_id == steer1.command_id);
-  CHECK(!lanes.peekDue(2, 5999u, &due));
-  CHECK(lanes.peekDue(2, 6000u, &due));
-  CHECK(!lanes.peekDue(0, 51000u, &due));
+  frame.origin = BuiltinCanTxOrigin::RemoteControl;
+  driver.next_request_mask = 1;
+  CHECK(owner.submit(frame, backend, 100).completion_tracked);
+  frame.origin = BuiltinCanTxOrigin::HostControl;
+  driver.next_request_mask = 2;
+  CHECK(owner.submit(frame, backend, 101).completion_tracked);
 
-  BuiltinCanTxCompletion pending;
-  pending.code = BuiltinCanTxCompletionCode::DeadlineExceededPending;
-  pending.frame = drive1;
-  pending.terminal = false;
-  pending.terminal_us = 2000u;
-  CHECK(lanes.noteCompletion(pending, pending.terminal_us));
-  CHECK(lanes.hasInFlight());
-  CHECK(!lanes.peekDue(0, 51000u, &due));
-  // A transient owner rejection performs no queue mutation: the same head is
-  // still exposed after the current in-flight item closes.
-  BuiltinCanTxCompletion drive_done;
-  drive_done.code = BuiltinCanTxCompletionCode::Transmitted;
-  drive_done.frame = drive1;
-  drive_done.terminal = true;
-  drive_done.terminal_us = 2001u;
-  CHECK(lanes.noteCompletion(drive_done, drive_done.terminal_us));
-  CHECK(!lanes.peekDue(0, 5999u, &due));
-  CHECK(lanes.peekDue(0, 6000u, &due));
-  CHECK(due.command_id == drive2.command_id);
-  CHECK(lanes.peekDue(0, 6000u, &due));
-  CHECK(due.command_id == drive2.command_id);
-  CHECK(lanes.noteHwEnqueueAccepted(0, drive2.command_id, 6000u));
-  BuiltinCanTxCompletion drive_failed;
-  drive_failed.code = BuiltinCanTxCompletionCode::Cancelled;
-  drive_failed.frame = drive2;
-  drive_failed.terminal = true;
-  drive_failed.terminal_us = 6001u;
-  CHECK(lanes.noteCompletion(drive_failed, drive_failed.terminal_us));
+  owner.requestCancellation(BuiltinCanTxOrigin::HostControl, 102);
+  CHECK(driver.cancel_calls == 1);
+  CHECK(driver.last_cancel_mask == 2);
+  CHECK(owner.activeJournalSlots() == 2);
+  // Hardware TX truth wins if TXBTO and TXBCF both appear after cancellation.
+  owner.serviceCompletions(103, true, 0, 3, 2);
+  CHECK(owner.activeJournalSlots() == 0);
+  CHECK(completions.count == 2);
+  CHECK(completions.items[0].code == BuiltinCanTxCompletionCode::Transmitted);
+  CHECK(completions.items[1].code == BuiltinCanTxCompletionCode::Transmitted);
 
-  CHECK(lanes.noteHwEnqueueAccepted(1, steer1.command_id, 1000u));
-  BuiltinCanTxCompletion steer_done;
-  steer_done.code = BuiltinCanTxCompletionCode::Transmitted;
-  steer_done.frame = steer1;
-  steer_done.terminal = true;
-  steer_done.terminal_us = 1001u;
-  CHECK(lanes.noteCompletion(steer_done, steer_done.terminal_us));
-  const BuiltinCanTxFrame steer2 = makeHostCadenceFrame(5, 0x007u, 0x50u);
-  CHECK(lanes.enqueue(steer2, 1002u) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(!lanes.peekDue(1, 20999u, &due));
-  CHECK(lanes.peekDue(1, 21000u, &due));
-
-  // C10: lane capacity is eight; newest excess is rejected with no overwrite.
-  CanTxCadenceQueue full;
-  CHECK(full.begin(configs, 3));
-  for (uint8_t index = 0; index < CanTxCadenceQueue::kLaneCapacity; ++index) {
-    CHECK(full.enqueue(makeHostCadenceFrame(300u + index, 0x005u,
-                                            static_cast<uint8_t>(index)), 0) ==
-          CanTxCadenceEnqueueCode::Accepted);
-  }
-  CHECK(full.enqueue(makeHostCadenceFrame(999, 0x005u, 0xFFu), 0) ==
-        CanTxCadenceEnqueueCode::QueueFull);
-  CHECK(full.depth() == CanTxCadenceQueue::kLaneCapacity);
-  for (uint8_t index = 0; index < CanTxCadenceQueue::kLaneCapacity; ++index) {
-    CHECK(full.dropHead(0, &due));
-    CHECK(due.command_id == 300u + index);
-    CHECK(due.data[0] == index);
-  }
-
-  // C11: flushing removes only SW work and retains owner correlation.
-  CanTxCadenceQueue flushed;
-  CHECK(flushed.begin(configs, 3));
-  CHECK(flushed.enqueue(drive1, 0) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(flushed.enqueue(drive2, 0) == CanTxCadenceEnqueueCode::Accepted);
-  CHECK(flushed.noteHwEnqueueAccepted(0, drive1.command_id, 0));
-  flushed.flushPending();
-  CHECK(flushed.depth() == 0);
-  CHECK(flushed.hasInFlight());
-  CHECK(flushed.noteCompletion(drive_done, 1));
-  CHECK(!flushed.hasInFlight());
-
-  // C13: wrap-safe due comparison.
-  CanTxCadenceQueue wrapped;
-  CHECK(wrapped.begin(configs, 3));
-  CHECK(wrapped.enqueue(ehb1, UINT32_MAX - 4997u) ==
-        CanTxCadenceEnqueueCode::Accepted);
-  CHECK(!wrapped.peekDue(2, 1u, &due));
-  CHECK(wrapped.peekDue(2, 2u, &due));
-
-  BuiltinCanTxFrame invalid = drive1;
-  invalid.dlc = 9;
-  CHECK(wrapped.enqueue(invalid, 0) ==
-        CanTxCadenceEnqueueCode::InvalidFrame);
-  CHECK(wrapped.enqueue(makeHostCadenceFrame(8, 0x123u, 0), 0) ==
-        CanTxCadenceEnqueueCode::UnsupportedLane);
+  completions.count = 0;
+  frame.origin = BuiltinCanTxOrigin::RemoteControl;
+  driver.next_request_mask = 1;
+  CHECK(owner.submit(frame, backend, 200).completion_tracked);
+  frame.origin = BuiltinCanTxOrigin::HostControl;
+  driver.next_request_mask = 2;
+  CHECK(owner.submit(frame, backend, 201).completion_tracked);
+  owner.requestCancellationAll(202);
+  CHECK(driver.cancel_calls == 3);
+  CHECK(owner.activeJournalSlots() == 2);
+  owner.serviceCompletions(203, true, 0, 0, 3);
+  CHECK(owner.activeJournalSlots() == 0);
+  CHECK(completions.count == 2);
+  CHECK(completions.items[0].code == BuiltinCanTxCompletionCode::Cancelled);
+  CHECK(completions.items[1].code == BuiltinCanTxCompletionCode::Cancelled);
 }
 
 struct FakeHostStream : Stream {
@@ -416,10 +422,12 @@ void captureHostParserFrame(void* context, uint8_t version,
   CHECK(version == csm::kProtocolVersion);
   CHECK(record_type ==
         static_cast<uint8_t>(csm::RecordType::HostCanTxRequest));
-  CHECK(len == 19);
-  if (capture == nullptr || capture->count >= 8 || len != 19) return;
+  CHECK(len == csm::kHostCanTxRequestPayloadLen);
+  if (capture == nullptr || capture->count >= 8 ||
+      len != csm::kHostCanTxRequestPayloadLen) return;
   capture->command_ids[capture->count] = csm::rd_u32_le(payload);
-  capture->first_data[capture->count] = payload[11];
+  capture->first_data[capture->count] =
+      payload[csm::kHostCanTxRequestDataOffset];
   ++capture->count;
 }
 
@@ -431,12 +439,15 @@ void captureHostParserCrcFailure(void* context) {
 void hostDownlinkParserPreservesCoalescedBurstOverBufferSize() {
   FakeHostStream stream;
   for (uint8_t index = 0; index < 7; ++index) {
-    uint8_t payload[19] = {};
+    uint8_t payload[csm::kHostCanTxRequestPayloadLen] = {};
     csm::wr_u32_le(payload, 700u + index);
-    payload[4] = 1;
-    csm::wr_u32_le(&payload[6], 0x005u);
-    payload[10] = 8;
-    payload[11] = static_cast<uint8_t>(0xA0u + index);
+    payload[csm::kHostCanTxRequestBusOffset] = 1;
+    csm::wr_u32_le(&payload[csm::kHostCanTxRequestCanIdOffset], 0x005u);
+    payload[csm::kHostCanTxRequestDlcOffset] = 8;
+    payload[csm::kHostCanTxRequestDataOffset] =
+        static_cast<uint8_t>(0xA0u + index);
+    csm::wr_u32_le(&payload[csm::kHostCanTxRequestMonoMsOffset],
+                   1000u + index);
     size_t written = 0;
     CHECK(csm::encode_typed_frame(
         &stream.bytes[stream.length], sizeof(stream.bytes) - stream.length,
@@ -1870,7 +1881,10 @@ void runtimeHandoffLossAndFaultPolicy() {
 int main() {
   builtinCanTxOwnerHasExplicitEnqueueOutcome();
   builtinCanTxOriginAccountingSeparatesRcFromHost();
-  hostCanCadenceQueuePreservesMechanicalContract();
+  builtinCanTxOwnerUsesThreeRealSlotsWithoutHiddenRetry();
+  hostFreshnessRequiresCoherentAnchorAndRejectsOldWork();
+  hostFreshnessLatchesHeartbeatTimelineFaultUntilReset();
+  builtinCanCancellationTargetsOriginWithoutErasingTruth();
   hostDownlinkParserPreservesCoalescedBurstOverBufferSize();
   builtinCanTxJournalCoversAllTerminalPaths();
   builtinCanInvalidSnapshotHoldsJournalFailClosed();

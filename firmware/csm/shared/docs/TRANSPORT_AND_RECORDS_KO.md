@@ -453,13 +453,16 @@ accepted into the MCP TX path, then emits `CAN_TX_RAW` only after the TX
 completion audit succeeds. The built-in CAN profile emits `CONTROL_ACK Accepted`
 only after the sole owner has accepted and tracked the FDCAN FIFO request, then
 emits terminal `CONTROL_TX_EVIDENCE` and `CAN_TX_RAW` from HW completion. ACK is
-not actual-send evidence.
+not actual-send evidence. `CAN_TX_RAW` is critical, latency-bounded delivery so
+healthy physical TX is not hidden behind ordinary batching; its timestamp is CSM
+completion-observation time, not a proven CAN start-of-frame HW timestamp.
 
 In the Service/HIL `0x005/0x007/0x364` profile, `CONTROL_ACK status=1 reason=0`
-means that this individual raw frame was accepted into its bounded per-ID Host
-software queue. The board does not overwrite it with a latest target, interpret
-a repeat/count, mutate `DATA[0..7]`, generate additional frames, or own vehicle
-semantics. Queue-full rejects the newest request explicitly.
+means that this individual raw frame was accepted and tracked in the actual
+3-element FDCAN HW FIFO. The board does not retain rejected Host work, overwrite
+it with a latest target, interpret repeat/count, mutate `DATA[0..7]`, generate
+additional frames, or own vehicle semantics. Busy/full rejects the current
+request explicitly without retry.
 The static Service/HIL allowlist validates configured bus, standard ID
 `0x005/0x007/0x364`, DLC8 and RTR false; payload meaning remains the upper
 control software's contract.
@@ -488,8 +491,9 @@ terminal additionally emits matching `CAN_TX_RAW`; a terminal failure does not.
 N requested physical frames are N individual `HOST_CAN_TX_REQUEST` records with
 unique command IDs. TCP may coalesce records, but the board does not add a TX
 segment. The capability `host_tx_queue_size` denotes the total bounded Host
-software queue capacity (currently 24: three lanes x eight frames). The separate
-`BuiltinCanTxOwner` completion journal remains three slots.
+HW admission/correlation capacity for the selected backend (currently 3,
+matching Mbed FDCAN `TxFifoQueueElmtsNbr` and `BuiltinCanTxOwner`). It is not a
+Host software execution queue.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -518,8 +522,9 @@ Current `CONTROL_ACK` reasons:
 - `23` rate limited
 - `24` unsupported command
 - `25` authority denied
+- `26` stale/future/replayed Host sender-time command or unqualified timeline
 
-`HOST_CAN_TX_REQUEST` payload, 19 bytes, host-to-board:
+`HOST_CAN_TX_REQUEST` payload, 23 bytes, host-to-board:
 - `0..3 command_id u32`
 - `4 bus u8`: logical bus id from `CAPABILITY`; do not assume a fixed system
   or drive channel number
@@ -527,6 +532,8 @@ Current `CONTROL_ACK` reasons:
 - `6..9 can_id u32`: raw CAN ID without flag bits
 - `10 dlc u8`: `0..8`
 - `11..18 data[8]`
+- `19..22 host_mono_ms u32`: sender monotonic expiry/replay evidence; never a
+  CSM scheduling clock
 
 Current board host TX policy:
 - Accepted bus is profile-dependent. Profile major `1` accepts `bus=1` Portenta
@@ -545,21 +552,21 @@ Current board host TX policy:
   upper control software and its selected vehicle profile.
 - N requested physical frames are N individual downlink records. There is no
   latest-target replacement, Host semantic runtime, generated frame, semantic
-  retry or hidden replay. CSM uses only three static opaque mechanical lanes:
-  `0x005` capacity 8 at 5000 us, `0x007` capacity 8 at 20000 us and `0x364`
-  capacity 8 at 20000 us with a 5000 us first/restart phase.
+  retry, hidden replay, Host SW execution FIFO or Host cadence scheduler. Each
+  fresh allowed record receives exactly one immediate owner/HW admission attempt.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
-- TCP arrival spacing is not a CAN cadence clock. Network batching may compress
-  upper writes; the bounded raw lanes preserve same-ID FIFO and release due heads
-  without catch-up bursts. Authority, lease, hard-safety, static frame and backend
-  admission remain board-owned. Transient owner busy/journal-full retains the
-  already ACK-accepted head for a later service pass; queue full rejects newest.
+- TCP arrival spacing and Host timestamps are not CAN cadence clocks. Android
+  owns nominal absolute request production; CSM preserves stream admission order.
+  Authority, lease, hard-safety, freshness/replay, static frame and backend
+  admission remain board-owned. Owner busy/journal-full rejects that request and
+  never retains it for a later service pass.
 - Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
-  Already HW-owned attempts remain in the completion journal until terminal and
-  are never silently flushed or replayed. New Host ARM waits for old Host
-  terminal closure.
+  Transport/Host-authority loss requests cancellation of Host-origin HW attempts;
+  hard-safety requests cancellation of all application-control origins. Attempts
+  remain journaled until transmitted/cancelled/faulted terminal truth, and new
+  Host ARM waits for that closure.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
@@ -636,9 +643,9 @@ Safety-gated control session:
   - `6..7 flags u16`
   - `8..9 lease_ms u16`: `0` means board default 500 ms, max 2000 ms
   - `10..11 reserved u16`
-  - `12..15 policy_hash u32`
-  - `16..19 model_pack_hash u32`
-  - `20..23 aux u32`
+  - `12..15 host_mono_ms u32`: required for ARM/renew freshness; DISARM is honored
+    even when freshness is unavailable
+  - `16..23 reserved`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
   A valid query refreshes the requesting Wi-Fi epoch with
   `STREAM_SESSION -> CAPABILITY -> CONTROL_ACK` in that order. The query is
@@ -646,7 +653,14 @@ Safety-gated control session:
   anchor even if it missed the connection-edge announcement.
 - `HOST_CLEAR_FAULT_LOCKOUT` payload is `command_id u32`.
 - Production host TX requires heartbeat alive, arm accepted, lease valid, safe
-  inputs, and a ready target backend. Heartbeat resume alone never auto-arms.
+  inputs, a qualified sender-time timeline, and a ready target backend. The first
+  heartbeat anchors a transport epoch; a second coherent sample qualifies it.
+  Excess sender/arrival divergence latches the epoch until reconnect. Heartbeat
+  resume alone never auto-arms.
+- Initial fixed Service/HIL budgets are heartbeat extra transport lag `100 ms`,
+  raw/session command max age `40 ms`, and future tolerance `20 ms`. They are
+  product safety limits, not test-fit knobs; changing them requires a decision
+  and fresh HIL evidence.
 
 Reserved next-phase `CONTROL_ACK` status names, without changing the current v1
 payload:
