@@ -352,8 +352,8 @@ envelope = (
     root / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
 ).read_text(encoding="utf-8")
 for required in (
-    "kProductEnabledRecordsPerSecond == 1086",
-    "kProductEnabledWireBytesPerSecond == 131222",
+    "kProductEnabledRecordsPerSecond == 1095",
+    "kProductEnabledWireBytesPerSecond == 131513",
     "kControlTxEvidencePayloadLen",
 ):
     if required not in envelope:

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "board/can/CanTypes.h"
+#include "protocol/TypedRecords.h"
 
 namespace csm::board::can {
 
@@ -14,14 +15,15 @@ enum class BuiltinCanTxOrigin : uint8_t {
 };
 
 enum class BuiltinCanTxCancelReason : uint8_t {
-  None = 0,
-  HostDisarm = 1,
-  TransportEpochClosed = 2,
-  AuthorityPreempted = 3,
-  LeaseExpired = 4,
-  HardSafety = 5,
-  DeadlineExpired = 6,
-  TrackingFault = 7,
+  None = csm::kControlTxCancelReasonNone,
+  HostDisarm = csm::kControlTxCancelReasonHostDisarm,
+  TransportEpochClosed = csm::kControlTxCancelReasonTransportEpochClosed,
+  AuthorityPreempted = csm::kControlTxCancelReasonAuthorityPreempted,
+  LeaseExpired = csm::kControlTxCancelReasonLeaseExpired,
+  HardSafety = csm::kControlTxCancelReasonHardSafety,
+  DeadlineExpired = csm::kControlTxCancelReasonDeadlineExpired,
+  TrackingFault = csm::kControlTxCancelReasonTrackingFault,
+  HostSessionFault = csm::kControlTxCancelReasonHostSessionFault,
 };
 
 struct BuiltinCanTxFrame {

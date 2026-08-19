@@ -9,9 +9,9 @@ void HostControlAuthorityGate::reset() {
 
 bool HostControlAuthorityGate::activate(bool lease_alive,
                                         bool authority_allowed,
-                                        uint8_t active_host_slots) {
+                                        uint8_t active_control_slots) {
   if (phase_ != HostControlPhase::Inactive || !lease_alive ||
-      !authority_allowed || active_host_slots != 0) {
+      !authority_allowed || active_control_slots != 0) {
     return false;
   }
   phase_ = HostControlPhase::Active;

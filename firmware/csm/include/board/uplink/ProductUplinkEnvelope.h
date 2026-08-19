@@ -15,6 +15,11 @@ static constexpr uint32_t kProductCanRxFramesPerSecondPerBus = 2000;
 // 0x005 at 200 Hz plus 0x007/0x364 at 50 Hz each. Keep the envelope tied to
 // every enabled Service/HIL release lane, not the pre-EHB two-lane profile.
 static constexpr uint32_t kProductControlCommandsPerSecond = 300;
+// Android renews the 1 s Host lease every 300 ms. Round up to four renewals
+// per wall-clock second. Every renewal produces one ACK and one BOARD_EVENT;
+// the 10 Hz heartbeat produces its sampled BOARD_EVENT at most once/second.
+static constexpr uint32_t kProductLeaseRenewalsPerSecond = 4;
+static constexpr uint32_t kProductHeartbeatEventsPerSecond = 1;
 static constexpr uint32_t kProductRemoteStateRecordsPerSecond = 10;
 static constexpr uint32_t kProductBoardHealthRecordsPerSecond = 1;
 static constexpr uint32_t kProductTransportDiagnosticRecordsPerSecond = 1;
@@ -61,6 +66,9 @@ static constexpr uint32_t kProductEnabledRecordsPerSecond =
     kProductControlCommandsPerSecond +  // CAN_TX_RAW
     kProductControlCommandsPerSecond +  // CONTROL_ACK
     kProductControlCommandsPerSecond +  // CONTROL_TX_EVIDENCE
+    kProductLeaseRenewalsPerSecond +  // lease CONTROL_ACK
+    kProductLeaseRenewalsPerSecond +  // lease BOARD_EVENT
+    kProductHeartbeatEventsPerSecond +  // sampled heartbeat BOARD_EVENT
     kProductRemoteStateRecordsPerSecond +
     kProductBoardHealthRecordsPerSecond +
     kProductTransportDiagnosticRecordsPerSecond;
@@ -72,6 +80,11 @@ static constexpr uint32_t kProductEnabledWireBytesPerSecond =
                                 kProductControlCommandsPerSecond) +
     productTypedRecordWireBytes(csm::kControlTxEvidencePayloadLen,
                                 kProductControlCommandsPerSecond) +
+    productTypedRecordWireBytes(csm::kControlAckPayloadLen,
+                                kProductLeaseRenewalsPerSecond) +
+    productTypedRecordWireBytes(
+        csm::kBoardEventPayloadLen,
+        kProductLeaseRenewalsPerSecond + kProductHeartbeatEventsPerSecond) +
     productTypedRecordWireBytes(csm::kRemoteControlStatePayloadLen,
                                 kProductRemoteStateRecordsPerSecond) +
     productTypedRecordWireBytes(csm::kBoardHealthV13PayloadLen,
@@ -83,9 +96,9 @@ static_assert(kProductCanRxSegmentRecordsPerSecond == 174,
               "enabled product CAN segment record-rate regression");
 static_assert(kProductCanRxWireBytesPerSecond == 88874,
               "enabled product CAN wire-rate regression");
-static_assert(kProductEnabledRecordsPerSecond == 1086,
+static_assert(kProductEnabledRecordsPerSecond == 1095,
               "enabled product record-rate regression");
-static_assert(kProductEnabledWireBytesPerSecond == 131222,
+static_assert(kProductEnabledWireBytesPerSecond == 131513,
               "enabled product wire-rate regression");
 
 }  // namespace csm::board::uplink

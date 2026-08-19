@@ -27,7 +27,7 @@ class HostControlAuthorityGate {
  public:
   void reset();
   bool activate(bool lease_alive, bool authority_allowed,
-                uint8_t active_host_slots);
+                uint8_t active_control_slots);
   bool beginClose(HostControlCloseReason reason,
                   uint8_t active_host_slots);
   void observeHostSlots(uint8_t active_host_slots);

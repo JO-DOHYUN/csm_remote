@@ -160,6 +160,12 @@ def calculate() -> dict:
     control_fps = constexpr(
         product_profile, "kProductControlCommandsPerSecond"
     )
+    lease_renew_fps = constexpr(
+        product_profile, "kProductLeaseRenewalsPerSecond"
+    )
+    heartbeat_event_fps = constexpr(
+        product_profile, "kProductHeartbeatEventsPerSecond"
+    )
     remote_state_fps = constexpr(
         product_profile, "kProductRemoteStateRecordsPerSecond"
     )
@@ -188,6 +194,12 @@ def calculate() -> dict:
     control_tx_evidence = control_fps * (
         typed_overhead + constexpr(typed_records, "kControlTxEvidencePayloadLen")
     )
+    control_plane_ack = lease_renew_fps * (
+        typed_overhead + constexpr(typed_records, "kControlAckPayloadLen")
+    )
+    control_plane_event = (lease_renew_fps + heartbeat_event_fps) * (
+        typed_overhead + constexpr(typed_records, "kBoardEventPayloadLen")
+    )
     remote_state = remote_state_fps * (
         typed_overhead + constexpr(typed_records, "kRemoteControlStatePayloadLen")
     )
@@ -198,13 +210,15 @@ def calculate() -> dict:
         typed_overhead + transport_payload
     )
     fixed_product = (
-        can_tx + control_ack + control_tx_evidence + remote_state
+        can_tx + control_ack + control_tx_evidence
+        + control_plane_ack + control_plane_event + remote_state
         + board_health + transport_diagnostic
     )
     compact_total = compact_rx + fixed_product
     compact_records = math.ceil(rx_fps / compact_max)
     enabled_records = (
-        compact_records + 3 * control_fps + remote_state_fps
+        compact_records + 3 * control_fps + 2 * lease_renew_fps
+        + heartbeat_event_fps + remote_state_fps
         + board_health_fps + transport_diagnostic_fps
     )
 
@@ -249,8 +263,8 @@ def calculate() -> dict:
     legacy_can_queue_total = 2 * 4096 * can_item_bytes
 
     require(compact_rx == 88874, "aggregate CAN wire calculation regression")
-    require(compact_total == 131222, "enabled product wire calculation regression")
-    require(enabled_records == 1086, "enabled product record calculation regression")
+    require(compact_total == 131513, "enabled product wire calculation regression")
+    require(enabled_records == 1095, "enabled product record calculation regression")
     require(dtcm_storage == 53248, "DTCM live FIFO calculation regression")
     require(
         normal_bytes >= live_fifo_required_bytes,

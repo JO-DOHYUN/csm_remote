@@ -440,6 +440,19 @@ void builtinCanCancellationTargetsOriginWithoutErasingTruth() {
         BuiltinCanTxCancelReason::HardSafety);
   CHECK(completions.items[1].cancel_reason ==
         BuiltinCanTxCancelReason::HardSafety);
+
+  completions.count = 0;
+  frame.origin = BuiltinCanTxOrigin::HostControl;
+  driver.next_request_mask = 1;
+  CHECK(owner.submit(frame, backend, 300).completion_tracked);
+  owner.requestCancellation(BuiltinCanTxOrigin::HostControl,
+                            BuiltinCanTxCancelReason::HostSessionFault, 301);
+  owner.serviceCompletions(302, true, 0, 0, 1);
+  CHECK(completions.count == 1);
+  CHECK(completions.items[0].code == BuiltinCanTxCompletionCode::Cancelled);
+  CHECK(completions.items[0].cancel_reason ==
+        BuiltinCanTxCancelReason::HostSessionFault);
+  CHECK(!owner.trackingFaultLatched());
 }
 
 struct FakeHostStream : Stream {

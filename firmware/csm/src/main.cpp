@@ -4445,6 +4445,16 @@ static uint8_t active_host_hw_slots() {
 #endif
 }
 
+static uint8_t active_control_hw_slots() {
+#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
+    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_REMOTE_CONTROL)
+  return builtin_can_tx_owner.activeJournalSlots();
+#else
+  return 0;
+#endif
+}
+
 static csm::board::can::BuiltinCanTxCancelReason to_hw_cancel_reason(
     csm::board::control::HostControlCloseReason reason) {
   using csm::board::can::BuiltinCanTxCancelReason;
@@ -4461,11 +4471,11 @@ static csm::board::can::BuiltinCanTxCancelReason to_hw_cancel_reason(
     case HostControlCloseReason::HardSafety:
       return BuiltinCanTxCancelReason::HardSafety;
     case HostControlCloseReason::FreshnessFault:
-      return BuiltinCanTxCancelReason::TrackingFault;
+      return BuiltinCanTxCancelReason::HostSessionFault;
     case HostControlCloseReason::None:
       return BuiltinCanTxCancelReason::None;
   }
-  return BuiltinCanTxCancelReason::TrackingFault;
+  return BuiltinCanTxCancelReason::HostSessionFault;
 }
 
 static void close_host_control_epoch(
@@ -5471,11 +5481,12 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     can_id_flags |= (1u << 30);
   }
 
-  const bool target_mcp2515 = (bus == BOARD_MCP2515_BUS_ID);
   const bool target_builtin_can = (bus == BOARD_BUILTIN_CAN_BUS_ID);
-  const bool supported_bus =
-      (target_mcp2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515 && BOARD_MCP2515_CONTROL_TX_ALLOWED) ||
-      (target_builtin_can && BOARD_ENABLE_HOST_CAN_TX_BUILTIN && BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED);
+  // Product Host raw control is supported only by the sole built-in FDCAN
+  // owner. The MCP2515 software TX-test queue is never a Host admission path.
+  const bool supported_bus = target_builtin_can &&
+      BOARD_ENABLE_HOST_CAN_TX_BUILTIN &&
+      BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED;
   if (!supported_bus) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
@@ -5548,38 +5559,6 @@ static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
     emit_board_event(EventHostCanTxRejected, safety_reason, host_can_tx_rejected_total);
     return;
   }
-
-#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
-  if (target_mcp2515) {
-    if (!can_backend_ok || mcp2515 == nullptr) {
-      host_can_tx_rejected_total++;
-      emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
-                       host_can_tx_request_total);
-      emit_board_event(EventHostCanTxRejected, ControlReasonCanNotReady, host_can_tx_rejected_total);
-      return;
-    }
-
-    if (!enqueue_mcp2515_tx(bus, can_id_flags, dlc, data)) {
-      host_can_tx_rejected_total++;
-      host_can_tx_transient_rejected_total++;
-      emit_control_ack(command_id, ControlAckRejected, ControlReasonQueueFull, bus, can_id_flags, dlc,
-                       host_can_tx_request_total);
-      if (host_can_tx_last_transient_reason != ControlReasonQueueFull) {
-        host_can_tx_last_transient_reason = ControlReasonQueueFull;
-        emit_board_event(EventHostCanTxRejected, ControlReasonQueueFull,
-                         host_can_tx_rejected_total);
-      }
-      return;
-    }
-
-    start_next_mcp2515_queued_tx();
-    host_can_tx_accepted_total++;
-    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
-                     host_can_tx_accepted_total);
-    safety_supervisor.noteControlTx(millis());
-    return;
-  }
-#endif
 
 #if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
   if (!target_builtin_can) {
@@ -5786,7 +5765,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         if (reason == ControlReasonOk &&
             !host_authority_gate.activate(
                 safety_supervisor.leaseAlive(now_ms),
-                host_control_authority_allowed(), active_host_hw_slots())) {
+                host_control_authority_allowed(), active_control_hw_slots())) {
           safety_supervisor.disarm(now_ms);
           reason = ControlReasonTxBusy;
         }
