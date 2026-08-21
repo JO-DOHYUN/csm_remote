@@ -1,0 +1,13 @@
+schema_version: 1
+id: host-threshold-qualification
+authority_level: L3
+production_authority: false
+baselines:
+  csm: 5c9f6f71ebb06320f8835c4115ddde03314a9762
+  android: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
+hypothesis: measured_host_and_transport_latency_can_define_bounded_product_thresholds
+temporary_change: exploratory_zero_thresholds_and_existing_observation_counters
+measurement: pending_authorized_device_and_external_can_run
+result: open
+promotion_gate: reviewed_value_then_product_constant_freeze_then_qualification_hil
+cleanup: freeze_reviewed_constants_or_remove_experimental_instrumentation

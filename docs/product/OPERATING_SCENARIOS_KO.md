@@ -1,97 +1,77 @@
-# CSM Remote 운영 시나리오
+# CSM Remote Operating Scenarios
 
-## 1. 부팅
+Authority: `OPERATOR OUTCOMES`
 
-M7 application은 위험한 driver보다 먼저 reset evidence와 retained recovery를
-복구하고 새 boot marker를 commit한다. safety inhibit 상태에서 시작하며 hard
-safety 허용, upstream autonomy의 명시적 `InactiveConfirmed`, RC neutral handoff,
-실제 vehicle mapping, authority/safety 입력, CAN backend가 모두 유효하기 전에는 local
-CAN TX를 허용하지 않는다. VSM 미연결은 RC 안전 판단을 바꾸지 않는다.
-초기화 순서는 `safe/inhibit -> reset/watchdog evidence -> safety/RC/CAN
-runtime -> canonical/USB -> Wi-Fi observer`다. Wi-Fi start 실패나 지연은
-제어 readiness를 막지 않는다.
+각 시나리오는 결과와 evidence를 소유한다. 현재 processor, timing, queue, CAN ID 또는
+함수 경로는 `../architecture/ACTIVE_ARCHITECTURE.yaml`과 L2 문서가 소유한다.
 
-## 2. RC 운용과 동시 관측
+## S1 안전한 부팅
 
-RC input은 M4에서 최신 sample로 M7에 전달된다. M7은 hard safety, upstream
-autonomy release, RC, service host 순서로 authority를 판정한다. 동시에 CAN
-evidence는 canonical publisher를 거쳐 Windows USB와 Android Wi-Fi에 전달된다.
-두 sink의 application queue와 lock은 독립적이다. 다만 Wi-Fi와 main은 같은 M7과
-전원 경로를 공유하므로 vendor driver·radio·power fault의 물리 격리는 별도 gate다.
+- Preconditions: 전원과 승인된 firmware bundle.
+- Input/action: 장치 부팅.
+- Expected: 출력은 safe/inhibited에서 시작하고 권한·safety·실행 경계가 준비된 뒤에만
+  control admission이 가능하다.
+- Failure: identity, backend, safety 또는 source가 불명확하면 fail closed한다.
+- Evidence: boot/session identity, capability, board health, explicit failure reason.
 
-## 3. 고부하 dual CAN + USB + Wi-Fi
+## S2 Production 동시 관측
 
-CAN ingest와 RC가 최고 우선순위를 가진다. publisher admission과 각 sink queue는 정적 한계를 가진다. 한계를 넘으면 정의된 우선순위로 drop/suppression하고 counters와 identity gap을 노출한다. 메모리를 무한 확장하거나 전체 pipeline을 멈추지 않는다.
+- Preconditions: vehicle evidence와 하나 이상의 observer route.
+- Input/action: RC/autonomy 운용 중 Windows/Android observer 연결·단절.
+- Expected: observer는 같은 canonical truth를 독립적으로 보고 어느 sink도 control이나
+  다른 sink를 막지 않는다.
+- Failure: slow/stalled/lost sink만 bounded 정책에 따라 degraded/closed된다.
+- Evidence: source/publish/session identity, sink epoch, sent/drop/high-water/close reason.
 
-## 4. Wi-Fi client 정지
+## S3 Service/HIL 제어 시작
 
-Android가 읽지 않거나 무선 품질이 저하되면 Wi-Fi sink queue만 포화된다.
-Wi-Fi sink는 앱 파일 ACK를 기다리거나 과거 backlog를 보존하지 않는다. 자체
-drop/timeout/close reason과 최초 손실 identity를 기록하고 미송신 frame을 제한
-시간 내 해제한 뒤 현재 Live로 복구한다. USB와 RC는 계속 동작한다.
+- Preconditions: 명시적 Service/HIL profile, compatible identity/capability, 유효한 authority,
+  lease, hard-safety와 CAN backend.
+- Input/action: operator가 ARM하고 상위 제어기가 명령을 요청한다.
+- Expected: 하나의 semantic owner와 하나의 physical execution owner만 유효하며, 각 요청은
+  권한·safety·frame admission을 거친다.
+- Failure: precondition 또는 authority가 모호하면 명시적으로 reject하고 active로 위장하지 않는다.
+- Evidence: profile/capability, authority/lease, request identity, admission ACK.
 
-## 5. Wi-Fi 재접속
+## S4 Service/HIL 실행 truth
 
-연결 종료 후 board backlog를 재생하지 않는다. 새 연결은 현재 full publish
-sequence의 새 `STREAM_SESSION` anchor와 sink epoch로 시작하고 현재 live
-stream을 받는다. Android는 epoch 변화와 identity gap을 손실로 기록한다.
+- Preconditions: S3 admission 가능.
+- Input/action: 상위 제어기가 차량 의미와 시퀀스를 생성한다.
+- Expected: CSM은 허용 frame을 의미 변환하지 않고 물리 경계에 전달한다. admission은 실제
+  실행 성공과 별도이며 실제 성공은 상관된 hardware evidence로만 판정한다.
+- Failure: busy, format, authority, safety 또는 backend failure는 정확한 단계와 이유로 남는다.
+- Evidence: acceptance/rejection, command terminal outcome, physical TX evidence, CAN diagnostics.
 
-## 6. USB 단절
+## S5 Host stale·disconnect·authority 전환
 
-USB CDC가 닫히거나 host가 읽지 않아도 Wi-Fi와 RC는 계속 동작한다. USB sink만 bounded drop과 epoch/counter를 갱신한다. USB 재연결 때문에 CAN 수신 queue나 Wi-Fi queue를 초기화하지 않는다.
+- Preconditions: Host가 active이거나 물리 작업이 terminal 전이다.
+- Input/action: lease/stale, transport epoch 종료, higher-priority authority 또는 DISARM.
+- Expected: 새 Host admission을 먼저 닫고 Host session/lease를 종료한다. pending hardware
+  work는 reasoned cancel/terminal truth로 정리한 뒤 다음 authority를 허용하며 overlap과
+  인위적인 dead zone을 모두 피한다.
+- Failure: unresolved physical work가 있으면 새 owner를 조기에 열지 않는다.
+- Evidence: session close, authority transition, cancellation reason, terminal outcome.
 
-## 7. CSM reset
+## S6 Hard-safety와 CAN failure
 
-boot/session identity가 바뀐다. 두 VSM은 이전 session과 새 session을 이어 붙이지
-않고 reset evidence로 분리한다. 단순 `seq` wrap과 reboot를 혼동하지 않는다.
-CSM은 이전 boot의 stable 여부, 마지막 progress, early-reset 누계를 backup SRAM에서
-복구한다. 이 값은 reset 진단 evidence이며 Wi-Fi startup을 차단하지 않는다.
-Wi-Fi 장애는 해당 sink의 bounded close/reconnect로 격리하고 RC·CAN·USB는 계속
-독립 동작한다.
+- Preconditions: 임의 control source active 가능.
+- Input/action: hard-safety inhibit, bus/backend/tracking failure.
+- Expected: 새 실행을 fail closed하고 가능한 범위에서 이미 소유한 작업의 HW outcome을
+  보존한다. 실행 불가능한 neutral을 전송했다고 주장하지 않는다.
+- Evidence: safety reason, inhibit/failure class, terminal outcome, board/CAN health.
 
-application이 보는 RCC raw flag는 bootloader가 이미 clear했을 수 있다. 따라서
-raw unknown, reset 간격, LED만으로 watchdog이나 power fault를 확정하지 않는다.
-정확한 reset source는 bootloader early latch 또는 외부 power/reset evidence가
-필요하다.
+## S7 Reset·reconnect·loss
 
-## 8. Service/HIL
+- Preconditions: observer 또는 control session 존재 가능.
+- Input/action: board reset, client reconnect, parser/drop/storage failure.
+- Expected: 새 identity/epoch로 경계를 명확히 하며 과거 state를 현재처럼 재사용하지 않는다.
+  loss나 partial capture를 정상으로 숨기지 않는다.
+- Evidence: boot/session/epoch transition, continuity gap, drop/reset/close/storage state.
 
-명시된 Full Instrumented artifact와 안전한 bench에서만 host 제어를 허용한다.
-상위 control SW는 N개 physical frame을 N개 `HostCanTxRequest`로 생성한다. CSM은
-각 request의 authority/lease/hard-safety와 static bus/ID/DLC/RTR를 판정하고 허용
-payload를 바꾸지 않은 채 실제 3-slot FDCAN FIFO에 즉시 한 번 admission한다. HW나
-tracking capacity가 없으면 현재 request를 명시적으로 reject하고 저장·overwrite·retry
-하지 않는다. generated repeat/count/neutral, semantic retry와 Host backlog replay가
-없다. Android가 nominal absolute 5/20/20 ms request timeline을 소유한다.
+## S8 종료와 검증
 
-source context, authority decision, `CONTROL_ACK`, terminal
-`CONTROL_TX_EVIDENCE`, `CAN_TX_RAW`, 외부 CAN analyzer를 함께 기록한다. ACK
-Accepted는 tracked FDCAN HW FIFO admission이지 physical bus TX 성공이 아니다.
-already-HW-owned
-request는 session loss에도 terminal outcome까지 추적하고 새 ARM은 그 closure를
-기다린다. production observer artifact로 같은 시험을 수행하지 않는다.
-
-CSM은 vehicle 의미, cadence나 stale-neutral을 생성하지 않는다. sender-time expiry와
-transport epoch가 stale backlog를 차단하고 route loss 시 lease가
-새 request를 막으며, message cessation을 안전하게 만드는 vehicle watchdog 또는
-독립 hard-safety가 HIL로 확인되지 않은 profile은 release하지 않는다.
-
-## 9. Reset 원인 분리 시험
-
-reset experiment artifact는 application-data CAN TX를 compile-time 차단하고 USB typed
-evidence를 유지한다. REF는 watchdog+full Wi-Fi, A는 watchdog+Wi-Fi Off, B는
-watchdog Off+full Wi-Fi, C는 watchdog+AP-only다. profile 사이에는 selector만
-바꾸고 source set, RC/CAN/USB 진단 경계를 같게 유지한다.
-
-각 run은 source/build identity, selector, boot sequence/session, 30초 stable marker,
-last progress, main gap, Wi-Fi phase, retained integrity와 CAN TX 0을 판정한다.
-한 profile의 180초 통과만으로 release를 승인하지 않고 반복 재현, fault injection,
-동시 부하와 장시간 soak로 이어간다.
-
-## 10. 제품 제어 승인 전 운용
-
-Production Remote profile의 vehicle mapper 기본값은 `None`이고 local CAN TX
-capability도 Off다. `0x007` MDPS mapping은 명시적 bench artifact에만 허용한다.
-upstream autonomy runtime wiring, 실제 차량 mapping,
-completion-correlated `CAN_TX_RAW`, 외부 analyzer HIL 전에는 RC data를 관측할 수
-있어도 차량 제어 제품으로 운용하지 않는다.
+- Preconditions: Service/HIL 또는 observer session active.
+- Input/action: 정상 stop, background/transport loss 또는 시험 종료.
+- Expected: 적용 가능한 safety closeout과 terminal evidence를 확인하고 실제로 실행한
+  build/device/HIL 범위만 판정한다.
+- Evidence: final authority state, terminal/physical evidence, capture finalization, gate report.

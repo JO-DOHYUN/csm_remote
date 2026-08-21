@@ -1,5 +1,9 @@
 # CSM 디버그·복구 아키텍처
 
+Authority: `L2 DEBUG/RECOVERY DOMAIN / BINDING IN IMPLEMENT / REVIEWABLE IN ARCH_CHANGE`
+
+현재 cross-repository owner/model은 `ACTIVE_ARCHITECTURE.yaml`이 소유한다.
+
 ## 목적
 
 CSM의 디버그 경계는 장애가 난 뒤에 측정용 코드를 다시 넣는 기능이 아니다.

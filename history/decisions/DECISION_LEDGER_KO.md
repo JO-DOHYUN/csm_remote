@@ -1,5 +1,10 @@
 # CSM Remote 결정 이력
 
+Classification: `HISTORY / NON-AUTHORITATIVE FOR CURRENT IMPLEMENTATION`
+
+현재 유효 decision route는 `ACTIVE_INDEX.md`가 소유한다. 이 ledger의 과거
+`Active` 표시는 당시 상태를 보존하며 현재 L1/L2를 직접 소유하지 않는다.
+
 ## D-001 단일 하네스 권위
 
 - 결정: 루트 `AGENTS.md`와 `BRIEF.md`에서 작업 문서 하나로 직접 라우팅한다.
@@ -788,3 +793,18 @@
 - Capacity: exact steady enabled schema is 1086 records/s and 131222 B/s. The
   old 120 kB/s claim is removed; 135 kB/s is unapproved. Descriptor/byte
   transient coverage must be re-frozen from measurement, not enlarged to pass.
+
+## D-039 Adopt Harness V2 authority layers and minimal default context
+
+- Date: 2026-08-21
+- Status: Active harness decision.
+- Baselines: CSM `5c9f6f71ebb06320f8835c4115ddde03314a9762`, Android
+  `fea18d9d5660d96cfa67e93e7e900ef9cceb62a6`.
+- Decision: one cross-repository Product Constitution owns L1 and one active
+  manifest owns current L2. Each repository owns a short CURRENT; Skills own
+  procedure; this ledger and snapshots are excluded from default context.
+- Guard boundary: Constitution, active-architecture conformance and experiment
+  leakage are separate failures. A current conformance failure is not by itself
+  a permanent product-invariant violation.
+- Runtime: harness/docs/tools only; control, wire, transport and physical behavior
+  are unchanged.

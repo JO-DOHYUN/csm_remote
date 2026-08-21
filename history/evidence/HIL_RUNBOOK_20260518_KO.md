@@ -1,5 +1,9 @@
 # HIL_RUNBOOK_KO
 
+Classification: `HISTORY / 2026-05 BENCH EVIDENCE / DO NOT EXECUTE AS CURRENT ROUTE`
+
+환경, record와 gate는 현재 active manifest/verification policy/tool에서 다시 확인한다.
+
 ## Minimum Verification
 - CAN flood must not create hidden drops. Drops must appear in counters/events.
 - Encoder pulse injection must expose miss, overflow, index, and fault evidence.

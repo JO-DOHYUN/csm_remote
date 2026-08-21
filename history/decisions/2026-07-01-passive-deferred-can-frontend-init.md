@@ -1,5 +1,7 @@
 # Passive Deferred CAN Front-End Init
 
+Classification: `HISTORY / SUPERSEDED BUILD PROFILE / NON-AUTHORITATIVE`
+
 ## Reason
 The field product must support two-bus ACK-capable observe after a stable host session, while USB power-up / CDC enumeration must not initialize or reconfigure the CAN front-end while the board is already attached to vehicle CAN.
 

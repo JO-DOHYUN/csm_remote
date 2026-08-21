@@ -1,5 +1,7 @@
 # Wi-Fi AP init S1 result — 2026-07-30
 
+Classification: `HISTORY EVIDENCE / NON-AUTHORITATIVE`
+
 ## Applied boundary
 
 - Portenta WHD `cyhal_sdio_send_cmd()` no longer enters `while (1)` on an SDIO

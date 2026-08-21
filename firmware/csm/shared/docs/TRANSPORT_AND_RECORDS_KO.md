@@ -10,7 +10,7 @@ active.
   encoded bytes. Four descriptors and 2,112 bytes are reserved for critical
   evidence, leaving a 252-record/47,040-byte normal envelope. It is a
   scheduling-jitter buffer, not a journal.
-- The enabled schema is generated exactly as 131,222 B/s and 1,086 records/s.
+- The enabled schema is generated exactly as 131,513 B/s and 1,095 records/s.
   Queue-coverage thresholds remain exploratory until measurement, constant
   freeze, and qualification HIL complete; no design-rate headroom is assumed.
 - 32,768 bytes or 192 records enters diagnostic pressure. Pressure recovers
@@ -409,15 +409,15 @@ Gap interpretation:
   publication. Use the nearest `STREAM_SESSION`, source counters, and sink
   counters to locate the loss.
 
-Current board baseline:
-- MCP2515 receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
+Current active Service/HIL board baseline:
+- feeder-UART receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
 - Portenta built-in CAN receive frames are emitted as `CAN_RX_SEGMENT` entries
   with `bus=1`.
 - `CAN_RX_RAW` remains protocol-compatible for older hosts/builds, but the
   high-load dual-channel build uses `CAN_RX_SEGMENT` for live RX uplink.
 - Successful Portenta built-in CAN writes emit `CAN_TX_RAW bus=1`.
 
-Current Mid Carrier MCP2515 CSM profile:
+Legacy Mid Carrier MCP2515 profile compatibility (HISTORY, not an active build route):
 - Profile major `3`.
 - `bus=0`: external MCP2515/TJA1050 on Mid Carrier `D7..D11` SPI pins,
   Classic CAN 2.0, `MCP_8MHZ`, `CAN_500KBPS`. The current high-load dual CSM
@@ -425,8 +425,7 @@ Current Mid Carrier MCP2515 CSM profile:
   `BOARD_CAN_SERIAL_DRAIN_BUDGET=512`.
 - `bus=0` emits `CAN_RX_SEGMENT` entries for received frames and `CAN_TX_RAW`
   for successful host-commanded or bench-test writes.
-- final dual-channel runtime env `portenta_h7_m7_mid_mcp2515_j4_dual_csm`
-  additionally exposes `bus=1`: Mid Carrier J4 CAN1 through onboard U2,
+- the retired dual-channel build additionally exposed `bus=1`: Mid Carrier J4 CAN1 through onboard U2,
   Classic CAN 2.0, 500 kbps. `bus=1` emits `CAN_RX_SEGMENT` entries and accepts
   audited allowlisted host-commanded writes.
 - The previous dual internal CAN0/CAN1 + TJA1051 target is deferred in this
@@ -540,14 +539,9 @@ Current `CONTROL_ACK` reasons:
 - `19..22 host_mono_ms u32`: sender monotonic expiry/replay evidence; never a
   CSM scheduling clock
 
-Current board host TX policy:
-- Accepted bus is profile-dependent. Profile major `1` accepts `bus=1` Portenta
-  built-in CAN. Profile major `3` accepts the buses whose `CAPABILITY`
-  descriptor has `control_tx_allowed=1`; the final dual CSM env accepts `bus=0`
-  MCP2515/TJA1050 and `bus=1` Mid Carrier J4/U2.
-- Accepted standard IDs: `0x503`, `0x510`, `0x511`, `0x512`, `0x513`.
-- Extended and RTR frames are rejected in this baseline.
-- `portenta_h7_m7_mid_mcp2515_j4_dual_csm_service_hil_wifi` instead uses a static
+Current active Service/HIL host TX policy:
+- Accepted bus is the built-in bus advertised by the active `CAPABILITY`.
+- `portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi` uses a static
   raw-frame allowlist: configured built-in bus, standard `0x005`, `0x007` or
   `0x364`, DLC8 and RTR false. Extended frames and the removed `0x100/0x200`
   adapter are not accepted.
@@ -634,7 +628,7 @@ Current board host TX policy:
   the queue's atomic producer/consumer cursors directly; it does not maintain a
   second cached snapshot that either side could overwrite out of order.
   Descriptor and byte capacity are independent compile/link-time gates. With
-  record 23 included the enabled mix is 1086 records/s; the previous 250 ms /
+  the current enabled records the mix is 1095 records/s; the previous 250 ms /
   197-record claim is invalid. Exploratory builds advertise transient coverage
   `0` and cannot qualify. A nonzero coverage interval is frozen only after
   measurement, at which point compile-time guards must prove both descriptor
@@ -1032,7 +1026,7 @@ State `0` is measurement-only and is not a release approval. Values move to
 state `1` only in the order exploratory measurement -> reviewed value decision
 -> product constant freeze -> qualification HIL. `120000 B/s` is retired and
 `135000 B/s` is not an approved envelope. The enabled steady schema computes
-1086 records/s and exactly 131222 B/s before qualification headroom is chosen.
+1095 records/s and exactly 131513 B/s before qualification headroom is chosen.
 
 The hardware fields above are advertised claims and artifact references. They
 do not by themselves prove vehicle-impact-free behavior. VSM may display them
@@ -1253,7 +1247,7 @@ The Wi-Fi call fields are recovered from a checksum-last dual-slot latch written
 immediately before and after vendor calls. An in-progress value localizes the
 last entered call boundary; it does not by itself prove the reset cause.
 
-Mid Carrier MCP2515 profile major `3` descriptor default:
+Legacy Mid Carrier MCP2515 profile-major `3` descriptor compatibility:
 - Passive Product and Full Instrumented both expose `bus_count=2` for the
   current vehicle product. One-bus passive builds are not product artifacts.
 - descriptor 0 describes `bus=0` MCP2515/TJA1050.
@@ -1261,10 +1255,7 @@ Mid Carrier MCP2515 profile major `3` descriptor default:
   Passive Product advertises this lane as ACK-capable observe-only after host
   session stability while keeping host TX/control disabled. Full Instrumented
   may advertise normal/ACK/TX capability for bench/HIL only.
-- role is build-profile driven. The default `portenta_h7_m7_mid_mcp2515_csm`
-  uses role `2` drive/control, while
-  `portenta_h7_m7_mid_mcp2515_csm_system` uses role `1` monitor/system on the
-  same physical MCP2515 channel. Qt/VMS must bind labels and control affordances
+- role was build-profile driven in the retired profiles. Consumers must bind labels and control affordances
   from this descriptor, not from the bus number.
 - physical backend `1` MCP2515, transceiver `1` TJA1050.
 - `rx_supported=1`, `tx_supported=1`, `control_tx_allowed=1` when
@@ -1275,13 +1266,13 @@ Mid Carrier MCP2515 profile major `3` descriptor default:
 - Classic CAN supported, CAN FD unsupported, max live DLC `8`, nominal bitrate
   `500000`, data bitrate `0`.
 
-Final CSM protocol freeze for VMS:
+Current CSM protocol freeze for VSM:
 - VMS must use transport `version=1` and the record IDs/payload sizes in this
   document without alternate live 20-byte modes.
 - VMS must parse `CAPABILITY` first and bind bus labels, backend, role, bitrate,
   and control permission from descriptors.
-- VMS may send `HOST_CAN_TX_REQUEST` only for allowlisted standard IDs
-  `0x503` and `0x510..0x513`, DLC `0..8`, no RTR, no extended frame.
+- VSM may send `HOST_CAN_TX_REQUEST` only in an explicitly control-capable profile
+  and must follow that profile's `CAPABILITY` plus the active static frame allowlist.
 - VMS must treat `CONTROL_ACK` as board decision evidence only. Service/HIL
   command terminal truth is record 23 schema 2; `CAN_TX_RAW` is the independent
   physical completion stream and is not payload-FIFO correlated to command ID.

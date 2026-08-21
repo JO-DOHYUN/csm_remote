@@ -2,9 +2,13 @@
 
 Updated: 2026-08-03
 
+Authority: `L2 DOMAIN ARCHITECTURE / BINDING IN IMPLEMENT / REVIEWABLE IN ARCH_CHANGE`
+
+Current cross-repository model은 `ACTIVE_ARCHITECTURE.yaml`과 함께 읽는다.
+
 이 문서는 현재 CSM 제품 데이터 경계의 권위 문서다. 과거 retained
 journal/APP ACK/replay 실험은
-`history/decisions/DECISION_LEDGER_KO.md`에만 남긴다.
+`history/decisions/DECISION_LEDGER_KO.md`에 HISTORY로만 남긴다.
 
 현재 상태는 `IMPLEMENTED CANDIDATE / RELEASE BLOCKED`다. 2026-08-03의
 transient-envelope 변경은 host 계약, 제품 build, 정확 artifact 업로드와 PC
@@ -64,9 +68,9 @@ J4 FDCAN CAN1 ----------------/                  |
 
 USB는 `192 descriptors / 40,960 encoded bytes`의 byte-ring FIFO를 사용한다.
 기존 8-record queue처럼 모든 slot에 최대 frame 크기를 고정 할당하지 않는다.
-135,000 B/s, 686 records/s 설계 envelope의 250 ms 유입과 최대 frame 하나는
-`34,273 B / 173 records`이며 두 차원 모두 정적으로 검증한다. USB host
-backpressure는 CAN ingest, canonical publisher와 Wi-Fi sink를 막지 않는다.
+현재 enabled schema 계산은 `131,513 B/s / 1,095 records/s`지만 transient
+coverage threshold는 exploratory 상태이며 product interval로 동결되지 않았다.
+USB host backpressure는 CAN ingest, canonical publisher와 Wi-Fi sink를 막지 않는다.
 실제 overflow는 `BOARD_HEALTH.usb_overflow`, canonical sequence gap과 sink
 counter로 숨김없이 판정한다.
 
@@ -74,10 +78,10 @@ counter로 숨김없이 판정한다.
 
 Wi-Fi queue는 `256 descriptors / 49,152 encoded bytes`의 bounded live
 FIFO다. 그중 `4 descriptors / 2,112 bytes`는 critical evidence에 예약되어
-normal admission은 `252 records / 47,040 bytes`다. 135,000 B/s 및 686 records/s
-설계 envelope에서 최대 encoded frame과 5 ms fallback 유입을 포함하고도
-250 ms transient를 흡수하도록 계산했다. 이는 단절 구간을 보존하는 journal이
-아니며 지속 처리량 부족을 숨기지 않는다.
+normal admission은 `252 records / 47,040 bytes`다. current threshold state는
+exploratory이고 transient coverage는 `0`으로 광고된다. 측정·review·constant
+freeze·qualification 전에는 이 queue에서 제품 지속 처리량이나 coverage interval을
+추론하지 않는다. 이는 단절 구간을 보존하는 journal이 아니며 지속 처리량 부족을 숨기지 않는다.
 
 - producer offer는 단 한 번의 nonblocking 시도만 한다.
 - positive socket return은 해당 byte를 즉시 소비한다. 완성 record는 즉시

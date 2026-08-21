@@ -1,0 +1,27 @@
+schema_version: 1
+authority_level: L2
+architecture_id: csm-d038_android-d043
+status: exploratory_candidate
+binding_in_mode: IMPLEMENT
+reviewable_in_mode: ARCH_CHANGE
+baselines:
+  csm: 5c9f6f71ebb06320f8835c4115ddde03314a9762
+  android: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
+  feeder: unresolved
+control:
+  physical_can_owner: csm_m7
+  host_execution_model: per_request_immediate_attempt
+  host_software_execution_backlog: false
+  hidden_retry: false
+  hidden_replay: false
+  service_hil_semantic_owner: android
+  nominal_request_clock_owner: android
+profiles:
+  production_vsm_control: false
+  service_hil_control: true
+evidence:
+  admission_equals_physical_success: false
+  physical_success_requires_hardware_evidence: true
+qualification:
+  threshold_state: exploratory
+  production_authority: false

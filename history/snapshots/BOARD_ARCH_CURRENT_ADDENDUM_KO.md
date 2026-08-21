@@ -1,5 +1,10 @@
 # BOARD_ARCH_CURRENT_ADDENDUM_KO
 
+Classification: `HISTORY / HARDWARE EVIDENCE / NON-AUTHORITATIVE`
+
+현재 architecture는 root `docs/architecture/ACTIVE_ARCHITECTURE.yaml`과 해당
+L2 문서가 소유한다.
+
 ## Purpose
 This addendum is the current CSM architecture correction for stale older notes in
 `BOARD_ARCH_KO.md`.
@@ -18,5 +23,5 @@ This addendum is the current CSM architecture correction for stale older notes i
 ## Stale Note Handling
 If `BOARD_ARCH_KO.md` says current code is still 20-byte only or lacks the basic
 host control path, treat that statement as historical context. Use the workspace
-`BRIEF.md`, root architecture documents, and
+`CURRENT.md`, root architecture documents, and
 `shared/docs/TRANSPORT_AND_RECORDS_KO.md` for current implementation decisions.
