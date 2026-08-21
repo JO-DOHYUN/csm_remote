@@ -50,20 +50,32 @@ EXPECTED_ENVS = {
 
 MANIFEST_REQUIRED = {
     "authority_level": "L2",
-    "architecture_id": "csm-d038_android-d043",
-    "physical_can_owner": "csm_m7",
-    "host_execution_model": "per_request_immediate_attempt",
+    "architecture_id": "csm-hno1-m4-control-island-rev-b",
+    "physical_can_owner": "csm_m4_control_island",
+    "hard_safety_owner": "csm_m4_control_island",
+    "host_semantic_owner": "android_vsm",
+    "remote_semantic_owner": "csm_m7",
+    "global_source_authority_owner": "csm_m7",
+    "nominal_request_clock_owner": "csm_m4_tim4",
+    "fdcan1_owner": "csm_m4_control_island",
+    "host_execution_model": "coherent_latest_state",
+    "latest_state_depth": "1",
     "host_software_execution_backlog": "false",
     "hidden_retry": "false",
     "hidden_replay": "false",
-    "service_hil_semantic_owner": "android",
-    "nominal_request_clock_owner": "android",
+    "source_mixing": "forbidden",
+    "authority_handoff": "quiescent_cancel_terminal_then_activate",
+    "strict_n_shot_owner": "csm_m4_generic_success_budget",
+    "control_slots": "2",
+    "integrity": "sequence_crc32_boot_identity",
+    "raw_can_ring_capacity": "512",
     "production_vsm_control": "false",
     "service_hil_control": "true",
     "admission_equals_physical_success": "false",
     "physical_success_requires_hardware_evidence": "true",
     "threshold_state": "exploratory",
     "production_authority": "false",
+    "fail_closed_until_frozen": "true",
 }
 
 
@@ -132,7 +144,7 @@ if set(names) != EXPECTED_SKILLS:
 manifest_text = read("docs/architecture/ACTIVE_ARCHITECTURE.yaml")
 manifest: dict[str, str] = {}
 for line in manifest_text.splitlines():
-    match = re.match(r"^\s*([a-z_]+):\s*(\S.*?)\s*$", line)
+    match = re.match(r"^\s*([a-z0-9_]+):\s*(\S.*?)\s*$", line)
     if match:
         manifest[match.group(1)] = match.group(2)
 for key, expected in MANIFEST_REQUIRED.items():

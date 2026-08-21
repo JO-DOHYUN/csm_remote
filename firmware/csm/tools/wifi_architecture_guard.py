@@ -587,10 +587,14 @@ if "bool WifiTcpSink::isolateMissedSessionAnchor(" not in sink:
     fail("Wi-Fi facade lacks requested-anchor epoch isolation")
 
 wifi_begin = main.index("wifi_tcp_sink.begin(wifi_sink_config)")
+ipc_begin = main.index("initializeControlIpcForM7(")
+source_manager_begin = main.index("control_source_manager.begin(")
 remote_begin = main.index("remote_control_runtime.begin(")
-can_begin = main.index("builtin_can_tx_owner.begin(")
-if wifi_begin < remote_begin or wifi_begin < can_begin:
-    fail("Wi-Fi worker starts before RC/CAN control readiness")
+if any(
+    control_begin > wifi_begin
+    for control_begin in (ipc_begin, source_manager_begin, remote_begin)
+):
+    fail("Wi-Fi worker starts before REV.B control IPC/source readiness")
 
 close_client = worker[
     worker.index("void WifiSocketWorker::closeClient(") :

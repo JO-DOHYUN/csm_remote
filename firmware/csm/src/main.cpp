@@ -14,11 +14,11 @@
 #include "board/HostDownlinkParser.h"
 #include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
-#include "board/can/BuiltinFdcanDiagnostics.h"
-#include "board/can/BuiltinCanTxOwner.h"
 #include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlAuthorityGate.h"
 #include "board/control/RemoteControlRuntime.h"
+#include "board/control_island/ControlIslandSharedMemory.h"
+#include "board/control_island/ControlSourceManager.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
@@ -427,7 +427,7 @@
 // A remote input pipeline is not, by itself, a vehicle-control capability.
 // Product/local CAN TX is advertised only when an explicit vehicle mapping is
 // selected and the diagnostic safety interlock has not suppressed output.
-#define BOARD_REMOTE_LOCAL_CAN_TX_ENABLED \
+#define BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED \
   (BOARD_ENABLE_REMOTE_CONTROL && \
    (BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
     BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING || \
@@ -468,17 +468,27 @@
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
 #define BOARD_APPLICATION_CAN_DATA_TX_ENABLED                               \
   (BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_ENABLE_MCP2515_TX_TEST ||          \
-   BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)
+   BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED)
 #define BOARD_ENABLE_BUILTIN_CAN_LANE \
   (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_RX || \
-   BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL)
+   BOARD_ENABLE_HOST_CAN_TX_BUILTIN)
 
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS && !BOARD_ENABLE_BUILTIN_CAN_LANE
 #error "Runtime diagnostics require the built-in FDCAN lane"
 #endif
 
 #ifndef BOARD_ENABLE_HOST_DOWNLINK
-#define BOARD_ENABLE_HOST_DOWNLINK BOARD_ENABLE_HOST_CAN_TX_ANY
+#define BOARD_ENABLE_HOST_DOWNLINK 0
+#endif
+
+#ifndef BOARD_ENABLE_CONTROL_ISLAND
+#define BOARD_ENABLE_CONTROL_ISLAND 0
+#endif
+
+#ifndef BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS
+// Zero means that the M4 readiness observation is not qualified. M7 therefore
+// publishes permit_mask=0 until HIL freezes the bound.
+#define BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS 0UL
 #endif
 
 #ifndef BOARD_HOST_DOWNLINK_TRANSPORT_WIFI
@@ -576,7 +586,7 @@
      BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
      BOARD_ENABLE_HOST_CAN_TX_MCP2515 || BOARD_ENABLE_HOST_DOWNLINK || \
      BOARD_ENABLE_MCP2515 || BOARD_ENABLE_MCP2515_INIT || \
-     !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED)
+     !BOARD_ENABLE_CONTROL_ISLAND || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED)
 #error "Product vehicle command mapping violates the feeder/J4 RC contract"
 #endif
 
@@ -585,9 +595,9 @@
      !BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS || !BOARD_ENABLE_REMOTE_CONTROL || \
      !BOARD_ENABLE_REMOTE_AUTHORITY || !BOARD_HW_PROFILE_MID_FEEDER_UART || \
      !BOARD_ENABLE_FEEDER_UART || BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
-     BOARD_ENABLE_MDPS_BENCH_MAPPING || !BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+     BOARD_ENABLE_MDPS_BENCH_MAPPING || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
      !BOARD_ENABLE_HOST_DOWNLINK || !BOARD_HOST_DOWNLINK_TRANSPORT_WIFI || \
-     !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED || \
+     !BOARD_ENABLE_CONTROL_ISLAND || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED || \
      !BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)
 #error "Service/HIL vehicle mapping violates the feeder/J4 bench contract"
 #endif
@@ -666,8 +676,8 @@
 #if BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_BUILTIN_CAN_TX_TEST
 #error "Remote Product must compile out CAN TX test paths"
 #endif
-#if !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
-#error "Remote Product requires the built-in vehicle CAN control lane"
+#if !BOARD_ENABLE_CONTROL_ISLAND || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#error "Remote Product requires the M4 control island and forbids M7 CAN TX ownership"
 #endif
 #endif
 
@@ -678,8 +688,9 @@
 #if !BOARD_ENABLE_REMOTE_CONTROL || !BOARD_ENABLE_REMOTE_AUTHORITY
 #error "Service/HIL Wi-Fi requires the RC authority boundary"
 #endif
-#if !BOARD_ENABLE_HOST_CAN_TX_BUILTIN || !BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
-#error "Service/HIL Wi-Fi requires the J4 built-in CAN control lane"
+#if !BOARD_ENABLE_CONTROL_ISLAND || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
+    BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED
+#error "Service/HIL Wi-Fi requires the M4 control island and forbids M7 CAN TX ownership"
 #endif
 #endif
 
@@ -959,14 +970,23 @@ static uint32_t pending_can_segment_enqueue_fail_frames = 0;
 static uint32_t host_frame_crc_failed_total = 0;
 static uint32_t host_heartbeat_total = 0;
 static uint32_t host_control_session_total = 0;
-static uint32_t host_can_tx_request_total = 0;
+static uint32_t host_control_state_request_total = 0;
 static uint32_t __attribute__((unused)) host_can_tx_accepted_total = 0;
 static uint32_t host_can_tx_rejected_total = 0;
 static uint32_t host_can_tx_transient_rejected_total = 0;
-static uint8_t host_can_tx_last_transient_reason = 0xFFu;
 static csm::board::control::HostCommandFreshness host_command_freshness;
 static bool host_command_freshness_ok = false;
 static csm::board::control::HostControlAuthorityGate host_authority_gate;
+static csm::board::control_island::ControlSourceManager control_source_manager;
+static csm::board::control_island::ControlHealthPayload control_island_health = {};
+static uint32_t control_island_health_sequence = 0;
+static uint32_t control_island_health_seen_ms = 0;
+static uint32_t control_snapshot_publish_total = 0;
+static uint32_t control_snapshot_publish_failed_total = 0;
+static uint32_t last_control_snapshot_publish_ms = 0;
+static uint32_t last_control_health_emit_ms = 0;
+static uint32_t host_control_lease_sequence = 0;
+static bool control_island_health_valid = false;
 
 static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
@@ -1044,51 +1064,6 @@ struct Mcp2515ServiceState {
 };
 
 static Mcp2515ServiceState mcp_service = {};
-#endif
-
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-using ProductBuiltinCan = csm::board::can::BuiltinFdcanCan;
-alignas(ProductBuiltinCan) static uint8_t
-    builtin_can_storage[sizeof(ProductBuiltinCan)];
-static ProductBuiltinCan* builtin_can = nullptr;
-static csm::board::can::BuiltinFdcanDiagnostics builtin_fdcan_diagnostics;
-
-static bool construct_builtin_can() {
-  if (builtin_can != nullptr) return builtin_fdcan_diagnostics.valid();
-  builtin_can =
-      new (builtin_can_storage) ProductBuiltinCan(PIN_CAN0_RX, PIN_CAN0_TX);
-  return builtin_fdcan_diagnostics.attach(*builtin_can);
-}
-
-static mbed::CAN& builtin_can_ref() { return *builtin_can; }
-static bool builtin_can_tx_ok = false;
-#endif
-
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-static uint32_t builtin_can_tx_total = 0;
-static uint32_t builtin_can_tx_failed_total = 0;
-static uint32_t builtin_can_tx_cancelled_total = 0;
-static uint32_t builtin_can_tx_hardware_failure_total = 0;
-static uint32_t builtin_can_tx_tracking_failure_total = 0;
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-static csm::board::can::BuiltinCanTxOwner builtin_can_tx_owner;
-static bool builtin_can_tx_inhibit_latched = false;
-#endif
-#endif
-
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-static bool builtin_can_runtime_ready_for_health() {
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-    BOARD_ENABLE_REMOTE_CONTROL
-  return builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
-#else
-  return builtin_can_tx_ok;
-#endif
-}
-#endif
-
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-static uint32_t last_builtin_can_tx_ms = 0;
 #endif
 
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -1693,7 +1668,7 @@ static uint8_t firmware_profile_id() {
 static void discard_can_queue_for_session_quarantine();
 static void set_can_observe_mode_for_session(bool enabled, bool force = false);
 static bool init_can_backend();
-static bool __attribute__((unused)) init_builtin_can_lane();
+static bool control_island_runtime_ready(uint32_t now_ms);
 
 static uint8_t vehicle_impact_state() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -2215,85 +2190,6 @@ static void service_runtime_diagnostics() {
 }
 #endif
 
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-static csm::board::can::BuiltinCanTxDriverResult builtin_can_driver_write(
-    void*, const csm::board::can::BuiltinCanTxFrame& frame,
-    uint32_t submission_sequence) {
-  const bool extended = (frame.can_id_flags & (1u << 29)) != 0;
-  const uint32_t can_id =
-      frame.can_id_flags & (extended ? 0x1FFFFFFFu : 0x7FFu);
-  const mbed::CANMessage message(
-      can_id, frame.data, frame.dlc, CANData,
-      extended ? CANExtended : CANStandard);
-  latch_passive_violation(kPassiveViolationCanTxCalled);
-  const uint32_t write_started_us = micros();
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_before_can_write(frame.can_id_flags);
-#endif
-  csm::board::can::BuiltinCanTxDriverResult write_result;
-  write_result.driver_result = builtin_can_ref().write(message);
-  write_result.driver_sequence = submission_sequence;
-  write_result.write_duration_us = micros() - write_started_us;
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_after_can_write(write_started_us,
-                                     write_result.driver_result);
-#endif
-  if (write_result.driver_result > 0) {
-    const csm::board::can::BuiltinFdcanSnapshot snapshot =
-        builtin_fdcan_diagnostics.snapshot();
-    if (snapshot.valid) {
-      write_result.request_mask = snapshot.latest_tx_request_mask;
-    }
-  }
-  return write_result;
-}
-
-static csm::board::can::BuiltinCanTxCancelResult builtin_can_driver_cancel(
-    void*, uint32_t request_mask) {
-  csm::board::can::BuiltinCanTxCancelResult result;
-  result.driver_result =
-      builtin_fdcan_diagnostics.abortTxRequest(request_mask);
-  result.request_accepted =
-      result.driver_result == static_cast<int32_t>(HAL_OK);
-  return result;
-}
-
-static void service_builtin_can_tx_completions() {
-  if (!builtin_can_tx_owner.configured()) return;
-  // Capture time before the register snapshot. A completion that occurs while
-  // the snapshot is read must not be classified against a later deadline.
-  const uint32_t now_us = micros();
-  const csm::board::can::BuiltinFdcanSnapshot snapshot =
-      builtin_fdcan_diagnostics.snapshot();
-  builtin_can_tx_owner.serviceCompletions(
-      now_us, snapshot.valid, snapshot.txbrp, snapshot.txbto,
-      snapshot.txbcf);
-}
-
-static csm::board::can::BuiltinCanTxOutcome submit_builtin_can_frame(
-    uint8_t bus, uint32_t can_id_flags, uint8_t dlc, const uint8_t* data,
-    csm::board::can::BuiltinCanTxOrigin origin,
-    const csm::board::can::CanBackendState& backend,
-    uint32_t command_id = 0) {
-  service_builtin_can_tx_completions();
-  csm::board::can::BuiltinCanTxFrame frame;
-  frame.command_id = command_id;
-  frame.bus = bus;
-  frame.can_id_flags = can_id_flags;
-  frame.dlc = dlc;
-  frame.origin = origin;
-  if (data != nullptr && dlc <= sizeof(frame.data)) {
-    memcpy(frame.data, data, dlc);
-  }
-  csm::board::can::CanBackendState effective_backend = backend;
-  effective_backend.ready =
-      effective_backend.ready && !builtin_can_tx_inhibit_latched;
-  return builtin_can_tx_owner.submit(frame, effective_backend, micros());
-}
-#endif
-
 #if BOARD_ENABLE_FEEDER_UART
 static bool feeder_source_operational(uint64_t now_mono_us) {
   if (!feeder_uart_ready || !feeder_session_announced ||
@@ -2326,9 +2222,9 @@ static bool required_can_lanes_ok() {
   any_required = true;
   all_ready = all_ready && feeder_source_operational(mono64_us());
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   any_required = true;
-  all_ready = all_ready && builtin_can_runtime_ready_for_health();
+  all_ready = all_ready && control_island_runtime_ready(millis());
 #endif
   return any_required && all_ready;
 }
@@ -2678,13 +2574,11 @@ static void emit_capability() {
 #if BOARD_ENABLE_FEEDER_UART
   lane_flags |= (1u << 0);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_RX
+#if BOARD_ENABLE_CONTROL_ISLAND
   lane_flags |= (1u << 1);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
+#if BOARD_ENABLE_CONTROL_ISLAND
   lane_flags |= (1u << 2);
-#endif
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
   lane_flags |= (1u << 3);
 #endif
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -2699,10 +2593,10 @@ static void emit_capability() {
   config.lane_capability_flags = lane_flags;
 
   uint8_t limitation_flags = 0;
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   limitation_flags |= (1u << 0);
 #endif
-#if BOARD_ENABLE_HOST_CAN_TX_ANY || BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
+#if BOARD_ENABLE_CONTROL_ISLAND
   limitation_flags |= (1u << 1);
 #endif
 #if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_MCP2515_TX_TEST
@@ -2715,7 +2609,7 @@ static void emit_capability() {
   config.include_v2 = true;
   config.include_v3 = true;
 #if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_FEEDER_UART
-  config.bus_count = BOARD_ENABLE_BUILTIN_CAN_LANE ? 2 : 1;
+  config.bus_count = BOARD_ENABLE_CONTROL_ISLAND ? 2 : 1;
 #else
   config.bus_count = 2;
 #endif
@@ -2731,6 +2625,12 @@ static void emit_capability() {
 #if BOARD_ENABLE_REMOTE_CONTROL
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::RemoteControlState));
+#endif
+#if BOARD_ENABLE_CONTROL_ISLAND
+  config.supported_uplink_records |=
+      (1u << static_cast<uint8_t>(RecordType::ControlIslandHealth)) |
+      (1u << static_cast<uint8_t>(RecordType::CanTxRaw)) |
+      (1u << static_cast<uint8_t>(RecordType::ControlAck));
 #endif
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   config.supported_uplink_records |=
@@ -2753,13 +2653,14 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::ControlAck)) |
       (1u << static_cast<uint8_t>(RecordType::ControlTxEvidence));
 #endif
-#if BOARD_REMOTE_LOCAL_CAN_TX_ENABLED
+#if BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::CanTxRaw));
 #endif
 #if BOARD_ENABLE_HOST_DOWNLINK
   config.supported_downlink_records =
-      (1u << static_cast<uint8_t>(RecordType::HostCanTxRequest)) |
+      (1u << static_cast<uint8_t>(RecordType::HostControlStateV2)) |
+      (1u << static_cast<uint8_t>(RecordType::HostControlNShot)) |
       (1u << static_cast<uint8_t>(RecordType::HostHeartbeat)) |
       (1u << static_cast<uint8_t>(RecordType::HostControlSession)) |
       (1u << static_cast<uint8_t>(RecordType::HostQueryCapability)) |
@@ -2802,7 +2703,7 @@ static void emit_capability() {
   config.profile_lock_state = kProfileLockCompileTime;
   config.vehicle_impact_state = vehicle_impact_state();
   config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
-  config.control_path = BOARD_REMOTE_LOCAL_CAN_TX_ENABLED ? 2 :
+  config.control_path = BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED ? 3 :
       (BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0);
   if (!(BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
         BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)) {
@@ -2836,17 +2737,17 @@ static void emit_capability() {
   config.host_absent_gap_total = host_absent_gap_total;
   config.pre_session_payload_replay_total = pre_session_payload_replay_total;
   config.control_schema = csm::kHostControlSchema;
-  config.terminal_evidence_schema = csm::kControlTxEvidenceSchema;
+  config.terminal_evidence_schema = csm::kControlIslandHealthSchema;
   config.threshold_qualification =
       host_command_freshness.timingQualified() &&
-              BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US != 0 &&
+              BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS != 0 &&
               BOARD_USB_TRANSIENT_COVERAGE_MS != 0 &&
               BOARD_WIFI_TRANSIENT_COVERAGE_MS != 0
           ? csm::kThresholdQualificationFrozen
           : csm::kThresholdQualificationExploratory;
-  config.hardware_tx_slots = csm::board::can::BuiltinCanTxOwner::kJournalSlots;
+  config.hardware_tx_slots = csm::board::control_island::kLaneCount;
   config.host_software_retention = 0;
-  config.hw_pending_stale_us = BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US;
+  config.hw_pending_stale_us = 0;
   config.heartbeat_lag_ms = BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
   config.command_age_ms = BOARD_HOST_CAN_TX_MAX_AGE_MS;
   config.future_tolerance_ms = BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS;
@@ -2859,10 +2760,18 @@ static void emit_capability() {
   config.admission_reject_total =
       host_can_tx_rejected_total - host_can_tx_transient_rejected_total;
   config.transient_reject_total = host_can_tx_transient_rejected_total;
-  config.intentional_cancel_total = builtin_can_tx_cancelled_total;
-  config.hardware_failure_total = builtin_can_tx_hardware_failure_total;
-  config.tracking_failure_total = builtin_can_tx_tracking_failure_total;
-  config.tx_complete_total = builtin_can_tx_total;
+  config.intentional_cancel_total = 0u;
+  config.hardware_failure_total = control_island_health.bus_off_count;
+  config.tracking_failure_total = 0u;
+  config.tx_complete_total = 0u;
+  for (uint8_t lane = 0;
+       lane < csm::board::control_island::kLaneCount; ++lane) {
+    config.intentional_cancel_total +=
+        control_island_health.lanes[lane].cancel_count;
+    config.tracking_failure_total +=
+        control_island_health.lanes[lane].tracking_fault;
+    config.tx_complete_total += control_island_health.lanes[lane].tx_success;
+  }
 #if BOARD_TARGET_INTERNAL_CAN_LANE0 && !BOARD_ENABLE_INTERNAL_CAN_LANE0_BACKEND
   config.capability_v2_flags |= (1u << 2);
 #endif
@@ -2893,20 +2802,15 @@ static void emit_capability() {
       (BOARD_MCP2515_LISTEN_ONLY_BY_DEFAULT ? 0 : 1);
   config.bus_error_frame_capability[0] = config.bus_ack_capability[0];
   config.bus_transceiver_reset_safe[0] = BOARD_PASSIVE_TRANSCEIVER_RESET_SAFE ? 1 : 0;
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
       BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
-      BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
-      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
-       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
-      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
-       (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
-       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
-        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
+      control_island_health_valid ? 1 : 0,
+      1,
+      control_island_runtime_ready(millis()) ? 1 : 0,
       0,
       0);
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -2937,20 +2841,15 @@ static void emit_capability() {
   config.bus_ack_capability[0] = feeder_operational ? 1 : 0;
   config.bus_error_frame_capability[0] = config.bus_ack_capability[0];
   config.bus_transceiver_reset_safe[0] = 1;
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   config.buses[1] = make_capability_bus_descriptor(
       BOARD_BUILTIN_CAN_BUS_ID,
       BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
-      BOARD_ENABLE_BUILTIN_CAN_RX ? 1 : 0,
-      (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
-       BOARD_REMOTE_LOCAL_CAN_TX_ENABLED) ? 1 : 0,
-      (BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED &&
-       (BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH) &&
-       (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_BUILTIN_CAN_TX_TEST ||
-        BOARD_REMOTE_LOCAL_CAN_TX_ENABLED)) ? 1 : 0,
+      control_island_health_valid ? 1 : 0,
+      1,
+      control_island_runtime_ready(millis()) ? 1 : 0,
       0,
       0);
   config.bus_mode[1] = kBusModeNormal;
@@ -3495,136 +3394,102 @@ static void __attribute__((unused)) emit_can_tx_raw(uint8_t bus, uint32_t can_id
   emit_record(RecordType::CanTxRaw, payload, sizeof(payload));
 }
 
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-static void increment_builtin_can_counter(uint32_t* counter) {
-  if (counter != nullptr && *counter != UINT32_MAX) ++(*counter);
+static void encode_fdcan_snapshot(
+    uint8_t* payload, uint16_t offset,
+    const csm::board::control_island::FdcanRawSnapshot& snapshot) {
+  const uint32_t values[10] = {
+      snapshot.cccr, snapshot.psr, snapshot.ecr, snapshot.txfqs,
+      snapshot.txbrp, snapshot.txbto, snapshot.txbcf, snapshot.ir,
+      snapshot.hal_state, snapshot.hal_error};
+  for (uint8_t index = 0; index < 10u; ++index) {
+    wr_u32_le(&payload[offset + index * 4u], values[index]);
+  }
 }
 
-static void emit_host_control_tx_evidence(
-    const csm::board::can::BuiltinCanTxFrame& frame, uint8_t outcome,
-    csm::board::can::BuiltinCanTxCancelReason cancel_reason,
-    csm::board::can::BuiltinCanTxCompletionCode completion_code,
-    uint32_t submission_sequence, int32_t driver_result,
-    uint32_t request_mask) {
-  uint8_t payload[csm::kControlTxEvidencePayloadLen] = {};
-  wr_u64_le(&payload[csm::kControlTxEvidenceMonoUsOffset], mono64_us());
-  wr_u32_le(&payload[csm::kControlTxEvidenceCommandIdOffset],
-            frame.command_id);
-  wr_u32_le(&payload[csm::kControlTxEvidenceSubmissionSequenceOffset],
-            submission_sequence);
-  payload[csm::kControlTxEvidenceOutcomeOffset] = outcome;
-  payload[csm::kControlTxEvidenceOriginOffset] =
-      static_cast<uint8_t>(frame.origin);
-  payload[csm::kControlTxEvidenceBusOffset] = frame.bus;
-  payload[csm::kControlTxEvidenceDlcOffset] = frame.dlc;
-  wr_u32_le(&payload[csm::kControlTxEvidenceCanIdFlagsOffset],
-            frame.can_id_flags);
-  memcpy(&payload[csm::kControlTxEvidenceDataOffset], frame.data,
-         sizeof(frame.data));
-  wr_i32_le(&payload[csm::kControlTxEvidenceDriverResultOffset],
-            driver_result);
-  wr_u32_le(&payload[csm::kControlTxEvidenceRequestMaskOffset], request_mask);
-  payload[csm::kControlTxEvidenceCancelReasonOffset] =
-      static_cast<uint8_t>(cancel_reason);
-  payload[csm::kControlTxEvidenceCompletionCodeOffset] =
-      static_cast<uint8_t>(completion_code);
-  payload[csm::kControlTxEvidenceSchemaOffset] =
-      csm::kControlTxEvidenceSchema;
-  emit_record(RecordType::ControlTxEvidence, payload, sizeof(payload));
-}
-
-static void builtin_can_tx_completion(
-    void*, const csm::board::can::BuiltinCanTxCompletion& completion) {
-  const bool cancelled = completion.terminal &&
-      completion.code ==
-          csm::board::can::BuiltinCanTxCompletionCode::Cancelled;
-  const bool hardware_failure = cancelled &&
-      (completion.cancel_reason ==
-           csm::board::can::BuiltinCanTxCancelReason::None ||
-       completion.cancel_reason ==
-           csm::board::can::BuiltinCanTxCancelReason::DeadlineExpired);
-  const bool intentional_cancel = cancelled && !hardware_failure &&
-      completion.cancel_reason !=
-          csm::board::can::BuiltinCanTxCancelReason::TrackingFault;
-  const bool tracking_failure = completion.terminal &&
-      !completion.transmitted() && !intentional_cancel && !hardware_failure;
-  if (completion.transmitted()) {
-    increment_builtin_can_counter(&builtin_can_tx_total);
-    emit_can_tx_raw(completion.frame.bus, completion.frame.can_id_flags,
-                    completion.frame.dlc, completion.frame.data,
-                    builtin_can_tx_total, builtin_can_tx_failed_total);
-  } else if (intentional_cancel) {
-    increment_builtin_can_counter(&builtin_can_tx_cancelled_total);
-  } else if (hardware_failure && !completion.failure_previously_reported) {
-    increment_builtin_can_counter(&builtin_can_tx_failed_total);
-    increment_builtin_can_counter(&builtin_can_tx_hardware_failure_total);
-    emit_board_event(EventBuiltinCanTxFailed,
-                     static_cast<uint16_t>(completion.code) << 8u,
-                     builtin_can_tx_failed_total);
-  } else if (tracking_failure && !completion.failure_previously_reported) {
-    increment_builtin_can_counter(&builtin_can_tx_failed_total);
-    increment_builtin_can_counter(&builtin_can_tx_tracking_failure_total);
-    const uint16_t detail =
-        (completion.terminal ? 0u : 0x8000u) |
-        (static_cast<uint16_t>(completion.code) << 8u) |
-        static_cast<uint16_t>(completion.request_mask & 0xFFu);
-    emit_board_event(EventBuiltinCanTxFailed, detail,
-                     builtin_can_tx_failed_total);
-  }
-  if (completion.terminal && completion.frame.origin ==
-      csm::board::can::BuiltinCanTxOrigin::HostControl) {
-    const uint8_t outcome = completion.transmitted()
-        ? csm::kControlTxOutcomeTransmitted
-        : (intentional_cancel
-               ? csm::kControlTxOutcomeCancelled
-               : (hardware_failure ? csm::kControlTxOutcomeHardwareFailure
-                                   : csm::kControlTxOutcomeTrackingFailure));
-    emit_host_control_tx_evidence(
-        completion.frame, outcome, completion.cancel_reason,
-        completion.code,
-        completion.submission_sequence, completion.driver_result,
-        completion.request_mask);
-  }
-
-  // DeadlineExceededPending is not a terminal result: TXBTO can still prove
-  // that the frame won arbitration while cancellation was requested.
-  if (hardware_failure || tracking_failure) {
-    builtin_can_tx_inhibit_latched = true;
-    builtin_can_tx_owner.requestCancellationAll(
-        csm::board::can::BuiltinCanTxCancelReason::TrackingFault,
-        completion.terminal_us);
-  }
-#if BOARD_ENABLE_REMOTE_CONTROL
-  if (completion.frame.origin ==
-      csm::board::can::BuiltinCanTxOrigin::RemoteControl) {
-    if (completion.transmitted()) {
-      remote_control_runtime.noteCanTxCompletion(millis(), true);
-    } else if (hardware_failure || tracking_failure) {
-      remote_control_runtime.noteCanTxCompletion(millis(), false);
+static void emit_control_island_health() {
+  uint8_t payload[csm::kControlIslandHealthPayloadLen] = {};
+  wr_u64_le(&payload[csm::kControlIslandHealthMonoUsOffset], mono64_us());
+  payload[csm::kControlIslandHealthSchemaOffset] =
+      csm::kControlIslandHealthSchema;
+  wr_u16_le(&payload[csm::kControlIslandHealthPayloadLenOffset],
+            csm::kControlIslandHealthPayloadLen);
+  wr_u32_le(&payload[csm::kControlIslandHealthSchemaIdOffset],
+            control_island_health.schema_id);
+  wr_u32_le(&payload[csm::kControlIslandHealthWireContractIdOffset],
+            control_island_health.wire_contract_id);
+  wr_u32_le(&payload[csm::kControlIslandHealthMemoryLayoutIdOffset],
+            control_island_health.memory_layout_id);
+  wr_u32_le(&payload[csm::kControlIslandHealthM4BootIdOffset],
+            control_island_health.m4_boot_id);
+  wr_u32_le(&payload[csm::kControlIslandHealthSequenceOffset],
+            control_island_health.health_sequence);
+  wr_u32_le(&payload[csm::kControlIslandHealthFlagsOffset],
+            control_island_health.flags);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7PublishSeenOffset],
+            control_island_health.m7_publish_sequence_seen);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7PublishAgeOffset],
+            control_island_health.m7_publish_age_local_ms);
+  wr_u32_le(&payload[csm::kControlIslandHealthAuthorityEpochOffset],
+            control_island_health.authority_epoch_seen);
+  wr_u32_le(&payload[csm::kControlIslandHealthActiveSourceOffset],
+            control_island_health.active_source_seen);
+  wr_u32_le(&payload[csm::kControlIslandHealthIpcIntegrityMissOffset],
+            control_island_health.ipc_integrity_miss);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7StaleCountOffset],
+            control_island_health.m7_stale_count);
+  wr_u32_le(&payload[csm::kControlIslandHealthErrorWarningOffset],
+            control_island_health.error_warning_count);
+  wr_u32_le(&payload[csm::kControlIslandHealthErrorPassiveOffset],
+            control_island_health.error_passive_count);
+  wr_u32_le(&payload[csm::kControlIslandHealthBusOffOffset],
+            control_island_health.bus_off_count);
+  wr_u32_le(&payload[csm::kControlIslandHealthRawFillOffset],
+            control_island_health.raw_ring_fill);
+  wr_u32_le(&payload[csm::kControlIslandHealthRawHighWaterOffset],
+            control_island_health.raw_ring_high_water);
+  wr_u32_le(&payload[csm::kControlIslandHealthRawDropOffset],
+            control_island_health.raw_ring_drop);
+  wr_u32_le(&payload[csm::kControlIslandHealthTransactionIdOffset],
+            control_island_health.transaction_id);
+  wr_u16_le(&payload[csm::kControlIslandHealthTransactionRequestedOffset],
+            control_island_health.transaction_requested);
+  wr_u16_le(&payload[csm::kControlIslandHealthTransactionCompletedOffset],
+            control_island_health.transaction_completed);
+  payload[csm::kControlIslandHealthTransactionStateOffset] =
+      control_island_health.transaction_state;
+  payload[csm::kControlIslandHealthHardInhibitOffset] =
+      control_island_health.hard_inhibit_state;
+  payload[csm::kControlIslandHealthFdcanStateOffset] =
+      control_island_health.fdcan_state;
+  payload[csm::kControlIslandHealthHardInputsOffset] =
+      control_island_health.hard_input_bits;
+  for (uint8_t lane = 0;
+       lane < csm::board::control_island::kLaneCount; ++lane) {
+    const uint16_t offset = csm::kControlIslandHealthLanesOffset +
+        lane * csm::kControlIslandHealthLaneLen;
+    const auto& health = control_island_health.lanes[lane];
+    const uint32_t values[8] = {
+        health.release_due, health.tx_success, health.deadline_miss,
+        health.cancel_count, health.cancel_race_count, health.suppressed,
+        health.tracking_fault, health.last_value_generation};
+    for (uint8_t index = 0; index < 8u; ++index) {
+      wr_u32_le(&payload[offset + index * 4u], values[index]);
     }
   }
-#endif
-
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  // Runtime diagnostics observe the owner's terminal outcome directly. They
-  // do not retain a second pending-TX journal or decide completion.
-  csm::board::can::BuiltinFdcanSnapshot outcome =
-      builtin_fdcan_diagnostics.snapshot();
-  outcome.latest_tx_request_mask = completion.request_mask;
-  uint8_t payload[csm::kRuntimeDiagnosticPayloadLen];
-  runtime_diagnostic_make_payload(
-      payload, csm::kRuntimeDiagnosticPhaseTxOutcome,
-      completion.submission_sequence, completion.frame.can_id_flags,
-      completion.write_duration_us, completion.driver_result, false, outcome,
-      outcome);
-  runtime_diagnostic_commit_payload(payload);
-  emit_record(RecordType::RuntimeDiagnostic, payload, sizeof(payload),
-              UplinkPriority::Diagnostic);
-#endif
+  encode_fdcan_snapshot(payload, csm::kControlIslandHealthCurrentFdcanOffset,
+                        control_island_health.current);
+  encode_fdcan_snapshot(
+      payload, csm::kControlIslandHealthFirstFaultFdcanOffset,
+      control_island_health.first_fault);
+  encode_fdcan_snapshot(payload, csm::kControlIslandHealthLastFaultFdcanOffset,
+                        control_island_health.last_fault);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7PublishTotalOffset],
+            control_snapshot_publish_total);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7PublishFailedOffset],
+            control_snapshot_publish_failed_total);
+  emit_record(RecordType::ControlIslandHealth, payload, sizeof(payload),
+              UplinkPriority::Critical);
 }
-#endif
 
 #if BOARD_ENABLE_REMOTE_CONTROL
 static void emit_remote_control_state() {
@@ -3675,12 +3540,22 @@ static void emit_remote_control_state() {
   wr_u32_le(&payload[csm::kRemoteControlStateTelemetryBytesOffset], diag.telemetry_tx_bytes);
   wr_u32_le(&payload[csm::kRemoteControlStateSerialWriteFailuresOffset],
             diag.serial_write_failures);
-  wr_u32_le(&payload[csm::kRemoteControlStateControlCyclesOffset], status.control_cycles);
-  wr_u32_le(&payload[csm::kRemoteControlStateNeutralCyclesOffset], status.neutral_cycles);
+  wr_u32_le(&payload[csm::kRemoteControlStateControlCyclesOffset],
+            status.semantic_updates);
+  wr_u32_le(&payload[csm::kRemoteControlStateNeutralCyclesOffset], 0u);
+  uint32_t deadline_misses = 0u;
+  uint32_t tx_success = 0u;
+  uint32_t tx_failures = 0u;
+  for (uint8_t lane = 0;
+       lane < csm::board::control_island::kLaneCount; ++lane) {
+    deadline_misses += control_island_health.lanes[lane].deadline_miss;
+    tx_success += control_island_health.lanes[lane].tx_success;
+    tx_failures += control_island_health.lanes[lane].tracking_fault;
+  }
   wr_u32_le(&payload[csm::kRemoteControlStateDeadlineMissesOffset],
-            status.cycle_deadline_misses);
-  wr_u32_le(&payload[csm::kRemoteControlStateCanTxSuccessOffset], status.can_tx_success);
-  wr_u32_le(&payload[csm::kRemoteControlStateCanTxFailedOffset], status.can_tx_failed);
+            deadline_misses);
+  wr_u32_le(&payload[csm::kRemoteControlStateCanTxSuccessOffset], tx_success);
+  wr_u32_le(&payload[csm::kRemoteControlStateCanTxFailedOffset], tx_failures);
   wr_u32_le(&payload[csm::kRemoteControlStateIpcRejectsOffset], status.ipc_rejects);
   payload[csm::kRemoteControlStateDecisionOffset] = static_cast<uint8_t>(status.last_decision);
   payload[csm::kRemoteControlStateLastAddressOffset] = diag.last_address;
@@ -3688,8 +3563,9 @@ static void emit_remote_control_state() {
       static_cast<uint8_t>(snapshot.sample.sample_state);
   payload[csm::kRemoteControlStateLastIpcRejectDetailOffset] =
       status.last_ipc_reject_detail;
-  wr_u16_le(&payload[csm::kRemoteControlStateCyclePeriodOffset], config.cycle_period_ms);
-  wr_u16_le(&payload[csm::kRemoteControlStateFrameGapOffset], config.frame_gap_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateCyclePeriodOffset],
+            config.semantic_update_period_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateFrameGapOffset], 0u);
   wr_u16_le(&payload[csm::kRemoteControlStateNeutralQualificationOffset],
             config.neutral_qualification_ms);
   wr_u16_le(&payload[csm::kRemoteControlStateReleaseQualificationOffset],
@@ -3754,11 +3630,18 @@ static void emit_board_health(const EncoderSnapshot& snap) {
 #endif
 
   uint8_t inputs = 0;
-#if BOARD_ENABLE_SAFETY_IO
-  inputs |= digitalRead(BoardPins::EstopInN) ? 0 : (1u << 0);
-  inputs |= digitalRead(BoardPins::FieldPowerOk) ? (1u << 1) : 0;
-  inputs |= digitalRead(BoardPins::EncoderFaultN) ? 0 : (1u << 2);
-#endif
+  inputs |= (control_island_health.hard_input_bits &
+             csm::board::control_island::kHardInputEstop)
+                ? (1u << 0)
+                : 0u;
+  inputs |= (control_island_health.hard_input_bits &
+             csm::board::control_island::kHardInputFieldPowerLost)
+                ? 0u
+                : (1u << 1);
+  inputs |= (control_island_health.hard_input_bits &
+             csm::board::control_island::kHardInputEncoderFault)
+                ? (1u << 2)
+                : 0u;
 
   uint8_t payload[csm::kBoardHealthV13PayloadLen];
   memset(payload, 0, sizeof(payload));
@@ -3783,9 +3666,9 @@ static void emit_board_health(const EncoderSnapshot& snap) {
                      ? (1u << 1)
                      : 0;
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   payload[47] |=
-      builtin_can_runtime_ready_for_health() ? (1u << 2) : 0;
+      control_island_runtime_ready(millis()) ? (1u << 2) : 0;
 #endif
 #if BOARD_ENABLE_MCP2515
   payload[47] |= (BOARD_CAN_IRQ_MODE != 0) ? (1u << 3) : 0;
@@ -3810,17 +3693,24 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[56], safety_supervisor.heartbeatAgeMs(millis()));
   wr_u32_le(&payload[60], safety_supervisor.leaseRemainingMs(millis()));
   wr_u32_le(&payload[64], host_frame_crc_failed_total);
-  wr_u32_le(&payload[68], host_can_tx_request_total);
+  wr_u32_le(&payload[68], host_control_state_request_total);
   wr_u32_le(&payload[72], host_can_tx_accepted_total);
   wr_u32_le(&payload[76], host_can_tx_rejected_total);
 #if BOARD_ENABLE_MCP2515 && (BOARD_ENABLE_MCP2515_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
   wr_u32_le(&payload[80], mcp2515_tx_total);
   wr_u32_le(&payload[84], mcp2515_tx_failed_total);
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-  wr_u32_le(&payload[88], builtin_can_tx_total);
-  wr_u32_le(&payload[92], builtin_can_tx_failed_total);
-#endif
+  uint32_t control_tx_success_total = 0u;
+  uint32_t control_tx_failure_total = 0u;
+  for (uint8_t lane = 0;
+       lane < csm::board::control_island::kLaneCount; ++lane) {
+    control_tx_success_total += control_island_health.lanes[lane].tx_success;
+    control_tx_failure_total +=
+        control_island_health.lanes[lane].tracking_fault +
+        control_island_health.lanes[lane].deadline_miss;
+  }
+  wr_u32_le(&payload[88], control_tx_success_total);
+  wr_u32_le(&payload[92], control_tx_failure_total);
 #if BOARD_ENABLE_MCP2515
   wr_u32_le(&payload[csm::kBoardHealthMcpSpiErrorOffset], mcp_service.spi_error_total);
   wr_u32_le(&payload[csm::kBoardHealthMcpErrorFlagOffset], mcp_service.error_flag_total);
@@ -3839,9 +3729,9 @@ static void emit_board_health(const EncoderSnapshot& snap) {
           ? (1u << 0)
           : 0;
 #endif
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
+#if BOARD_ENABLE_CONTROL_ISLAND
   backend_flags |=
-      builtin_can_runtime_ready_for_health() ? (1u << 1) : 0;
+      control_island_runtime_ready(millis()) ? (1u << 1) : 0;
 #endif
   wr_u32_le(&payload[116], backend_flags);
   wr_u32_le(&payload[120], host_heartbeat_total);
@@ -4359,70 +4249,61 @@ static void service_voltage_adc_lane() {
 }
 
 static void init_safety_pins() {
-#if BOARD_ENABLE_SAFETY_IO
-  pinMode(BoardPins::SafetyWatchdogToggle, OUTPUT);
-  digitalWrite(BoardPins::SafetyWatchdogToggle, LOW);
+  // REV.B assigns hard-safety pins and the external watchdog exclusively to
+  // M4. M7 consumes the coherent hard_input_bits projection from M4 health.
+}
 
-  pinMode(BoardPins::EstopInN, INPUT_PULLUP);
-  pinMode(BoardPins::FieldPowerOk, INPUT_PULLUP);
-  pinMode(BoardPins::EncoderFaultN, INPUT_PULLUP);
-  pinMode(BoardPins::SpareServiceGpio, INPUT);
+static void poll_control_island_health(uint32_t now_ms) {
+#if BOARD_ENABLE_CONTROL_ISLAND
+  const csm::board::control_island::HealthReadResult result =
+      csm::board::control_island::readControlHealth(
+          control_island_health_sequence);
+  if (result.accepted && result.new_snapshot) {
+    control_island_health = result.payload;
+    control_island_health_sequence = result.sequence;
+    control_island_health_seen_ms = now_ms;
+    control_island_health_valid = true;
+    if (static_cast<uint32_t>(now_ms - last_control_health_emit_ms) >= 100u) {
+      emit_control_island_health();
+      last_control_health_emit_ms = now_ms;
+    }
+  }
+#else
+  (void)now_ms;
+#endif
+}
+
+static bool control_island_runtime_ready(uint32_t now_ms) {
+#if BOARD_ENABLE_CONTROL_ISLAND
+  if (!control_island_health_valid ||
+      BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS == 0UL ||
+      static_cast<uint32_t>(now_ms - control_island_health_seen_ms) >
+          BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS) {
+    return false;
+  }
+  const uint32_t flags = control_island_health.flags;
+  const uint32_t required =
+      csm::board::control_island::kHealthFlagReady |
+      csm::board::control_island::kHealthFlagClockContractOk;
+  const uint32_t forbidden =
+      csm::board::control_island::kHealthFlagHardInhibit |
+      csm::board::control_island::kHealthFlagBusOff |
+      csm::board::control_island::kHealthFlagErrorPassive |
+      csm::board::control_island::kHealthFlagTrackingFault;
+  return (flags & required) == required && (flags & forbidden) == 0u;
+#else
+  (void)now_ms;
+  return false;
 #endif
 }
 
 static bool __attribute__((unused)) control_backend_ready_for_bus(uint8_t bus) {
-#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
-  if (bus == BOARD_MCP2515_BUS_ID) {
-    return can_backend_ok && mcp2515 != nullptr;
-  }
-#endif
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-  if (bus == BOARD_BUILTIN_CAN_BUS_ID) {
-    return builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
-  }
-#endif
-  return false;
+  return bus == BOARD_BUILTIN_CAN_BUS_ID &&
+         control_island_runtime_ready(millis());
 }
 
 static bool any_control_backend_ready() {
-  bool ready = false;
-#if BOARD_ENABLE_MCP2515 && BOARD_ENABLE_HOST_CAN_TX_MCP2515
-  ready = ready || (can_backend_ok && mcp2515 != nullptr);
-#endif
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-  ready = ready || (builtin_can_tx_ok && !builtin_can_tx_inhibit_latched);
-#endif
-  return ready;
-}
-
-static bool __attribute__((unused)) recover_builtin_can_tx_for_deliberate_arm(uint8_t bus) {
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL)
-  if (bus != BOARD_BUILTIN_CAN_BUS_ID) return true;
-  if (!builtin_can_tx_ok) return false;
-
-  service_builtin_can_tx_completions();
-  if (builtin_can_tx_owner.activeJournalSlots() != 0 ||
-      builtin_can_tx_owner.trackingFaultLatched()) {
-    return false;
-  }
-  if (!builtin_can_tx_inhibit_latched) return true;
-
-  const csm::board::can::BuiltinFdcanSnapshot snapshot =
-      builtin_fdcan_diagnostics.snapshot();
-  const bool error_passive = snapshot.valid && ((snapshot.psr & (1u << 5)) != 0);
-  const bool bus_off = snapshot.valid && ((snapshot.psr & (1u << 7)) != 0);
-  if (!snapshot.valid || error_passive || bus_off) return false;
-
-  builtin_can_tx_inhibit_latched = false;
-#if BOARD_ENABLE_REMOTE_CONTROL
-  remote_control_runtime.clearCanTxInhibitForService(millis());
-#endif
-  return true;
-#else
-  (void)bus;
-  return true;
-#endif
+  return control_island_runtime_ready(millis());
 }
 
 static bool __attribute__((unused)) host_control_authority_allowed() {
@@ -4434,71 +4315,17 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
 #endif
 }
 
-static uint8_t active_host_hw_slots() {
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-  return builtin_can_tx_owner.activeJournalSlots(
-      csm::board::can::BuiltinCanTxOrigin::HostControl);
-#else
-  return 0;
-#endif
-}
-
-static uint8_t active_control_hw_slots() {
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-  return builtin_can_tx_owner.activeJournalSlots();
-#else
-  return 0;
-#endif
-}
-
-static csm::board::can::BuiltinCanTxCancelReason to_hw_cancel_reason(
-    csm::board::control::HostControlCloseReason reason) {
-  using csm::board::can::BuiltinCanTxCancelReason;
-  using csm::board::control::HostControlCloseReason;
-  switch (reason) {
-    case HostControlCloseReason::HostDisarm:
-      return BuiltinCanTxCancelReason::HostDisarm;
-    case HostControlCloseReason::TransportEpochClosed:
-      return BuiltinCanTxCancelReason::TransportEpochClosed;
-    case HostControlCloseReason::AuthorityPreempted:
-      return BuiltinCanTxCancelReason::AuthorityPreempted;
-    case HostControlCloseReason::LeaseExpired:
-      return BuiltinCanTxCancelReason::LeaseExpired;
-    case HostControlCloseReason::HardSafety:
-      return BuiltinCanTxCancelReason::HardSafety;
-    case HostControlCloseReason::FreshnessFault:
-      return BuiltinCanTxCancelReason::HostSessionFault;
-    case HostControlCloseReason::None:
-      return BuiltinCanTxCancelReason::None;
-  }
-  return BuiltinCanTxCancelReason::HostSessionFault;
-}
-
 static void close_host_control_epoch(
     csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
-  // Required handoff order: close admission, end freshness/lease epoch,
-  // request HW cancellation, then wait for terminal journal truth.
-  host_authority_gate.beginClose(reason, active_host_hw_slots());
+  host_authority_gate.beginClose(reason, 0u);
   host_command_freshness.reset();
   safety_supervisor.invalidateHostSession(now_ms);
   safety_state = safety_supervisor.state();
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-  builtin_can_tx_owner.requestCancellation(
-      csm::board::can::BuiltinCanTxOrigin::HostControl,
-      to_hw_cancel_reason(reason), micros());
-#endif
-  host_authority_gate.observeHostSlots(active_host_hw_slots());
+  control_source_manager.clearHost();
+  host_authority_gate.observeHostSlots(0u);
 }
 
 static void service_host_authority_boundary(uint32_t now_ms) {
-  service_builtin_can_tx_completions();
-  host_authority_gate.observeHostSlots(active_host_hw_slots());
   if (!host_authority_gate.admissionOpen()) return;
   if (!host_control_authority_allowed()) {
     close_host_control_epoch(
@@ -4510,38 +4337,28 @@ static void service_host_authority_boundary(uint32_t now_ms) {
   }
 }
 
-static void enforce_hw_cancellation_boundaries(uint32_t now_ms) {
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-  if (safety_state == SafetyState::Estop ||
-      safety_state == SafetyState::FaultLockout) {
-    close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::HardSafety, now_ms);
-    builtin_can_tx_owner.requestCancellationAll(
-        csm::board::can::BuiltinCanTxCancelReason::HardSafety, micros());
-  } else {
-    service_host_authority_boundary(now_ms);
-  }
-#else
-  (void)now_ms;
-#endif
-}
-
 static csm::board::SafetyInputs read_safety_inputs() {
   csm::board::SafetyInputs inputs;
-#if BOARD_ENABLE_SAFETY_IO
-  inputs.estop_asserted = !digitalRead(BoardPins::EstopInN);
-  inputs.field_power_ok = digitalRead(BoardPins::FieldPowerOk);
-  inputs.encoder_fault = !digitalRead(BoardPins::EncoderFaultN);
-#endif
-  inputs.control_backend_ready = any_control_backend_ready();
+  if (!control_island_health_valid) {
+    inputs.estop_asserted = true;
+    inputs.field_power_ok = false;
+    inputs.encoder_fault = true;
+    inputs.control_backend_ready = false;
+    return inputs;
+  }
+  const uint8_t hard = control_island_health.hard_input_bits;
+  inputs.estop_asserted =
+      (hard & csm::board::control_island::kHardInputEstop) != 0u;
+  inputs.field_power_ok =
+      (hard & csm::board::control_island::kHardInputFieldPowerLost) == 0u;
+  inputs.encoder_fault =
+      (hard & csm::board::control_island::kHardInputEncoderFault) != 0u;
+  inputs.control_backend_ready = control_island_runtime_ready(millis());
   return inputs;
 }
 
 static void update_safety_state() {
   const uint32_t now_ms = millis();
-#if BOARD_ENABLE_SAFETY_IO
   const csm::board::SafetyInputs inputs = read_safety_inputs();
   const SafetyState before = safety_supervisor.state();
   safety_supervisor.update(now_ms, inputs);
@@ -4565,12 +4382,13 @@ static void update_safety_state() {
   estop_prev = inputs.estop_asserted;
   field_power_prev = inputs.field_power_ok;
   encoder_fault_prev = inputs.encoder_fault;
-#else
-  const csm::board::SafetyInputs inputs = read_safety_inputs();
-  safety_supervisor.update(now_ms, inputs);
-  safety_state = safety_supervisor.state();
-#endif
-  enforce_hw_cancellation_boundaries(now_ms);
+  if (safety_state == SafetyState::Estop ||
+      safety_state == SafetyState::FaultLockout) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::HardSafety, now_ms);
+  } else {
+    service_host_authority_boundary(now_ms);
+  }
 }
 
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -4578,6 +4396,7 @@ static void service_remote_control() {
   if (!remote_control_runtime_ok) return;
 
   const uint32_t now_ms = millis();
+  poll_control_island_health(now_ms);
   service_host_authority_boundary(now_ms);
   const csm::board::SafetyInputs safety_inputs = read_safety_inputs();
   csm::board::control::RemoteControlRuntimeInputs inputs;
@@ -4602,49 +4421,52 @@ static void service_remote_control() {
   inputs.local_tx_inhibit_latched = true;
   inputs.autonomy_state = csm::board::authority::AutonomyAuthorityState::Unknown;
 #endif
-  inputs.local_tx_inhibit_latched =
-      inputs.local_tx_inhibit_latched || builtin_can_tx_inhibit_latched;
-  inputs.backend_state.ready =
-      builtin_can_tx_ok && !builtin_can_tx_inhibit_latched &&
-      (BOARD_DIAG_SUPPRESS_REMOTE_CAN_TX == 0);
-  if (builtin_can_tx_ok) {
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-    const csm::board::can::BuiltinFdcanSnapshot fdcan_state =
-        builtin_fdcan_diagnostics.snapshot();
-    inputs.backend_state.error_passive =
-        fdcan_state.valid && ((fdcan_state.psr & (1u << 5)) != 0);
-    inputs.backend_state.bus_off =
-        fdcan_state.valid && ((fdcan_state.psr & (1u << 7)) != 0);
-#else
-    const uint8_t tx_error_count = builtin_can_ref().tderror();
-    inputs.backend_state.error_passive = tx_error_count >= 128u;
-    inputs.backend_state.bus_off = tx_error_count == 0xFFu;
-#endif
-  }
+  inputs.backend_state.ready = control_island_runtime_ready(now_ms);
+  inputs.backend_state.error_passive =
+      (control_island_health.flags &
+       csm::board::control_island::kHealthFlagErrorPassive) != 0u;
+  inputs.backend_state.bus_off =
+      (control_island_health.flags &
+       csm::board::control_island::kHealthFlagBusOff) != 0u;
 
-  for (uint8_t frame_budget = 0;
-       frame_budget < csm::board::control::kVehicleCommandMapperMaxFrames;
-       ++frame_budget) {
-    const csm::board::control::RemoteControlRuntimeOutput output =
-        remote_control_runtime.service(now_ms, inputs);
-    if (!output.frame_ready) break;
-    const auto& frame = output.frame;
-    const csm::board::can::BuiltinCanTxOutcome tx_outcome =
-        submit_builtin_can_frame(frame.bus, frame.can_id_flags, frame.dlc,
-                                 frame.data,
-                                 csm::board::can::BuiltinCanTxOrigin::
-                                     RemoteControl,
-                                 inputs.backend_state);
-    const bool success = tx_outcome.fifoEnqueueAccepted();
-    if (!success) {
-      increment_builtin_can_counter(&builtin_can_tx_failed_total);
+  const csm::board::control::RemoteControlRuntimeOutput output =
+      remote_control_runtime.service(now_ms, inputs);
+  control_source_manager.updateRemote(
+      output.image_generation, output.lease_sequence, output.lanes,
+      output.source_valid);
+
+  using csm::board::control_island::ControlSource;
+  ControlSource selected = ControlSource::None;
+  if (host_authority_gate.admissionOpen() &&
+      control_source_manager.host().valid) {
+    selected = ControlSource::Host;
+  } else if (host_authority_gate.rcAllowed() && output.source_valid) {
+    selected = ControlSource::Remote;
+  }
+  control_source_manager.select(selected);
+
+  uint32_t permit_mask = 0u;
+  if (selected != ControlSource::None && control_island_runtime_ready(now_ms)) {
+    if (selected == ControlSource::Remote && inputs.hard_safety_allows &&
+        !inputs.local_tx_inhibit_latched) {
+      permit_mask = csm::board::control_island::kAllLanePermitMask;
+    } else if (selected == ControlSource::Host) {
+      uint8_t reason = ControlReasonOk;
+      if (safety_supervisor.canAcceptTx(now_ms, true, &reason)) {
+        permit_mask = csm::board::control_island::kAllLanePermitMask;
+      }
     }
-    remote_control_runtime.noteCanTxEnqueueResult(
-        now_ms, success, tx_outcome.terminalFailure());
-    if (remote_control_runtime.status().can_tx_inhibit_latched) {
-      builtin_can_tx_inhibit_latched = true;
+  }
+  if (static_cast<uint32_t>(now_ms - last_control_snapshot_publish_ms) >= 20u) {
+    const csm::board::control_island::FinalControlSnapshotPayload snapshot =
+        control_source_manager.snapshot(
+            permit_mask, safety_supervisor.transitionCounter());
+    if (csm::board::control_island::publishFinalControlSnapshot(snapshot)) {
+      ++control_snapshot_publish_total;
+    } else {
+      ++control_snapshot_publish_failed_total;
     }
-    if (!success) break;
+    last_control_snapshot_publish_ms = now_ms;
   }
 
   const auto& status = remote_control_runtime.status();
@@ -4669,13 +4491,7 @@ static void service_remote_control() {
 #endif
 
 static void toggle_safety_watchdog_if_needed() {
-#if BOARD_ENABLE_SAFETY_IO
-  const uint32_t now_ms = millis();
-  if (now_ms - last_watchdog_toggle_ms >= 50) {
-    digitalWrite(BoardPins::SafetyWatchdogToggle, !digitalRead(BoardPins::SafetyWatchdogToggle));
-    last_watchdog_toggle_ms = now_ms;
-  }
-#endif
+  // M4 is the sole hard-safety/watchdog owner.
 }
 
 #if BOARD_ENABLE_MCP2515
@@ -5093,37 +4909,6 @@ static void pump_can_rx_to_queue(int budget) {
 #endif
 }
 
-static bool __attribute__((unused)) init_builtin_can_lane() {
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-  if (!builtin_fdcan_diagnostics.valid()) {
-    emit_board_event(EventBuiltinCanBeginFailed, 1, 1);
-    return false;
-  }
-  if (builtin_can_ref().frequency(500000) != 1) {
-    emit_board_event(EventBuiltinCanBeginFailed, 0, 1);
-    return false;
-  }
-#if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
-  builtin_can_ref().monitor(true);
-#else
-  builtin_can_ref().monitor(false);
-#endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_REMOTE_CONTROL
-  builtin_can_tx_total = 0;
-  builtin_can_tx_failed_total = 0;
-  builtin_can_tx_cancelled_total = 0;
-  builtin_can_tx_hardware_failure_total = 0;
-  builtin_can_tx_tracking_failure_total = 0;
-#endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-  last_builtin_can_tx_ms = millis() - BOARD_BUILTIN_CAN_TX_PERIOD_MS;
-#endif
-  return true;
-#else
-  return false;
-#endif
-}
-
 static void set_can_observe_mode_for_session(bool enabled, bool force) {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   const bool target_ack_observe = enabled && (BOARD_PRODUCT_ACK_OBSERVE_MODE != 0);
@@ -5144,12 +4929,6 @@ static void set_can_observe_mode_for_session(bool enabled, bool force) {
   }
 #endif
 
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-  if (builtin_can_tx_ok) {
-    builtin_can_ref().monitor(!target_ack_observe);
-  }
-#endif
-
   ack_observe_enabled = target_ack_observe;
 
   emit_board_event(EventTransceiverSafeStateChanged,
@@ -5162,39 +4941,19 @@ static void set_can_observe_mode_for_session(bool enabled, bool force) {
 }
 
 static void service_builtin_can_rx_to_queue(int budget) {
-#if BOARD_ENABLE_BUILTIN_CAN_RX
-  if (!builtin_can_tx_ok) {
-    return;
-  }
-
-  mbed::CANMessage msg;
-  while (budget-- > 0 && builtin_can_ref().read(msg) > 0) {
-    if (msg.type != CANData) {
-      continue;
-    }
-
+#if BOARD_ENABLE_CONTROL_ISLAND
+  csm::board::control_island::RawCanEntry raw;
+  while (budget-- > 0 &&
+         csm::board::control_island::popRawCanForM7(&raw)) {
     CanRxItem item;
     item.capture_seq = can_capture_seq_next++;
+    // M4 and M7 timers are separate clock domains. Canonical live truth uses
+    // the M7 observation timestamp and never subtracts an M4 timestamp.
     item.mono_us = mono64_us();
-
-    uint32_t can_id_flags = msg.id;
-    can_id_flags &= 0x1FFFFFFF;
-    if (msg.format == CANExtended) {
-      can_id_flags |= (1u << 29);
-    }
-    item.can_id_flags = can_id_flags;
-
-    uint8_t dlc = msg.len;
-    if (dlc > 8) {
-      dlc = 8;
-    }
-    item.dlc_flags = dlc & 0x0F;
-    item.bus = BOARD_BUILTIN_CAN_BUS_ID;
-    memset(item.data, 0, sizeof(item.data));
-    for (uint8_t i = 0; i < dlc; ++i) {
-      item.data[i] = msg.data[i];
-    }
-
+    item.can_id_flags = raw.can_id_flags;
+    item.dlc_flags = raw.dlc_flags;
+    item.bus = raw.bus;
+    memcpy(item.data, raw.data, sizeof(item.data));
     can_queue_push(item);
   }
 #else
@@ -5203,31 +4962,14 @@ static void service_builtin_can_rx_to_queue(int budget) {
 }
 
 static void __attribute__((unused)) service_builtin_can_rx_host_absent_drain(int budget) {
-#if BOARD_ENABLE_BUILTIN_CAN_RX
-  if (!builtin_can_tx_ok) {
-    return;
-  }
-  mbed::CANMessage msg;
-  while (budget-- > 0 && builtin_can_ref().read(msg) > 0) {
+#if BOARD_ENABLE_CONTROL_ISLAND
+  csm::board::control_island::RawCanEntry raw;
+  while (budget-- > 0 &&
+         csm::board::control_island::popRawCanForM7(&raw)) {
     host_absent_rx_discard_total[BOARD_BUILTIN_CAN_BUS_ID & 0x01u]++;
   }
 #else
   (void)budget;
-#endif
-}
-
-static bool __attribute__((unused)) is_allowed_host_can_frame(
-    uint32_t can_id, bool extended, uint8_t dlc) {
-  if (extended) {
-    return false;
-  }
-#if BOARD_ENABLE_SERVICE_HIL_JOYSTICK_IDS
-  return (can_id == csm::board::control::kRemoteDriveCanId && dlc == 8) ||
-         (can_id == csm::board::control::kRemoteSteeringCanId && dlc == 8) ||
-         (can_id == kServiceHilAllowedEhbCanId && dlc == 8);
-#else
-  return can_id == kHostCanTxAllowedPrimaryId ||
-         (can_id >= kHostCanTxAllowedRangeStart && can_id <= kHostCanTxAllowedRangeEnd);
 #endif
 }
 
@@ -5434,199 +5176,88 @@ static void service_mcp2515_tx_audit() {
 #endif
 
 #if BOARD_ENABLE_HOST_DOWNLINK
-static void handle_host_can_tx_request(const uint8_t* payload, uint16_t len) {
-#if BOARD_ENABLE_HOST_CAN_TX_ANY
+static void handle_host_control_state(const uint8_t* payload, uint16_t len) {
   uint32_t command_id = 0;
-  uint32_t host_mono_ms = 0;
-  uint8_t bus = 0;
-  uint8_t dlc = 0;
-  uint32_t can_id_flags = 0;
-
-  host_can_tx_request_total++;
-
-  if (len != csm::kHostCanTxRequestPayloadLen) {
+  ++host_control_state_request_total;
+  if (len != csm::kHostControlStateV2PayloadLen) {
     host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonBadLength, host_can_tx_rejected_total);
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength,
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_control_state_request_total);
     return;
   }
-
-  command_id = rd_u32_le(&payload[csm::kHostCanTxRequestCommandIdOffset]);
-  bus = payload[csm::kHostCanTxRequestBusOffset];
-  const uint8_t frame_flags = payload[csm::kHostCanTxRequestFlagsOffset];
-  const bool extended = (frame_flags & 0x01) != 0;
-  const bool rtr = (frame_flags & 0x02) != 0;
-  const uint32_t raw_can_id =
-      rd_u32_le(&payload[csm::kHostCanTxRequestCanIdOffset]);
-  dlc = payload[csm::kHostCanTxRequestDlcOffset];
-  host_mono_ms =
-      rd_u32_le(&payload[csm::kHostCanTxRequestMonoMsOffset]);
-  if ((frame_flags & ~0x03u) != 0 ||
-      (!extended && raw_can_id > 0x7FFu) ||
-      (extended && raw_can_id > 0x1FFFFFFFu)) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected,
-                     ControlReasonUnsupportedFrame, bus, raw_can_id, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonUnsupportedFrame,
-                     host_can_tx_rejected_total);
-    return;
-  }
-  can_id_flags = raw_can_id & 0x1FFFFFFF;
-  if (extended) {
-    can_id_flags |= (1u << 29);
-  }
-  if (rtr) {
-    can_id_flags |= (1u << 30);
-  }
-
-  const bool target_builtin_can = (bus == BOARD_BUILTIN_CAN_BUS_ID);
-  // Product Host raw control is supported only by the sole built-in FDCAN
-  // owner. The MCP2515 software TX-test queue is never a Host admission path.
-  const bool supported_bus = target_builtin_can &&
-      BOARD_ENABLE_HOST_CAN_TX_BUILTIN &&
-      BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED;
-  if (!supported_bus) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
-    return;
-  }
-  if (rtr) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonUnsupportedFrame, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonUnsupportedFrame, host_can_tx_rejected_total);
-    return;
-  }
-  if (dlc > 8) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonDlcOutOfRange, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonDlcOutOfRange, host_can_tx_rejected_total);
-    return;
-  }
-
-  const uint32_t can_id = extended ? (raw_can_id & 0x1FFFFFFF) : (raw_can_id & 0x7FF);
-  if (!is_allowed_host_can_frame(can_id, extended, dlc)) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonIdNotAllowed, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonIdNotAllowed, host_can_tx_rejected_total);
-    return;
-  }
-
+  command_id = rd_u32_le(&payload[csm::kHostControlStateCommandIdOffset]);
+  const uint32_t state_generation =
+      rd_u32_le(&payload[csm::kHostControlStateGenerationOffset]);
+  const uint32_t contract_id =
+      rd_u32_le(&payload[csm::kHostControlStateContractIdOffset]);
+  const uint8_t valid_mask =
+      payload[csm::kHostControlStateValidMaskOffset];
   const uint32_t now_ms = millis();
   service_host_authority_boundary(now_ms);
-  if (!host_authority_gate.admissionOpen()) {
+  if (contract_id != csm::kHostControlStateContractId ||
+      !host_authority_gate.admissionOpen()) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected,
-                     ControlReasonAuthorityDenied, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonAuthorityDenied,
-                     host_can_tx_rejected_total);
+                     contract_id == csm::kHostControlStateContractId
+                         ? ControlReasonAuthorityDenied
+                         : csm::ControlReasonBadProtocol,
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_control_state_request_total);
     return;
   }
-  const csm::board::control::HostFreshnessResult freshness =
-      host_command_freshness.acceptCommand(
-          command_id, host_mono_ms, now_ms);
-  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
-    if (freshness ==
-        csm::board::control::HostFreshnessResult::FaultLatched) {
-      close_host_control_epoch(
-          csm::board::control::HostControlCloseReason::FreshnessFault,
-          now_ms);
-    }
+  const bool accepted = control_source_manager.acceptHostState(
+      state_generation, valid_mask,
+      &payload[csm::kHostControlStateData005Offset],
+      &payload[csm::kHostControlStateData007Offset],
+      &payload[csm::kHostControlStateData364Offset],
+      host_control_lease_sequence);
+  if (!accepted) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected,
-                     csm::ControlReasonStaleCommand, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, csm::ControlReasonStaleCommand,
-                     host_can_tx_rejected_total);
+                     csm::ControlReasonStaleCommand,
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_control_state_request_total);
     return;
   }
-
-  uint8_t data[8] = {0};
-  memcpy(data, &payload[csm::kHostCanTxRequestDataOffset], sizeof(data));
-
-  uint8_t safety_reason = ControlReasonOk;
-  if (!safety_supervisor.canAcceptTx(now_ms, control_backend_ready_for_bus(bus), &safety_reason)) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, safety_reason, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, safety_reason, host_can_tx_rejected_total);
-    return;
-  }
-
-#if BOARD_ENABLE_HOST_CAN_TX_BUILTIN
-  if (!target_builtin_can) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
-    return;
-  }
-
-  // One Host request is one immediate attempt at the physical 3-slot FDCAN
-  // FIFO. CSM never retains, reschedules, or retries a rejected request.
-  service_builtin_can_tx_completions();
-  if (!builtin_can_tx_ok || builtin_can_tx_inhibit_latched) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonCanNotReady, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCanTxRejected, ControlReasonCanNotReady, host_can_tx_rejected_total);
-    return;
-  }
-
-  csm::board::can::CanBackendState backend;
-  backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
-  const csm::board::can::BuiltinCanTxOutcome tx_outcome =
-      submit_builtin_can_frame(
-          bus, can_id_flags, dlc, data,
-          csm::board::can::BuiltinCanTxOrigin::HostControl, backend,
-           command_id);
-  if (!tx_outcome.fifoEnqueueAccepted() ||
-      tx_outcome.code !=
-          csm::board::can::BuiltinCanTxOutcomeCode::FifoEnqueueTracked) {
-    host_can_tx_rejected_total++;
-    const uint8_t reject_reason = tx_outcome.transientAdmissionFailure()
-        ? (tx_outcome.code == csm::board::can::BuiltinCanTxOutcomeCode::
-                                   RejectedJournalFull
-               ? ControlReasonQueueFull
-               : ControlReasonTxBusy)
-        : ControlReasonCanWriteFailed;
-    emit_control_ack(command_id, ControlAckRejected, reject_reason, bus, can_id_flags, dlc,
-                     host_can_tx_request_total);
-    if (tx_outcome.transientAdmissionFailure()) {
-      host_can_tx_transient_rejected_total++;
-      if (host_can_tx_last_transient_reason != reject_reason) {
-        host_can_tx_last_transient_reason = reject_reason;
-        emit_board_event(EventHostCanTxRejected, reject_reason,
-                         host_can_tx_rejected_total);
-      }
-    } else {
-      emit_board_event(EventHostCanTxRejected, reject_reason,
-                       host_can_tx_rejected_total);
-    }
-    return;
-  }
-
-  host_can_tx_accepted_total++;
-  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, bus, can_id_flags, dlc,
+  ++host_can_tx_accepted_total;
+  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk,
+                   BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
                    host_can_tx_accepted_total);
-  safety_supervisor.noteControlTx(millis());
-#else
-  host_can_tx_rejected_total++;
-  emit_control_ack(command_id, ControlAckRejected, ControlReasonBadBus, bus, can_id_flags, dlc,
-                   host_can_tx_request_total);
-  emit_board_event(EventHostCanTxRejected, ControlReasonBadBus, host_can_tx_rejected_total);
-#endif
-#else
-  (void)payload;
-  (void)len;
-#endif
+}
+
+static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
+  uint32_t command_id = 0u;
+  if (len != csm::kHostControlNShotPayloadLen) {
+    ++host_can_tx_rejected_total;
+    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength,
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_can_tx_rejected_total);
+    return;
+  }
+  command_id = rd_u32_le(&payload[csm::kHostControlNShotCommandIdOffset]);
+  const uint32_t contract_id =
+      rd_u32_le(&payload[csm::kHostControlNShotContractIdOffset]);
+  const uint8_t lane = payload[csm::kHostControlNShotLaneOffset];
+  const bool accepted =
+      contract_id == csm::kHostControlStateContractId &&
+      host_authority_gate.admissionOpen() &&
+      control_source_manager.acceptHostNShot(
+          rd_u32_le(&payload[csm::kHostControlNShotTransactionIdOffset]),
+          lane,
+          rd_u16_le(&payload[csm::kHostControlNShotCountOffset]),
+          rd_u32_le(&payload[csm::kHostControlNShotPayloadGenerationOffset]),
+          &payload[csm::kHostControlNShotDataOffset]);
+  if (!accepted) ++host_can_tx_rejected_total;
+  emit_control_ack(command_id,
+                   accepted ? ControlAckAccepted : ControlAckRejected,
+                   accepted ? ControlReasonOk : csm::ControlReasonBadProtocol,
+                   BOARD_BUILTIN_CAN_BUS_ID,
+                   lane < csm::board::control_island::kLaneCount
+                       ? csm::board::control_island::kLaneIds[lane]
+                       : 0u,
+                   8u, accepted ? host_control_state_request_total
+                                : host_can_tx_rejected_total);
 }
 
 static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t len) {
@@ -5753,21 +5384,22 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
             now_ms);
         reason = ControlReasonAuthorityDenied;
       } else {
-        const uint8_t recovery_bus = requested_bus == 0xFF
-            ? BOARD_BUILTIN_CAN_BUS_ID
-            : requested_bus;
-        const bool recovered =
-            recover_builtin_can_tx_for_deliberate_arm(recovery_bus);
-        const bool backend_ready = recovered &&
+        const bool backend_ready =
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
         reason = safety_supervisor.arm(now_ms, lease_ms, backend_ready);
         if (reason == ControlReasonOk &&
             !host_authority_gate.activate(
                 safety_supervisor.leaseAlive(now_ms),
-                host_control_authority_allowed(), active_control_hw_slots())) {
+                host_control_authority_allowed(), 0u)) {
           safety_supervisor.disarm(now_ms);
           reason = ControlReasonTxBusy;
+        } else if (reason == ControlReasonOk) {
+          ++host_control_lease_sequence;
+          if (host_control_lease_sequence == 0u) {
+            host_control_lease_sequence = 1u;
+          }
+          control_source_manager.renewHostLease(host_control_lease_sequence);
         }
       }
       break;
@@ -5780,6 +5412,13 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         reason = ControlReasonAuthorityDenied;
       } else {
         reason = safety_supervisor.renewLease(now_ms, lease_ms);
+        if (reason == ControlReasonOk) {
+          ++host_control_lease_sequence;
+          if (host_control_lease_sequence == 0u) {
+            host_control_lease_sequence = 1u;
+          }
+          control_source_manager.renewHostLease(host_control_lease_sequence);
+        }
       }
       break;
     case csm::HostControlInstallNeutralProfile:
@@ -5850,12 +5489,16 @@ static void handle_host_clear_fault_lockout(uint16_t seq, const uint8_t* payload
 static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t seq,
                                 const uint8_t* payload, uint16_t len) {
   if (version != kProtocolVersion) {
-    emit_control_ack(seq, ControlAckRejected, ControlReasonBadProtocol, 0, 0, 0, host_can_tx_request_total);
+    emit_control_ack(seq, ControlAckRejected, ControlReasonBadProtocol, 0, 0, 0,
+                     host_control_state_request_total);
     return;
   }
 
-  if (record_type == static_cast<uint8_t>(RecordType::HostCanTxRequest)) {
-    handle_host_can_tx_request(payload, len);
+  if (record_type == static_cast<uint8_t>(RecordType::HostControlStateV2)) {
+    handle_host_control_state(payload, len);
+  } else if (record_type ==
+             static_cast<uint8_t>(RecordType::HostControlNShot)) {
+    handle_host_control_nshot(payload, len);
   } else if (record_type == static_cast<uint8_t>(RecordType::HostHeartbeat)) {
     handle_host_heartbeat(seq, payload, len);
   } else if (record_type == static_cast<uint8_t>(RecordType::HostControlSession)) {
@@ -5866,8 +5509,9 @@ static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t s
     handle_host_clear_fault_lockout(seq, payload, len);
   } else {
     emit_control_ack(seq, ControlAckRejected, ControlReasonUnsupportedCommand, 0xFF, 0, 0,
-                     host_can_tx_request_total);
-    emit_board_event(EventHostCommandUnsupported, record_type, host_can_tx_request_total);
+                     host_control_state_request_total);
+    emit_board_event(EventHostCommandUnsupported, record_type,
+                     host_control_state_request_total);
   }
 }
 
@@ -5911,54 +5555,6 @@ static void service_host_downlink(int budget) {
   while (budget-- > 0 && Serial.available() > 0) {
     (void)Serial.read();
   }
-}
-#endif
-
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-static void service_builtin_can_tx_test() {
-  if (!builtin_can_tx_ok) {
-    return;
-  }
-
-  const uint32_t now_ms = millis();
-  if (now_ms - last_builtin_can_tx_ms < BOARD_BUILTIN_CAN_TX_PERIOD_MS) {
-    return;
-  }
-  last_builtin_can_tx_ms = now_ms;
-
-  const uint32_t counter = builtin_can_tx_total;
-  uint8_t data[8] = {
-    0xB7,
-    0x1D,
-    static_cast<uint8_t>(counter & 0xFF),
-    static_cast<uint8_t>((counter >> 8) & 0xFF),
-    static_cast<uint8_t>((counter >> 16) & 0xFF),
-    static_cast<uint8_t>((counter >> 24) & 0xFF),
-    0x50,
-    0x07,
-  };
-
-  csm::board::can::CanBackendState backend;
-  backend.ready = builtin_can_tx_ok && !builtin_can_tx_inhibit_latched;
-  const csm::board::can::BuiltinCanTxOutcome tx_outcome =
-      submit_builtin_can_frame(BOARD_BUILTIN_CAN_BUS_ID,
-                               BOARD_BUILTIN_CAN_TX_TEST_ID,
-                               sizeof(data), data,
-                               csm::board::can::BuiltinCanTxOrigin::
-                                   BuiltinTest,
-                               backend);
-  if (!tx_outcome.fifoEnqueueAccepted()) {
-    increment_builtin_can_counter(&builtin_can_tx_failed_total);
-    builtin_can_tx_inhibit_latched = true;
-    if ((builtin_can_tx_failed_total & 0x0F) == 1) {
-      emit_board_event(
-          EventBuiltinCanTxFailed,
-          static_cast<uint16_t>(-tx_outcome.driver_result),
-          builtin_can_tx_failed_total);
-    }
-    return;
-  }
-
 }
 #endif
 
@@ -6230,6 +5826,9 @@ void setup() {
 
   safety_supervisor.begin(millis());
   host_authority_gate.reset();
+  csm::board::control_island::initializeControlIpcForM7(
+      static_cast<uint32_t>(boot_session_id));
+  control_source_manager.begin(static_cast<uint32_t>(boot_session_id));
   safety_state = safety_supervisor.state();
   csm::board::control::HostCommandFreshnessConfig freshness_config;
   freshness_config.heartbeat_max_extra_lag_ms =
@@ -6283,46 +5882,6 @@ void setup() {
       csm::board::diagnostics::BootProgress::McpFrontendInitReturned,
       can_backend_ok ? 1u : 0u);
 
-#if BOARD_ENABLE_BUILTIN_CAN_LANE
-  record_boot_progress(
-      csm::board::diagnostics::BootProgress::BuiltinCanInitEntered);
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructEnter);
-#endif
-  construct_builtin_can();
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcanConstructReturn);
-  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcan500kEnter);
-#endif
-#if BOARD_PASSIVE_DEFER_CAN_FRONTEND_INIT_UNTIL_SESSION
-  builtin_can_tx_ok = false;
-#else
-  builtin_can_tx_ok = init_builtin_can_lane();
-#endif
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootFdcan500kReturn);
-#endif
-  record_boot_progress(
-      csm::board::diagnostics::BootProgress::BuiltinCanInitReturned,
-      builtin_can_tx_ok ? 1u : 0u);
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-    BOARD_ENABLE_REMOTE_CONTROL
-  builtin_can_tx_inhibit_latched = false;
-  if (!host_command_freshness_ok) {
-    builtin_can_tx_inhibit_latched = true;
-  }
-  if (!builtin_can_tx_owner.begin(
-          BOARD_BUILTIN_CAN_BUS_ID, builtin_can_driver_write, nullptr,
-          builtin_can_driver_cancel, nullptr,
-          BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US,
-          builtin_can_tx_completion, nullptr)) {
-    builtin_can_tx_inhibit_latched = true;
-    builtin_can_tx_ok = false;
-    emit_board_event(EventBuiltinCanBeginFailed, 2, 1);
-  }
-#endif
-#endif
-
 #if BOARD_ENABLE_REMOTE_CONTROL
   record_boot_progress(
       csm::board::diagnostics::BootProgress::RemoteRuntimeInitEntered);
@@ -6331,8 +5890,8 @@ void setup() {
 #endif
   csm::board::control::RemoteControlRuntimeConfig remote_config;
   remote_config.configured = true;
-  remote_config.local_can_tx_enabled =
-      BOARD_REMOTE_LOCAL_CAN_TX_ENABLED != 0;
+  remote_config.semantic_output_enabled =
+      BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED != 0;
 #if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
     BOARD_ENABLE_SERVICE_HIL_VEHICLE_COMMAND_MAPPING
   remote_config.mapping =
@@ -6345,9 +5904,7 @@ void setup() {
 #endif
   remote_config.bus = BOARD_BUILTIN_CAN_BUS_ID;
   remote_config.policy_id = 0x5243u;
-  remote_config.cycle_period_ms = 5;
-  remote_config.steering_period_ms = 20;
-  remote_config.frame_gap_ms = 0;
+  remote_config.semantic_update_period_ms = 5;
   remote_config.m4_heartbeat_timeout_ms = 100;
   remote_config.neutral_qualification_ms = 500;
   remote_config.release_qualification_ms = 1000;
@@ -6356,8 +5913,8 @@ void setup() {
       csm::board::control::kRemoteDriveDeadbandPermille;
   remote_config.steering_deadband_permille = 20;
   remote_config.auxiliary_threshold_permille = 500;
-  remote_config.steering_step_permille = 30;
-  remote_config.steering_return_step_permille = 50;
+  remote_config.steering_step_permille_per_20ms = 30;
+  remote_config.steering_return_step_permille_per_20ms = 50;
   remote_config.max_forward_rpm = 500;
   remote_config.max_reverse_rpm = 500;
   remote_config.max_steering_deci_degree = 450;
@@ -6430,13 +5987,6 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
-#if BOARD_ENABLE_BUILTIN_CAN_LANE && \
-    (BOARD_ENABLE_BUILTIN_CAN_TX_TEST || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
-     BOARD_ENABLE_REMOTE_CONTROL)
-  // This poll is outside every profile-specific branch and therefore runs
-  // before passive-product early returns as well as RC/host/test services.
-  service_builtin_can_tx_completions();
-#endif
 #if BOARD_ENABLE_REMOTE_CONTROL
   // The first bounded control poll precedes feeder, host, publisher, and
   // Wi-Fi work. Later bounded polls reduce release latency without changing
@@ -6546,9 +6096,6 @@ void loop() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif
-#endif
-#if BOARD_ENABLE_BUILTIN_CAN_TX_TEST
-  service_builtin_can_tx_test();
 #endif
 #if BOARD_ENABLE_MCP2515
   record_runtime_breadcrumb(RuntimeStageMcpMainDrain, 2);

@@ -1,0 +1,210 @@
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+
+namespace csm::board::control_island {
+
+// Frozen REV.B cross-image identity and fixed SRAM4 ownership.
+static constexpr uint32_t kControlIslandSchemaId = 0x43495342u;   // "CISB"
+static constexpr uint32_t kHno1WireContractId = 0x484E4F31u;     // "HNO1"
+static constexpr uint32_t kControlMemoryLayoutId = 0xD3A8B800u;
+static constexpr uintptr_t kControlIpcAddress = 0x3800A800u;
+static constexpr size_t kControlIpcReservedBytes = 0x1000u;
+static constexpr uintptr_t kCan1RawRingAddress = 0x3800B800u;
+static constexpr size_t kCan1RawRingReservedBytes = 0x4000u;
+
+static constexpr uint8_t kLaneCount = 3;
+static constexpr uint8_t kLane005 = 0;
+static constexpr uint8_t kLane007 = 1;
+static constexpr uint8_t kLane364 = 2;
+static constexpr uint32_t kLaneIds[kLaneCount] = {0x005u, 0x007u, 0x364u};
+static constexpr uint32_t kLanePeriodsUs[kLaneCount] = {5000u, 20000u, 20000u};
+static constexpr uint8_t kLaneDedicatedBuffers[kLaneCount] = {0u, 1u, 2u};
+static constexpr uint8_t kAllLanePermitMask = 0x07u;
+
+enum class ControlSource : uint32_t {
+  None = 0,
+  Remote = 1,
+  Host = 2,
+};
+
+enum class LaneState : uint8_t {
+  Free = 0,
+  Pending = 1,
+  CancelRequested = 2,
+  Faulted = 3,
+};
+
+enum class TransactionState : uint8_t {
+  None = 0,
+  Active = 1,
+  Complete = 2,
+  Cancelled = 3,
+  Faulted = 4,
+};
+
+struct LaneExecutionImage {
+  uint32_t value_generation = 0;
+  uint8_t valid = 0;
+  uint8_t flags = 0;
+  uint16_t reserved = 0;
+  uint8_t data[8] = {};
+};
+
+// Optional strict-N primitive. It is deliberately source- and vehicle-agnostic.
+struct BoundedTxTransaction {
+  uint32_t transaction_id = 0;
+  uint32_t payload_generation = 0;
+  uint16_t requested_success_count = 0;
+  uint8_t lane_index = 0;
+  uint8_t active = 0;
+  uint8_t data[8] = {};
+};
+
+struct FinalControlSnapshotPayload {
+  uint32_t schema_id = kControlIslandSchemaId;
+  uint32_t wire_contract_id = kHno1WireContractId;
+  uint32_t memory_layout_id = kControlMemoryLayoutId;
+  uint32_t m7_boot_id = 0;
+  uint32_t publish_sequence = 0;
+  uint32_t source_image_generation = 0;
+  uint32_t source_lease_sequence = 0;
+  uint32_t authority_epoch = 0;
+  uint32_t safety_epoch = 0;
+  uint32_t active_source = static_cast<uint32_t>(ControlSource::None);
+  uint32_t permit_mask = 0;
+  LaneExecutionImage lanes[kLaneCount] = {};
+  BoundedTxTransaction transaction = {};
+};
+
+struct alignas(32) ControlSnapshotSlot {
+  uint32_t sequence_begin = 0;
+  FinalControlSnapshotPayload payload = {};
+  uint32_t crc32 = 0;
+  uint32_t sequence_end = 0;
+};
+
+struct FdcanRawSnapshot {
+  uint32_t cccr = 0;
+  uint32_t psr = 0;
+  uint32_t ecr = 0;
+  uint32_t txfqs = 0;
+  uint32_t txbrp = 0;
+  uint32_t txbto = 0;
+  uint32_t txbcf = 0;
+  uint32_t ir = 0;
+  uint32_t hal_state = 0;
+  uint32_t hal_error = 0;
+};
+
+struct LaneHealth {
+  uint32_t release_due = 0;
+  uint32_t tx_success = 0;
+  uint32_t deadline_miss = 0;
+  uint32_t cancel_count = 0;
+  uint32_t cancel_race_count = 0;
+  uint32_t suppressed = 0;
+  uint32_t tracking_fault = 0;
+  uint32_t last_value_generation = 0;
+  uint8_t state = static_cast<uint8_t>(LaneState::Free);
+  uint8_t reserved[3] = {};
+};
+
+struct ControlHealthPayload {
+  uint32_t schema_id = kControlIslandSchemaId;
+  uint32_t wire_contract_id = kHno1WireContractId;
+  uint32_t memory_layout_id = kControlMemoryLayoutId;
+  uint32_t m4_boot_id = 0;
+  uint32_t health_sequence = 0;
+  uint32_t flags = 0;
+  uint32_t m7_publish_sequence_seen = 0;
+  uint32_t m7_publish_age_local_ms = UINT32_MAX;
+  uint32_t authority_epoch_seen = 0;
+  uint32_t active_source_seen = 0;
+  uint32_t ipc_integrity_miss = 0;
+  uint32_t m7_stale_count = 0;
+  uint32_t error_warning_count = 0;
+  uint32_t error_passive_count = 0;
+  uint32_t bus_off_count = 0;
+  uint32_t raw_ring_fill = 0;
+  uint32_t raw_ring_high_water = 0;
+  uint32_t raw_ring_drop = 0;
+  uint32_t transaction_id = 0;
+  uint16_t transaction_requested = 0;
+  uint16_t transaction_completed = 0;
+  uint8_t transaction_state = static_cast<uint8_t>(TransactionState::None);
+  uint8_t hard_inhibit_state = 1;
+  uint8_t fdcan_state = 0;
+  uint8_t hard_input_bits = 0;
+  LaneHealth lanes[kLaneCount] = {};
+  FdcanRawSnapshot current = {};
+  FdcanRawSnapshot first_fault = {};
+  FdcanRawSnapshot last_fault = {};
+};
+
+static constexpr uint32_t kHealthFlagReady = 1u << 0;
+static constexpr uint32_t kHealthFlagClockContractOk = 1u << 1;
+static constexpr uint32_t kHealthFlagHardInhibit = 1u << 2;
+static constexpr uint32_t kHealthFlagBusOff = 1u << 3;
+static constexpr uint32_t kHealthFlagErrorPassive = 1u << 4;
+static constexpr uint32_t kHealthFlagM7Fresh = 1u << 5;
+static constexpr uint32_t kHealthFlagControlActive = 1u << 6;
+static constexpr uint32_t kHealthFlagTrackingFault = 1u << 7;
+static constexpr uint8_t kHardInputEstop = 1u << 0;
+static constexpr uint8_t kHardInputFieldPowerLost = 1u << 1;
+static constexpr uint8_t kHardInputEncoderFault = 1u << 2;
+
+struct alignas(32) ControlHealthSlot {
+  uint32_t sequence_begin = 0;
+  ControlHealthPayload payload = {};
+  uint32_t crc32 = 0;
+  uint32_t sequence_end = 0;
+};
+
+struct alignas(32) ControlIpcRegion {
+  uint32_t schema_id = 0;
+  uint32_t wire_contract_id = 0;
+  uint32_t memory_layout_id = 0;
+  uint32_t region_size = 0;
+  uint32_t m7_boot_id = 0;
+  uint32_t control_active_slot = 0;
+  uint32_t control_sequence = 0;
+  uint32_t health_active_slot = 0;
+  uint32_t health_sequence = 0;
+  uint32_t raw_write_sequence = 0;
+  uint32_t raw_read_sequence = 0;
+  uint32_t raw_drop_count = 0;
+  uint32_t raw_high_water = 0;
+  uint32_t m4_boot_id = 0;
+  uint32_t reserved_header[2] = {};
+  ControlSnapshotSlot control[2] = {};
+  ControlHealthSlot health[2] = {};
+};
+
+struct alignas(32) RawCanEntry {
+  uint32_t capture_sequence = 0;
+  uint32_t mono_us = 0;
+  uint32_t can_id_flags = 0;
+  uint32_t fdcan_timestamp = 0;
+  uint8_t dlc_flags = 0;
+  uint8_t bus = 1;
+  uint16_t reserved0 = 0;
+  uint8_t data[8] = {};
+  uint32_t reserved1 = 0;
+};
+
+static constexpr size_t kRawCanRingCapacity =
+    kCan1RawRingReservedBytes / sizeof(RawCanEntry);
+
+static_assert(sizeof(LaneExecutionImage) == 16u, "lane image layout drift");
+static_assert(sizeof(RawCanEntry) == 32u, "raw CAN entry must remain 32 bytes");
+static_assert(kRawCanRingCapacity == 512u, "raw CAN ring capacity drift");
+static_assert(sizeof(ControlIpcRegion) <= kControlIpcReservedBytes,
+              "control IPC exceeds fixed D3 region");
+
+constexpr bool elapsedAtLeast(uint32_t now, uint32_t then, uint32_t interval) {
+  return static_cast<uint32_t>(now - then) >= interval;
+}
+
+}  // namespace csm::board::control_island

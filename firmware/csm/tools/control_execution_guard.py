@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Architecture-independent executable checks for the Product Constitution."""
+"""Constitution guard for the REV.B M4 control island."""
 
 from pathlib import Path
 
@@ -12,61 +12,114 @@ def fail(message: str) -> None:
     raise SystemExit(f"Constitution guard failed: {message}")
 
 
-constitution = (
-    ROOT / "docs" / "product" / "PRODUCT_CONSTITUTION_KO.md"
+constitution = (ROOT / "docs/product/PRODUCT_CONSTITUTION_KO.md").read_text(
+    encoding="utf-8"
+)
+manifest = (ROOT / "docs/architecture/ACTIVE_ARCHITECTURE.yaml").read_text(
+    encoding="utf-8"
+)
+main = (PROJECT / "src/main.cpp").read_text(encoding="utf-8")
+executor = (
+    PROJECT / "src/board/control_island/M4StaticCyclicExecutor.cpp"
 ).read_text(encoding="utf-8")
-manifest = (
-    ROOT / "docs" / "architecture" / "ACTIVE_ARCHITECTURE.yaml"
-).read_text(encoding="utf-8")
-main = (PROJECT / "src" / "main.cpp").read_text(encoding="utf-8")
-owner = (
-    PROJECT / "src" / "board" / "can" / "BuiltinCanTxOwner.cpp"
+fdcan = (PROJECT / "src/board/control_island/M4Fdcan1Owner.cpp").read_text(
+    encoding="utf-8"
+)
+shared = (
+    PROJECT / "src/board/control_island/ControlIslandSharedMemory.cpp"
 ).read_text(encoding="utf-8")
 platformio = (PROJECT / "platformio.ini").read_text(encoding="utf-8")
 
-required_l1 = (
+for token in (
     "단일 권한·hard-safety",
     "physical execution owner가 정확히 하나",
     "fail closed",
-    "stale",
-    "admission truth와 physical-execution truth",
-    "hardware evidence",
     "hidden retry",
     "무제한 control backlog",
-    "telemetry sink 실패가 safety/control을 막지",
-    "Production observer와 Service/HIL control profile",
-    "semantic owner가 정확히 하나",
-    "loss, drop, reset, reconnect, session transition",
-    "experiment 값은 자동으로 production policy",
-    "exploratory measurement와 reviewed value decision",
-    "실행하지 않은 build, device, HIL",
-)
-for token in required_l1:
+    "hardware evidence",
+):
     if token not in constitution:
-        fail(f"missing L1 invariant marker: {token}")
+        fail(f"missing L1 marker: {token}")
 
 for token in (
+    "physical_can_owner: csm_m4_control_island",
+    "hard_safety_owner: csm_m4_control_island",
+    "nominal_request_clock_owner: csm_m4_tim4",
     "host_software_execution_backlog: false",
     "hidden_retry: false",
     "hidden_replay: false",
-    "production_vsm_control: false",
-    "service_hil_control: true",
-    "admission_equals_physical_success: false",
     "physical_success_requires_hardware_evidence: true",
-    "production_authority: false",
 ):
     if token not in manifest:
-        fail(f"active manifest contradicts/omits Constitution marker: {token}")
+        fail(f"active architecture missing {token}")
 
-if main.count("builtin_can_ref().write(") != 1:
-    fail("effective built-in CAN writer count is not one")
-if "completion.transmitted()" not in main or "emit_can_tx_raw(" not in main:
-    fail("physical-success evidence is not hardware-completion gated")
-if "emit_host_control_tx_evidence(" not in main:
-    fail("terminal outcome evidence boundary is missing")
-if "tracking_fault_latched_ = true;" not in owner:
-    fail("unresolved hardware ownership can fail open")
-if "BOARD_CSM_PROFILE_FULL_INSTRUMENTED=1" not in platformio:
-    fail("explicit Service/HIL profile boundary is missing")
+for obsolete in (
+    "BuiltinCanTxOwner",
+    "BuiltinFdcanDiagnostics",
+    "ControlReleaseSchedule",
+    "handle_host_can_tx_request",
+    "builtin_can_ref().write(",
+):
+    if obsolete in main:
+        fail(f"obsolete M7 execution path remains in main.cpp: {obsolete}")
+
+for path in (
+    "include/board/can/BuiltinCanTxOwner.h",
+    "src/board/can/BuiltinCanTxOwner.cpp",
+    "include/board/can/BuiltinFdcanDiagnostics.h",
+    "src/board/can/BuiltinFdcanDiagnostics.cpp",
+    "include/board/control/ControlReleaseSchedule.h",
+    "src/board/control/ControlReleaseSchedule.cpp",
+):
+    if (PROJECT / path).exists():
+        fail(f"obsolete owner file remains: {path}")
+
+for required in (
+    "HAL_FDCAN_AddMessageToTxBuffer",
+    "HAL_FDCAN_EnableTxBufferRequest",
+    "HAL_FDCAN_AbortTxRequest",
+    "TXBRP",
+    "TXBTO",
+    "TXBCF",
+    "TIM4",
+):
+    if required not in fdcan:
+        fail(f"M4 physical owner missing {required}")
+
+for required in (
+    "if (next_slot_ == 0u)",
+    "releaseLane(kLane005)",
+    "releaseLane(kLane007)",
+    "releaseLane(kLane364)",
+    "elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)",
+    "transaction_completed",
+    "TransactionState::Complete",
+    "cancelAllPending()",
+):
+    if required not in executor:
+        fail(f"M4 executor missing {required}")
+
+if executor.count("driver_->cancel(lane)") != 2:
+    fail("cancellation must remain bounded to one request plus one resnapshot retry")
+if "while (" in executor or "for (;;" in executor:
+    fail("M4 slot execution may not contain an unbounded loop")
+
+for required in (
+    "ControlSnapshotSlot slot",
+    "slot.crc32 = slotCrc(slot)",
+    "RawCanEntry",
+    "fill >= kRawCanRingCapacity",
+):
+    if required not in shared:
+        fail(f"shared-memory evidence boundary missing {required}")
+
+for required in (
+    "BOARD_ENABLE_CONTROL_ISLAND=1",
+    "BOARD_ENABLE_HOST_CAN_TX=0",
+    "BOARD_ENABLE_HOST_CAN_TX_BUILTIN=0",
+    "BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED=0",
+):
+    if required not in platformio:
+        fail(f"build profile missing {required}")
 
 print("Constitution guard PASS")

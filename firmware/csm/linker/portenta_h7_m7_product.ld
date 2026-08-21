@@ -23,8 +23,8 @@ __csm_m7_network_d2_end__ = 0x30048000;
  * as an empty range after the dedicated lwIP heap; map guards reject any
  * OpenAMP allocation.
  */
-__OPENAMP_region_start__ = 0x3800A800;
-__OPENAMP_region_end__ = 0x3800A800;
+__OPENAMP_region_start__ = 0x3800F800;
+__OPENAMP_region_end__ = 0x3800F800;
 ENTRY(Reset_Handler)
 
 SECTIONS
@@ -130,6 +130,24 @@ SECTIONS
         __csm_lwip_heap_end__ = .;
     } > RAM_D3
 
+    /* REV.B fixed, non-cacheable M7/M4 control and health exchange. */
+    .csm_control_ipc_d3 0x3800A800 (NOLOAD):
+    {
+        __csm_control_ipc_start__ = .;
+        KEEP(*(.csm_control_ipc_d3))
+        . = ABSOLUTE(0x3800B800);
+        __csm_control_ipc_end__ = .;
+    } > RAM_D3
+
+    /* M4 producer / M7 consumer CAN1 raw ring: 512 fixed 32-byte entries. */
+    .csm_can1_raw_ring_d3 0x3800B800 (NOLOAD):
+    {
+        __csm_can1_raw_ring_start__ = .;
+        KEEP(*(.csm_can1_raw_ring_d3))
+        . = ABSOLUTE(0x3800F800);
+        __csm_can1_raw_ring_end__ = .;
+    } > RAM_D3
+
     .pdm_section 0x3800FC00 (NOLOAD):
     {
         *(.pdm_buffer)
@@ -221,6 +239,16 @@ SECTIONS
            "pinned lwIP heap object missing or wrong size")
     ASSERT(SIZEOF(.csm_lwip_heap_d3) == 0xA400,
            "lwIP D3 heap envelope size drift")
+    ASSERT(SIZEOF(.csm_control_ipc_d3) == 0x1000,
+           "Control/Health IPC D3 envelope size drift")
+    ASSERT(SIZEOF(.csm_can1_raw_ring_d3) == 0x4000,
+           "CAN1 raw ring D3 envelope size drift")
+    ASSERT(__csm_control_ipc_start__ == 0x3800A800 &&
+           __csm_control_ipc_end__ == 0x3800B800,
+           "Control/Health IPC address drift")
+    ASSERT(__csm_can1_raw_ring_start__ == 0x3800B800 &&
+           __csm_can1_raw_ring_end__ == 0x3800F800,
+           "CAN1 raw ring address drift")
     ASSERT(__OPENAMP_region_start__ == __OPENAMP_region_end__,
            "OpenAMP must remain excluded from the M7 product image")
 }

@@ -44,6 +44,11 @@ enum class RecordType : uint8_t {
   // Terminal hardware completion correlated to the originating control
   // command. CAN_TX_RAW remains the independent raw on-bus truth.
   ControlTxEvidence = 23,
+  // REV.B coherent latest-state control. These replace cyclic one-frame Host
+  // requests; record 10 remains decoder-only legacy and is not advertised.
+  HostControlStateV2 = 24,
+  HostControlNShot = 25,
+  ControlIslandHealth = 26,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

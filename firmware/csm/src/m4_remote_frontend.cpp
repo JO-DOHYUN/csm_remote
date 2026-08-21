@@ -6,6 +6,9 @@
 #include "board/remote/M4RemoteMailboxWriter.h"
 #include "board/remote/RcNormalizer.h"
 #include "board/remote/RemoteSharedMemory.h"
+#include "board/control_island/ControlIslandSharedMemory.h"
+#include "board/control_island/M4Fdcan1Owner.h"
+#include "board/control_island/M4StaticCyclicExecutor.h"
 
 #if !defined(BOARD_ENABLE_M4_REMOTE_FRONTEND) || BOARD_ENABLE_M4_REMOTE_FRONTEND != 1
 #error "m4_remote_frontend.cpp requires BOARD_ENABLE_M4_REMOTE_FRONTEND=1"
@@ -27,9 +30,14 @@
 #define BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS 500UL
 #endif
 
+#ifndef BOARD_M4_M7_PUBLISH_TIMEOUT_US
+#define BOARD_M4_M7_PUBLISH_TIMEOUT_US 0UL
+#endif
+
 namespace {
 
 using namespace csm::board::remote;
+using namespace csm::board::control_island;
 
 CrsfParser parser;
 RcNormalizer normalizer;
@@ -53,6 +61,14 @@ bool has_rc_sample = false;
 bool has_link_statistics = false;
 RemoteTelemetrySlot telemetry;
 uint32_t malformed_total_at_last_rc = 0;
+M4StaticCyclicExecutor control_executor;
+M4Fdcan1Owner fdcan1_owner;
+M4ControlTimebase control_timebase;
+uint32_t control_m4_boot_id = 0;
+uint32_t last_control_sequence = 0;
+uint32_t last_control_health_ms = 0;
+bool fdcan1_owner_initialized = false;
+bool control_timebase_initialized = false;
 
 uint32_t frontendMalformedTotal() {
   return diagnostics.rejected_length + diagnostics.rejected_crc +
@@ -219,6 +235,39 @@ void serviceTelemetry(uint32_t now_ms) {
   }
 }
 
+void serviceControlIngress() {
+  const ControlReadResult read =
+      readFinalControlSnapshot(last_control_sequence);
+  if (!read.accepted) {
+    if (read.detail != 0u) {
+      control_executor.noteIpcIntegrityFailure();
+    }
+    return;
+  }
+  if (!read.new_snapshot) return;
+  // The shared CRC/copy work remains in foreground. Mask only TIM4 for the
+  // bounded local-store swap so the ISR never observes a partially copied
+  // coherent image; FDCAN/CRSF interrupts remain independent.
+  NVIC_DisableIRQ(TIM4_IRQn);
+  const bool accepted = control_executor.acceptSnapshot(read.payload, micros());
+  NVIC_EnableIRQ(TIM4_IRQn);
+  if (accepted) last_control_sequence = read.sequence;
+}
+
+void publishControlIslandHealth(uint32_t now_ms) {
+  if (now_ms - last_control_health_ms < 20u) return;
+  last_control_health_ms = now_ms;
+  ControlHealthPayload health = control_executor.healthForPublish(micros());
+  ControlIpcRegion* region = controlIpcRegion();
+  health.raw_ring_fill = rawCanRingFill();
+  health.raw_ring_high_water = region->raw_high_water;
+  const uint32_t hardware_drop = fdcan1_owner.rawCaptureDropCount();
+  health.raw_ring_drop = UINT32_MAX - region->raw_drop_count < hardware_drop
+      ? UINT32_MAX
+      : region->raw_drop_count + hardware_drop;
+  (void)publishControlHealth(health);
+}
+
 }  // namespace
 
 void setup() {
@@ -232,9 +281,18 @@ void setup() {
   current_sample = {};
   diagnostics = {};
   diagnostics.uart_baud = BOARD_M4_REMOTE_BAUD;
+  control_m4_boot_id = initializeControlIpcForM4();
   m4_boot_id = initializeRemoteSharedMemoryForM4();
+  control_executor.begin(control_m4_boot_id,
+                         BOARD_M4_M7_PUBLISH_TIMEOUT_US, &fdcan1_owner);
+  fdcan1_owner_initialized =
+      fdcan1_owner.begin(control_m4_boot_id, &control_executor);
+  control_timebase_initialized = fdcan1_owner_initialized &&
+      control_timebase.begin(&control_executor, &fdcan1_owner);
+  fdcan1_owner.markTimebaseReady(control_timebase_initialized);
   Serial3.begin(BOARD_M4_REMOTE_BAUD, SERIAL_8N1);
   publishSample(millis());
+  publishControlIslandHealth(millis());
 }
 
 void loop() {
@@ -261,6 +319,8 @@ void loop() {
   }
 
   serviceTelemetry(now_ms);
+  serviceControlIngress();
+  publishControlIslandHealth(now_ms);
   if (now_ms - last_publish_ms >= BOARD_M4_REMOTE_PUBLISH_MS) {
     publishSample(now_ms);
   }

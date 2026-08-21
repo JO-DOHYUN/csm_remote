@@ -1,6 +1,6 @@
 schema_version: 1
 authority_level: L2
-architecture_id: csm-d038_android-d043
+architecture_id: csm-hno1-m4-control-island-rev-b
 status: active
 binding_in_mode: IMPLEMENT
 reviewable_in_mode: ARCH_CHANGE
@@ -9,13 +9,36 @@ runtime_semantic_baselines:
   android: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
   feeder: unresolved
 control:
-  physical_can_owner: csm_m7
-  host_execution_model: per_request_immediate_attempt
+  physical_can_owner: csm_m4_control_island
+  hard_safety_owner: csm_m4_control_island
+  host_semantic_owner: android_vsm
+  remote_semantic_owner: csm_m7
+  global_source_authority_owner: csm_m7
+  nominal_request_clock_owner: csm_m4_tim4
+  fdcan1_owner: csm_m4_control_island
+  host_execution_model: coherent_latest_state
+  latest_state_depth: 1
   host_software_execution_backlog: false
   hidden_retry: false
   hidden_replay: false
-  service_hil_semantic_owner: android
-  nominal_request_clock_owner: android
+  source_mixing: forbidden
+  authority_handoff: quiescent_cancel_terminal_then_activate
+  static_slots:
+    base_period_us: 5000
+    slot_0: [0x005, 0x007, 0x364]
+    slots_1_2_3: [0x005]
+  dedicated_tx_buffers:
+    0x005: 0
+    0x007: 1
+    0x364: 2
+  strict_n_shot_owner: csm_m4_generic_success_budget
+ipc:
+  control_region: 0x3800A800-0x3800B7FF
+  raw_can_region: 0x3800B800-0x3800F7FF
+  guard_region: 0x3800F800-0x3800FBFF
+  control_slots: 2
+  integrity: sequence_crc32_boot_identity
+  raw_can_ring_capacity: 512
 profiles:
   production_vsm_control: false
   service_hil_control: true
@@ -25,3 +48,13 @@ evidence:
 qualification:
   threshold_state: exploratory
   production_authority: false
+  fail_closed_until_frozen: true
+  unresolved_hardware_facts:
+    - can1_bitrate
+    - m4_m7_publish_timeout
+    - hard_safety_polarity_and_reset_state
+    - exact_nvic_priorities_and_global_mask_bound
+    - rx_irq_drain_bound
+    - bus_off_recovery_policy
+    - jitter_and_deadline_thresholds
+    - product_authorization_and_hno1_traffic_matrix

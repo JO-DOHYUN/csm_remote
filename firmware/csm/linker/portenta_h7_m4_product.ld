@@ -14,8 +14,13 @@ MEMORY
     REGION_ALIAS("RAM", RAM_D2);
 
 __csm_m4_d2_end__ = 0x10040000;
-__OPENAMP_region_start__ = 0x38000400;
-__OPENAMP_region_end__ = 0x38000400 + LENGTH(RAM_D3) - 1K;
+/* OpenAMP/RPC is excluded. REV.B owns the D3 ranges explicitly below. */
+__OPENAMP_region_start__ = 0x3800F800;
+__OPENAMP_region_end__ = 0x3800F800;
+__csm_control_ipc_start__ = 0x3800A800;
+__csm_control_ipc_end__ = 0x3800B800;
+__csm_can1_raw_ring_start__ = 0x3800B800;
+__csm_can1_raw_ring_end__ = 0x3800F800;
 ENTRY(Reset_Handler)
 
 SECTIONS
@@ -126,4 +131,10 @@ SECTIONS
     ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed with stack")
     ASSERT(__StackTop <= __csm_m4_d2_end__,
            "M4 D2 region overlaps M7 network window")
+    ASSERT(__csm_control_ipc_end__ - __csm_control_ipc_start__ == 0x1000,
+           "Control/Health IPC size drift")
+    ASSERT(__csm_can1_raw_ring_end__ - __csm_can1_raw_ring_start__ == 0x4000,
+           "CAN1 raw ring size drift")
+    ASSERT(__OPENAMP_region_start__ == __OPENAMP_region_end__,
+           "OpenAMP must remain excluded from the M4 product image")
 }

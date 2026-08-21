@@ -184,7 +184,7 @@ Record types:
 - `7 BOARD_EVENT`
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
-- `10 HOST_CAN_TX_REQUEST` host-to-board downlink only
+- `10 HOST_CAN_TX_REQUEST` legacy decode-only; never active control admission
 - `11 HOST_HEARTBEAT` host-to-board downlink only
 - `12 HOST_CONTROL_SESSION` host-to-board downlink only
 - `13 HOST_SET_CONTROL_POLICY` host-to-board downlink only, reserved
@@ -199,6 +199,9 @@ Record types:
 - `22 LINK_RELIABILITY_DIAGNOSTIC` legacy schema 1 decode-only; not currently
   published
 - `23 CONTROL_TX_EVIDENCE` terminal Service/HIL command-to-driver evidence
+- `24 HOST_CONTROL_STATE_V2` coherent Host 3-lane state, downlink only
+- `25 HOST_CONTROL_NSHOT` generic successful-TX budget, downlink only
+- `26 CONTROL_ISLAND_HEALTH` M4 terminal/safety/IPC evidence
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -411,11 +414,14 @@ Gap interpretation:
 
 Current active Service/HIL board baseline:
 - feeder-UART receive frames are emitted as `CAN_RX_SEGMENT` entries with `bus=0`.
-- Portenta built-in CAN receive frames are emitted as `CAN_RX_SEGMENT` entries
-  with `bus=1`.
+- M4 FDCAN1 raw-ring observations are emitted as `CAN_RX_SEGMENT` entries with
+  `bus=1`; their canonical timestamp is M7 observation time, not a cross-core
+  subtraction of the M4 local timestamp.
 - `CAN_RX_RAW` remains protocol-compatible for older hosts/builds, but the
   high-load dual-channel build uses `CAN_RX_SEGMENT` for live RX uplink.
-- Successful Portenta built-in CAN writes emit `CAN_TX_RAW bus=1`.
+- M4 `CONTROL_ISLAND_HEALTH` owns terminal TX counters/status. `CAN_TX_RAW`
+  remains independent physical observer truth and is not reconstructed from
+  Host ACK or payload matching.
 
 Legacy Mid Carrier MCP2515 profile compatibility (HISTORY, not an active build route):
 - Profile major `3`.
@@ -443,26 +449,13 @@ Legacy Mid Carrier MCP2515 profile compatibility (HISTORY, not an active build r
 - `20..23 counter u32`: accepted counter or request counter depending on status
 - `24..27 rejected_total u32`
 
-`CONTROL_ACK` is request-decision evidence, not final CAN success evidence. Host
-software must not mark a frame as actually sent from `CONTROL_ACK` alone. The current
-MCP2515 profile emits `CONTROL_ACK status=1 reason=0` after the request is
-accepted into the MCP TX path, then emits `CAN_TX_RAW` only after the TX
-completion audit succeeds. The built-in CAN profile emits `CONTROL_ACK Accepted`
-only after the sole owner has accepted and tracked the FDCAN FIFO request, then
-emits terminal `CONTROL_TX_EVIDENCE` and `CAN_TX_RAW` from HW completion. ACK is
-not actual-send evidence. `CAN_TX_RAW` is critical, latency-bounded delivery so
-healthy physical TX is not hidden behind ordinary batching; its timestamp is CSM
-completion-observation time, not a proven CAN start-of-frame HW timestamp.
-
-In the Service/HIL `0x005/0x007/0x364` profile, `CONTROL_ACK status=1 reason=0`
-means that this individual raw frame was accepted and tracked in the actual
-3-element FDCAN HW FIFO. The board does not retain rejected Host work, overwrite
-it with a latest target, interpret repeat/count, mutate `DATA[0..7]`, generate
-additional frames, or own vehicle semantics. Busy/full rejects the current
-request explicitly without retry.
-The static Service/HIL allowlist validates configured bus, standard ID
-`0x005/0x007/0x364`, DLC8 and RTR false; payload meaning remains the upper
-control software's contract.
+`CONTROL_ACK` is state/session/transaction admission evidence, not physical CAN
+success. `HOST_CONTROL_STATE_V2 Accepted` means the coherent latest image replaced
+the previous Host image. `HOST_CONTROL_NSHOT Accepted` means M4 may observe the
+transaction through the next control snapshot. Actual terminal truth is M4
+`TXBRP/TXBTO/TXBCF` projected through `CONTROL_ISLAND_HEALTH`; only `TXBTO`
+increments successful-TX counters. Host software must never infer actual send from
+ACK or from repeated payloads.
 
 `CONTROL_TX_EVIDENCE` schema 2 payload, 40 bytes:
 - `0..7 mono_us u64`
@@ -477,27 +470,12 @@ control software's contract.
 - `36 request_mask_low u8`, `37 cancel_reason u8`,
   `38 completion_code u8`, `39 schema u8` (`2`)
 
-Record 23 is the authoritative command-correlated terminal outcome. `CAN_TX_RAW`
-is the independent physical completion stream and is never paired to command ID
-by repeated-payload FIFO guessing. ACK alone is not actual TX. Service/HIL schema
-2 has no legacy terminal-evidence compatibility path and ARM is rejected when the
-advertised/echoed control schema is not 2.
-
-`CONTROL_TX_EVIDENCE` is terminal-only. `DeadlineExceededPending` retains the
-owner journal correlation and may produce diagnostic/fault evidence, but it is
-not encoded as outcome 0 until a terminal failure actually occurs. Every
-Accepted Host request reaches exactly one terminal record 23. A transmitted
-terminal additionally emits matching `CAN_TX_RAW`; a terminal failure does not.
-TXBCF with no policy cancel request, and TXBCF after a qualified HW deadline,
-are `HardwareFailure`; Host disarm/epoch/authority/lease/hard-safety aborts are
-`IntentionalCancelled`; correlation loss or tracking-fault abort is
-`TrackingFailure`.
-
-N requested physical frames are N individual `HOST_CAN_TX_REQUEST` records with
-unique command IDs. TCP may coalesce records, but the board does not add a TX
-segment. Legacy capability `host_tx_queue_size` is `0` and means Host software
-retention. CAPABILITY v7 separately advertises three physical HW TX slots and
-zero Host software retention.
+Record 23 is retained for older evidence readers but is not emitted by REV.B M7.
+REV.B transaction completion is record 26's transaction id/requested/completed/state.
+Continuous state has no command-correlated per-release record. `CAN_TX_RAW` remains
+independent observer truth and is never paired to command ID by payload guessing.
+CAPABILITY advertises three dedicated physical buffers and zero Host software
+retention.
 
 Current `CONTROL_ACK` reasons:
 - `0` ok
@@ -528,39 +506,63 @@ Current `CONTROL_ACK` reasons:
 - `25` authority denied
 - `26` stale/future/replayed Host sender-time command or unqualified timeline
 
-`HOST_CAN_TX_REQUEST` payload, 23 bytes, host-to-board:
-- `0..3 command_id u32`
-- `4 bus u8`: logical bus id from `CAPABILITY`; do not assume a fixed system
-  or drive channel number
-- `5 frame_flags u8`: bit0 extended, bit1 RTR
-- `6..9 can_id u32`: raw CAN ID without flag bits
-- `10 dlc u8`: `0..8`
-- `11..18 data[8]`
-- `19..22 host_mono_ms u32`: sender monotonic expiry/replay evidence; never a
-  CSM scheduling clock
+`HOST_CAN_TX_REQUEST` record 10 is legacy decode-only and is never admitted by the
+active REV.B profile.
 
-Current active Service/HIL host TX policy:
-- Accepted bus is the built-in bus advertised by the active `CAPABILITY`.
-- `portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi` uses a static
-  raw-frame allowlist: configured built-in bus, standard `0x005`, `0x007` or
-  `0x364`, DLC8 and RTR false. Extended frames and the removed `0x100/0x200`
-  adapter are not accepted.
-- After that frame-format check, `DATA[0..7]` is opaque to CSM and is copied
-  byte-for-byte into one `BuiltinCanTxOwner` submission. Vehicle payload shape,
-  ramp, reversal, CENTER, EHB, repeat/count and neutral sequences belong to the
-  upper control software and its selected vehicle profile.
-- N requested physical frames are N individual downlink records. There is no
-  latest-target replacement, Host semantic runtime, generated frame, semantic
-  retry, hidden replay, Host SW execution FIFO or Host cadence scheduler. Each
-  fresh allowed record receives exactly one immediate owner/HW admission attempt.
+`HOST_CONTROL_STATE_V2` payload, 40 bytes, host-to-board:
+- `0..3 command_id u32`
+- `4..7 state_generation u32`, strictly newer within the Host image epoch
+- `8..11 contract_id u32`, fixed `0x484E4F31` (`HNO1`)
+- `12 valid_mask u8`, bits `0/1/2` must all be set
+- `13..15 reserved`
+- `16..23 data_0x005[8]`
+- `24..31 data_0x007[8]`
+- `32..39 data_0x364[8]`
+
+`HOST_CONTROL_NSHOT` payload, 28 bytes, host-to-board:
+- `0..3 command_id u32`
+- `4..7 transaction_id u32`
+- `8..11 payload_generation u32`
+- `12..15 contract_id u32`, fixed `0x484E4F31`
+- `16 lane u8`: `0=0x005`, `1=0x007`, `2=0x364`
+- `17 reserved`
+- `18..19 successful_tx_count u16`, `1..255`
+- `20..27 data[8]`
+
+`CONTROL_ISLAND_HEALTH` schema 1 payload, 320 bytes:
+- `0..7 mono_us u64`, M7 observation time
+- `8 schema u8`, `10..11 payload_len u16`
+- `12..31 schema/wire/memory identity, M4 boot id, health sequence`
+- `32..51 flags, M7 publish sequence/age in M4 local time, authority epoch/source`
+- `52..83 IPC stale/integrity, FDCAN error, raw-ring fill/high-water/drop counters`
+- `84..95 transaction id/requested/completed/state, hard inhibit/FDCAN/hard inputs`
+- `96..191` three 32-byte lane terminal counters
+- `192..231` current FDCAN register/HAL snapshot
+- `232..271` first-fault snapshot
+- `272..311` last-fault snapshot
+- `312..319` M7 snapshot publish total/failure total
+
+Flags distinguish ready/clock-qualified, hard inhibit, bus-off, error-passive,
+M7 fresh, control active and tracking fault. Lane counters include release due,
+successful terminal, deadline miss, cancel, cancel race, suppressed release,
+tracking fault and last value generation.
+
+Current active Service/HIL Host policy:
+- Android owns vehicle semantics and the final three payloads but no physical
+  release clock.
+- M7 retains one coherent latest image only. Partial valid masks, repeated/older
+  generations, wrong contract identity, inactive authority or expired session are
+  rejected. There is no Host execution FIFO, per-frame request path, catch-up,
+  hidden retry or replay.
+- M4 releases standard DLC8 `0x005/0x007/0x364` from dedicated Tx buffers on its
+  fixed 5/20/20 ms slot table. Value generation and publish liveness are separate.
+- N-shot is a source-agnostic successful-TX budget. `TXBTO` increments the count;
+  Nth success immediately blocks further transaction releases.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
-- TCP arrival spacing and Host timestamps are not CAN cadence clocks. Android
-  owns nominal absolute request production; CSM preserves stream admission order.
-  Authority, lease, hard-safety, freshness/replay, static frame and backend
-  admission remain board-owned. Owner busy/journal-full rejects that request and
-  never retains it for a later service pass.
+- TCP arrival spacing and Host timestamps are not CAN cadence clocks. M4 TIM4 is
+  the only nominal physical request clock.
 - Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
   Host-to-RC handoff is one ordered state transition: close Host admission,
   terminate Host freshness/lease epoch, request cancellation and wait for every
@@ -569,10 +571,9 @@ Current active Service/HIL host TX policy:
   hard-safety requests cancellation of all application-control origins. Attempts
   remain journaled until transmitted/cancelled/faulted terminal truth, and new
   Host ARM waits for that closure.
-- Timing thresholds are not inferred from tests. An exploratory build advertises
-  qualification state `0`, threshold values `0`, performs monotonic/replay gates
-  and publishes observed maxima. Only measured/frozen nonzero product constants
-  advertise state `1`; qualification HIL begins after that freeze.
+- Timing/hardware facts are not inferred from tests. Unfrozen timeout, polarity,
+  IRQ and bitrate qualification values remain `0` and physical release stays
+  fail-closed. Only reviewed/frozen product constants may enable HIL qualification.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted
@@ -633,8 +634,8 @@ Current active Service/HIL host TX policy:
   `0` and cannot qualify. A nonzero coverage interval is frozen only after
   measurement, at which point compile-time guards must prove both descriptor
   and byte capacity. Neither dimension may be enlarged to make a test pass.
-- On accepted hardware write, the board emits `CONTROL_ACK status=1 reason=0`
-  and then `CAN_TX_RAW` on the same bus.
+- State/transaction ACK remains admission-only. M4 health and independent CAN
+  observer records carry physical terminal truth.
 
 Safety-gated control session:
 - `HOST_HEARTBEAT` payload, 12 bytes:
@@ -1054,7 +1055,7 @@ Extended 128-byte `BOARD_HEALTH` payload:
 - `56..59 heartbeat_age_ms u32`
 - `60..63 lease_remaining_ms u32`
 - `64..67 host_crc_fail_total u32`
-- `68..71 host_can_tx_request_total u32`
+- `68..71 host_control_state_request_total u32`
 - `72..75 host_can_tx_accepted_total u32`
 - `76..79 host_can_tx_rejected_total u32`
 - `80..87 MCP TX success/fail counters`
@@ -1271,11 +1272,11 @@ Current CSM protocol freeze for VSM:
   document without alternate live 20-byte modes.
 - VMS must parse `CAPABILITY` first and bind bus labels, backend, role, bitrate,
   and control permission from descriptors.
-- VSM may send `HOST_CAN_TX_REQUEST` only in an explicitly control-capable profile
-  and must follow that profile's `CAPABILITY` plus the active static frame allowlist.
-- VMS must treat `CONTROL_ACK` as board decision evidence only. Service/HIL
-  command terminal truth is record 23 schema 2; `CAN_TX_RAW` is the independent
-  physical completion stream and is not payload-FIFO correlated to command ID.
+- VSM may send records 24/25 only in an explicitly control-capable profile and
+  must use the advertised HNO1 contract/control-island schema.
+- VSM must treat `CONTROL_ACK` as board decision evidence only. M4 terminal truth
+  is record 26; `CAN_TX_RAW` remains independent physical observer truth and is
+  not payload-FIFO correlated to command ID.
 
 RP2040 feeder successor profile major `4`:
 - descriptor 0 is `bus=0`, backend `5` RP2040 feeder UART, transceiver `4`
@@ -1357,6 +1358,9 @@ RP2040 feeder successor profile major `4`:
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
 - `23 CONTROL_TX_EVIDENCE`
+- `24 HOST_CONTROL_STATE_V2`
+- `25 HOST_CONTROL_NSHOT`
+- `26 CONTROL_ISLAND_HEALTH`
 
 ## 금지
 - board direct sensor 값을 가짜 CAN frame으로 위장
