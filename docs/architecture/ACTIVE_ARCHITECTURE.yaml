@@ -1,10 +1,10 @@
 schema_version: 1
 authority_level: L2
 architecture_id: csm-d038_android-d043
-status: exploratory_candidate
+status: active
 binding_in_mode: IMPLEMENT
 reviewable_in_mode: ARCH_CHANGE
-baselines:
+runtime_semantic_baselines:
   csm: 5c9f6f71ebb06320f8835c4115ddde03314a9762
   android: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
   feeder: unresolved

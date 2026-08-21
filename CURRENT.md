@@ -1,6 +1,7 @@
 # CURRENT
 
-## Baseline
+
+## Runtime Semantic Baselines
 
 - CSM: `5c9f6f71ebb06320f8835c4115ddde03314a9762`
 - Android: `fea18d9d5660d96cfa67e93e7e900ef9cceb62a6`
@@ -8,13 +9,13 @@
 
 ## Product Phase
 
-`IMPLEMENTED EXPLORATORY CANDIDATE / RELEASE BLOCKED`
+`ACTIVE ARCHITECTURE / EXPLORATORY QUALIFICATION / RELEASE BLOCKED`
 
 ## Active Architecture IDs
 
 - Cross-repository active manifest: `csm-d038_android-d043`
 - Semantic/raw boundary lineage: CSM D-035, Android D-040
-- HW-execution/qualification candidate: CSM D-038, Android D-043
+- HW-execution/qualification lineage: CSM D-038, Android D-043
 
 ## Verified Current Facts
 
