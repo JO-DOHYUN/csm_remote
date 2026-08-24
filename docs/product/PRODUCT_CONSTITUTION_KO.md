@@ -9,6 +9,9 @@ Authority: `L1 PRODUCT INVARIANTS`
 1. 모든 제어 명령은 단일 권한·hard-safety 판정 경계를 통과한다.
 2. 하나의 controlled bus에는 유효한 physical execution owner가 정확히 하나 존재한다.
 3. 모호한 control authority는 fail closed한다.
+   여기서 fail-closed는 신뢰할 수 없거나 stale인 active motion을 즉시 제거한다는
+   뜻이며, healthy physical CAN transport의 lane-safe wire 동작까지 반드시 silence해야
+   한다는 뜻은 아니다. lane-safe wire action은 별도 qualified contract만 따른다.
 4. stale 또는 신뢰할 수 없는 제어가 조용히 active로 남지 않는다.
 5. admission truth와 physical-execution truth를 구분한다.
 6. 실제 물리 성공은 command와 상관된 hardware evidence가 있어야 한다.

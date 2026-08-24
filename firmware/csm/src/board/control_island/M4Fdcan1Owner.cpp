@@ -16,6 +16,9 @@
 #ifndef BOARD_HNO1_IRQ_PRIORITY_QUALIFIED
 #define BOARD_HNO1_IRQ_PRIORITY_QUALIFIED 0
 #endif
+#ifndef BOARD_HNO1_SAFE_WIRE_QUALIFIED
+#define BOARD_HNO1_SAFE_WIRE_QUALIFIED 0
+#endif
 #ifndef BOARD_M4_TIM4_IRQ_PRIORITY
 #define BOARD_M4_TIM4_IRQ_PRIORITY 5
 #endif
@@ -65,10 +68,11 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   handle_ = &can_.CanHandle;
   if (handle_->Instance != FDCAN1 || !configureDirectHal()) return false;
 
-  product_contract_qualified_ =
+  transport_contract_qualified_ =
       BOARD_HNO1_CAN1_BITRATE_QUALIFIED != 0 &&
-      BOARD_HNO1_HARD_SAFETY_QUALIFIED != 0 &&
       BOARD_HNO1_IRQ_PRIORITY_QUALIFIED != 0;
+  hard_safety_qualified_ = BOARD_HNO1_HARD_SAFETY_QUALIFIED != 0;
+  safe_wire_contract_qualified_ = BOARD_HNO1_SAFE_WIRE_QUALIFIED != 0;
   fdcan_ready_ = true;
   g_fdcan_owner = this;
   configureInterrupts();
@@ -222,8 +226,16 @@ void M4Fdcan1Owner::tickHardSafetyWatchdog() {
 
 bool M4Fdcan1Owner::ready() const {
   return fdcan_ready_ && timebase_ready_ && clock_contract_ok_ &&
-      product_contract_qualified_ && !protocol_fault_latched_ &&
-      !hardInhibitActive() && !busOff() && !errorPassive();
+      transport_contract_qualified_ && !protocol_fault_latched_ &&
+      !busOff() && !errorPassive();
+}
+
+bool M4Fdcan1Owner::safeWireQualified() const {
+  return safe_wire_contract_qualified_;
+}
+
+bool M4Fdcan1Owner::hardSafetyQualified() const {
+  return hard_safety_qualified_;
 }
 
 bool M4Fdcan1Owner::hardInhibitActive() const {

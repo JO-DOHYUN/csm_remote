@@ -556,6 +556,11 @@ Current active Service/HIL Host policy:
   hidden retry or replay.
 - M4 releases standard DLC8 `0x005/0x007/0x364` from dedicated Tx buffers on its
   fixed 5/20/20 ms slot table. Value generation and publish liveness are separate.
+- M4 transport readiness와 ACTIVE motion permission은 별개다. source/lease/ARM/M7
+  freshness/permit/safety 상실은 old ACTIVE image를 revoke하며, healthy transport에서는
+  frozen lane-safe policy만 적용한다: `0x005` idle/hard `AA 02 00 00 00 00 00 00`,
+  `0x007` idle `82 00 00 00 00 00 00 00`/hard `SuppressTx`, `0x364` idle/hard
+  `SuppressTx`. 이는 M4 vehicle semantic 계산이나 implicit zero fallback이 아니다.
 - N-shot is a source-agnostic successful-TX budget. `TXBTO` increments the count;
   Nth success immediately blocks further transaction releases.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP

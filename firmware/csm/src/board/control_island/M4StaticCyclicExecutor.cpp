@@ -19,6 +19,8 @@ void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
   candidate_valid_ = false;
   transition_pending_ = false;
   stale_latched_ = true;
+  rearm_required_ = true;
+  rearm_authority_epoch_ = 0;
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     lane_state_[lane] = LaneState::Free;
     health_.lanes[lane].state = static_cast<uint8_t>(LaneState::Free);
@@ -37,6 +39,15 @@ bool M4StaticCyclicExecutor::acceptSnapshot(
   last_publish_seen_us_ = observed_at_us;
   health_.m7_publish_sequence_seen = snapshot.publish_sequence;
   stale_latched_ = false;
+
+  if (!snapshotHasActiveMotion(snapshot)) {
+    revokeActive(true);
+    return true;
+  }
+  if (rearm_required_) {
+    if (snapshot.authority_epoch == rearm_authority_epoch_) return true;
+    rearm_required_ = false;
+  }
 
   const bool authority_change = active_valid_ &&
       (snapshot.m7_boot_id != active_.m7_boot_id ||
@@ -86,18 +97,20 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
     next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 0x03u);
     return;
   }
-  if (!globalExecutionAllowed(now_us)) {
-    cancelAllPending();
+  if (!driver_->ready()) {
+    revokeActive(true);
     next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 0x03u);
     return;
   }
-
+  const bool hard_safe = driver_->hardInhibitActive();
+  const bool active_motion = !hard_safe && activeMotionAllowed(now_us);
+  if (hard_safe) revokeActive(true);
   if (next_slot_ == 0u) {
-    releaseLane(kLane005);
-    releaseLane(kLane007);
-    releaseLane(kLane364);
+    releaseLane(kLane005, active_motion);
+    releaseLane(kLane007, active_motion);
+    releaseLane(kLane364, active_motion);
   } else {
-    releaseLane(kLane005);
+    releaseLane(kLane005, active_motion);
   }
   next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 0x03u);
 }
@@ -148,12 +161,17 @@ void M4StaticCyclicExecutor::onTrackingFault(uint8_t lane) {
 
 void M4StaticCyclicExecutor::noteIpcIntegrityFailure() {
   saturatingIncrement(&health_.ipc_integrity_miss);
+  revokeActive(true);
 }
 
 ControlHealthPayload M4StaticCyclicExecutor::healthForPublish(uint32_t now_us) {
   health_.flags = 0;
-  if (driver_ != nullptr && driver_->ready() && publish_timeout_us_ != 0u) {
+  if (driver_ != nullptr && driver_->ready()) {
     health_.flags |= kHealthFlagReady | kHealthFlagClockContractOk;
+    health_.flags |= kHealthFlagTransportReady;
+  }
+  if (driver_ != nullptr && driver_->safeWireQualified()) {
+    health_.flags |= kHealthFlagSafeWireQualified;
   }
   if (driver_ != nullptr && driver_->hardInhibitActive()) {
     health_.flags |= kHealthFlagHardInhibit;
@@ -170,8 +188,8 @@ ControlHealthPayload M4StaticCyclicExecutor::healthForPublish(uint32_t now_us) {
       !elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)) {
     health_.flags |= kHealthFlagM7Fresh;
   }
-  if (active_valid_ && active_.permit_mask != 0u) {
-    health_.flags |= kHealthFlagControlActive;
+  if (activeMotionAllowed(now_us)) {
+    health_.flags |= kHealthFlagControlActive | kHealthFlagActiveMotion;
   }
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     if (lane_state_[lane] == LaneState::Faulted) {
@@ -219,7 +237,7 @@ void M4StaticCyclicExecutor::serviceTransition() {
   if (transition_pending_ && allLanesFree()) activateCandidate();
 }
 
-void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
+void M4StaticCyclicExecutor::releaseLane(uint8_t lane, bool active_motion) {
   LaneHealth& lane_health = health_.lanes[lane];
   saturatingIncrement(&lane_health.release_due);
   if (lane_state_[lane] == LaneState::Pending) {
@@ -229,6 +247,10 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
   }
   if (lane_state_[lane] != LaneState::Free) {
     saturatingIncrement(&lane_health.suppressed);
+    return;
+  }
+  if (!active_motion) {
+    releaseSafeLane(lane, driver_->hardInhibitActive());
     return;
   }
   if ((active_.permit_mask & (1u << lane)) == 0u ||
@@ -255,6 +277,29 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
   lane_state_[lane] = LaneState::Pending;
   lane_health.state = static_cast<uint8_t>(LaneState::Pending);
   lane_health.last_value_generation = active_.lanes[lane].value_generation;
+}
+
+void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane, bool hard_safe) {
+  LaneHealth& lane_health = health_.lanes[lane];
+  if (!driver_->safeWireQualified() ||
+      (hard_safe && !driver_->hardSafetyQualified())) {
+    saturatingIncrement(&lane_health.suppressed);
+    return;
+  }
+  const SafeWireFrame& safe = hard_safe
+      ? kLaneSafeWirePolicies[lane].hard_safe
+      : kLaneSafeWirePolicies[lane].idle_safe;
+  if (safe.action != SafeWireAction::FixedSafeFrame) {
+    saturatingIncrement(&lane_health.suppressed);
+    return;
+  }
+  if (!driver_->request(lane, safe.data)) {
+    saturatingIncrement(&lane_health.suppressed);
+    return;
+  }
+  lane_state_[lane] = LaneState::Pending;
+  lane_health.state = static_cast<uint8_t>(LaneState::Pending);
+  lane_health.last_value_generation = 0u;
 }
 
 void M4StaticCyclicExecutor::cancelLane(uint8_t lane) {
@@ -285,10 +330,9 @@ bool M4StaticCyclicExecutor::allLanesFree() const {
   return true;
 }
 
-bool M4StaticCyclicExecutor::globalExecutionAllowed(uint32_t now_us) {
+bool M4StaticCyclicExecutor::activeMotionAllowed(uint32_t now_us) {
   if (!active_valid_ || driver_ == nullptr || !driver_->ready() ||
-      driver_->hardInhibitActive() || driver_->busOff() ||
-      driver_->errorPassive() || publish_timeout_us_ == 0u ||
+      driver_->hardInhibitActive() || publish_timeout_us_ == 0u ||
       active_.active_source == static_cast<uint32_t>(ControlSource::None)) {
     return false;
   }
@@ -298,10 +342,38 @@ bool M4StaticCyclicExecutor::globalExecutionAllowed(uint32_t now_us) {
       stale_latched_ = true;
       saturatingIncrement(&health_.m7_stale_count);
     }
+    revokeActive(true);
     return false;
   }
   stale_latched_ = false;
   return true;
+}
+
+bool M4StaticCyclicExecutor::snapshotHasActiveMotion(
+    const FinalControlSnapshotPayload& snapshot) const {
+  if (snapshot.active_source != static_cast<uint32_t>(ControlSource::Host) &&
+      snapshot.active_source != static_cast<uint32_t>(ControlSource::Remote)) {
+    return false;
+  }
+  if ((snapshot.permit_mask & kAllLanePermitMask) != kAllLanePermitMask) {
+    return false;
+  }
+  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+    if (snapshot.lanes[lane].valid == 0u) return false;
+  }
+  return true;
+}
+
+void M4StaticCyclicExecutor::revokeActive(bool require_rearm) {
+  if (require_rearm && active_.authority_epoch != 0u) {
+    rearm_required_ = true;
+    rearm_authority_epoch_ = active_.authority_epoch;
+  }
+  active_valid_ = false;
+  candidate_valid_ = false;
+  transition_pending_ = false;
+  active_ = {};
+  cancelAllPending();
 }
 
 void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
@@ -315,6 +387,7 @@ void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
   }
   health_.last_fault = driver_ == nullptr ? FdcanRawSnapshot{}
                                           : driver_->rawSnapshot();
+  revokeActive(true);
   if (health_.transaction_state ==
       static_cast<uint8_t>(TransactionState::Active)) {
     health_.transaction_state =

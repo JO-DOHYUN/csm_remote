@@ -37,6 +37,7 @@ for token in (
     "hidden retry",
     "무제한 control backlog",
     "hardware evidence",
+    "lane-safe wire",
 ):
     if token not in constitution:
         fail(f"missing L1 marker: {token}")
@@ -88,13 +89,16 @@ for required in (
 
 for required in (
     "if (next_slot_ == 0u)",
-    "releaseLane(kLane005)",
-    "releaseLane(kLane007)",
-    "releaseLane(kLane364)",
+    "releaseLane(kLane005, active_motion)",
+    "releaseLane(kLane007, active_motion)",
+    "releaseLane(kLane364, active_motion)",
     "elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)",
     "transaction_completed",
     "TransactionState::Complete",
     "cancelAllPending()",
+    "activeMotionAllowed",
+    "releaseSafeLane",
+    "revokeActive",
 ):
     if required not in executor:
         fail(f"M4 executor missing {required}")

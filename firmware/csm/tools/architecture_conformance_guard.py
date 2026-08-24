@@ -41,6 +41,10 @@ for required in (
     "latest_state_depth: 1",
     "raw_can_ring_capacity: 512",
     "strict_n_shot_owner: csm_m4_generic_success_budget",
+    "physical_transport_readiness: m4_fdcan1_transport_only",
+    "active_motion_permission: fresh_coherent_source_all_lane_permit_explicit_arm",
+    "idle_safe: SuppressTx",
+    "hard_safe: SuppressTx",
 ):
     if required not in manifest:
         fail(f"active manifest missing {required}")
@@ -52,6 +56,8 @@ for required in (
     "kLaneDedicatedBuffers[kLaneCount] = {0u, 1u, 2u}",
     "ControlSnapshotSlot control[2]",
     "ControlHealthSlot health[2]",
+    "SafeWireAction::FixedSafeFrame",
+    "SafeWireAction::SuppressTx",
 ):
     if required not in contract:
         fail(f"frozen contract missing {required}")
@@ -90,6 +96,7 @@ for required in (
     "BOARD_HNO1_HARD_SAFETY_QUALIFIED=0",
     "BOARD_HNO1_IRQ_PRIORITY_QUALIFIED=0",
     "BOARD_M4_M7_PUBLISH_TIMEOUT_US=0UL",
+    "BOARD_HNO1_SAFE_WIRE_QUALIFIED=0",
 ):
     if required not in platformio:
         fail(f"qualification/build marker missing {required}")
@@ -98,5 +105,14 @@ if "nextEvenSequence" not in shared or "slotCrc" not in shared:
     fail("two-slot sequence/CRC IPC protocol missing")
 if "active_.transaction.requested_success_count" not in executor:
     fail("generic successful-TX budget missing")
+for required in (
+    "activeMotionAllowed",
+    "releaseSafeLane",
+    "revokeActive",
+):
+    if required not in executor:
+        fail(f"transport/motion/safe-wire split missing {required}")
+if "globalExecutionAllowed" in executor:
+    fail("obsolete transport-motion combined gate remains")
 
 print("Architecture conformance guard PASS")

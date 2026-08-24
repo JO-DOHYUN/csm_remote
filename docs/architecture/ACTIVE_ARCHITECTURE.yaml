@@ -32,6 +32,20 @@ control:
     0x007: 1
     0x364: 2
   strict_n_shot_owner: csm_m4_generic_success_budget
+  state_split:
+    physical_transport_readiness: m4_fdcan1_transport_only
+    active_motion_permission: fresh_coherent_source_all_lane_permit_explicit_arm
+    inactive_wire_behavior: m4_frozen_per_lane_safe_wire_policy
+  lane_safe_wire_policy:
+    0x005:
+      idle_safe: FixedSafeFrame_AA02000000000000
+      hard_safe: FixedSafeFrame_AA02000000000000
+    0x007:
+      idle_safe: FixedSafeFrame_8200000000000000
+      hard_safe: SuppressTx
+    0x364:
+      idle_safe: SuppressTx
+      hard_safe: SuppressTx
 ipc:
   control_region: 0x3800A800-0x3800B7FF
   raw_can_region: 0x3800B800-0x3800F7FF
@@ -49,6 +63,11 @@ qualification:
   threshold_state: exploratory
   production_authority: false
   fail_closed_until_frozen: true
+  split:
+    transport_timing: [can1_bitrate, irq_priority, timer_static_slots]
+    m7_liveness: m4_m7_publish_timeout
+    hard_safety: hard_safety_polarity_and_reset_state
+    safe_wire: lane_safe_wire_contract
   unresolved_hardware_facts:
     - can1_bitrate
     - m4_m7_publish_timeout
@@ -58,3 +77,4 @@ qualification:
     - bus_off_recovery_policy
     - jitter_and_deadline_thresholds
     - product_authorization_and_hno1_traffic_matrix
+    - lane_safe_wire_contract

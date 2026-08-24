@@ -26,6 +26,8 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   void tickHardSafetyWatchdog();
 
   bool ready() const override;
+  bool safeWireQualified() const override;
+  bool hardSafetyQualified() const override;
   bool hardInhibitActive() const override;
   uint8_t hardInputBits() const override;
   bool errorPassive() const override;
@@ -58,7 +60,9 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   bool fdcan_ready_ = false;
   bool timebase_ready_ = false;
   bool clock_contract_ok_ = false;
-  bool product_contract_qualified_ = false;
+  bool transport_contract_qualified_ = false;
+  bool hard_safety_qualified_ = false;
+  bool safe_wire_contract_qualified_ = false;
   bool protocol_fault_latched_ = false;
 };
 

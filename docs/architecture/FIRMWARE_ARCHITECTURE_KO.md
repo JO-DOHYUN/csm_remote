@@ -87,12 +87,21 @@ M4 local time은 M4-local deadline/liveness에만 사용한다.
 
 ## Failure containment and qualification
 
-M4 hard inhibit, M7 publish stale, bus-off/error-passive, tracking ambiguity, IPC integrity failure는
-physical release를 fail closed한다. telemetry/network/storage failure는 M4 slot execution을
-막지 않는다. raw ring overflow는 explicit drop/high-water evidence이며 control backlog가
-되지 않는다.
+M4는 `physical transport readiness`, `ACTIVE motion permission`, `safe-wire fallback`을
+분리한다. source/lease/ARM/M7 freshness/permit 또는 safety 상실은 즉시 ACTIVE를 revoke하고
+old motion을 재사용하지 않는다. transport가 healthy이면 M4는 frozen per-lane policy만
+실행한다: `0x005` idle/hard-safe는 existing HNO1 failsafe `AA 02 00 00 00 00 00 00`, `0x007`
+idle-safe는 frozen neutral `82 00 00 00 00 00 00 00`이고 hard-safe는 `SuppressTx`, `0x364`는
+idle/hard 모두 `SuppressTx`다. M4는 vehicle semantic을 계산하거나 unspecified byte를
+zero-fill하지 않는다.
 
-현재 CAN bitrate, M4↔M7 timeout, hard-safety polarity/reset, numeric NVIC priorities, RX drain,
-bus-off recovery, jitter thresholds와 product authorization/traffic matrix는 HIL-frozen fact가
-아니다. 따라서 qualification flags와 timeout은 `0`이며 product physical TX는 fail-closed다.
+bus-off/error-passive 또는 unrecoverable tracking fault는 ACTIVE를 globally revoke하고 other
+pending lane을 bounded-cancel한다. transport recovery는 SAFE만 허용하며 fresh coherent source와
+explicit re-ARM authority epoch 없이는 ACTIVE를 자동 재개하지 않는다. telemetry/network/storage
+failure는 M4 slot execution을 막지 않는다. raw ring overflow는 explicit drop/high-water evidence이며
+control backlog가 되지 않는다.
+
+현재 transport/timing, M4↔M7 liveness, hard-safety, safe-wire contract qualification은 각각
+독립 HIL-frozen fact가 아니다. 따라서 해당 flags와 timeout은 `0`이고 production physical release는
+fail-closed다.
 Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.

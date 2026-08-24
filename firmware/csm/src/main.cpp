@@ -4284,7 +4284,8 @@ static bool control_island_runtime_ready(uint32_t now_ms) {
   const uint32_t flags = control_island_health.flags;
   const uint32_t required =
       csm::board::control_island::kHealthFlagReady |
-      csm::board::control_island::kHealthFlagClockContractOk;
+      csm::board::control_island::kHealthFlagClockContractOk |
+      csm::board::control_island::kHealthFlagM7Fresh;
   const uint32_t forbidden =
       csm::board::control_island::kHealthFlagHardInhibit |
       csm::board::control_island::kHealthFlagBusOff |

@@ -9,7 +9,11 @@ namespace csm::board::control_island {
 class M4LaneDriver {
  public:
   virtual ~M4LaneDriver() = default;
+  // Physical transport availability only; it is deliberately independent of
+  // source authority, permit, lease and hard-safety motion permission.
   virtual bool ready() const = 0;
+  virtual bool safeWireQualified() const = 0;
+  virtual bool hardSafetyQualified() const = 0;
   virtual bool hardInhibitActive() const = 0;
   virtual uint8_t hardInputBits() const = 0;
   virtual bool errorPassive() const = 0;
@@ -38,11 +42,14 @@ class M4StaticCyclicExecutor {
  private:
   void activateCandidate();
   void serviceTransition();
-  void releaseLane(uint8_t lane);
+  void releaseLane(uint8_t lane, bool active_motion);
+  void releaseSafeLane(uint8_t lane, bool hard_safe);
   void cancelLane(uint8_t lane);
   void cancelAllPending();
   bool allLanesFree() const;
-  bool globalExecutionAllowed(uint32_t now_us);
+  bool activeMotionAllowed(uint32_t now_us);
+  bool snapshotHasActiveMotion(const FinalControlSnapshotPayload& snapshot) const;
+  void revokeActive(bool require_rearm);
   void latchFault(uint8_t lane);
   void saturatingIncrement(uint32_t* value);
 
@@ -59,6 +66,8 @@ class M4StaticCyclicExecutor {
   bool candidate_valid_ = false;
   bool transition_pending_ = false;
   bool stale_latched_ = true;
+  bool rearm_required_ = true;
+  uint32_t rearm_authority_epoch_ = 0;
 };
 
 }  // namespace csm::board::control_island

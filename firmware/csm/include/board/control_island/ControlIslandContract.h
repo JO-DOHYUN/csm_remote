@@ -44,6 +44,34 @@ enum class TransactionState : uint8_t {
   Faulted = 4,
 };
 
+enum class SafeWireAction : uint8_t {
+  SuppressTx = 0,
+  FixedSafeFrame = 1,
+};
+
+struct SafeWireFrame {
+  SafeWireAction action = SafeWireAction::SuppressTx;
+  uint8_t data[8] = {};
+};
+
+struct LaneSafeWirePolicy {
+  SafeWireFrame idle_safe = {};
+  SafeWireFrame hard_safe = {};
+};
+
+// Frozen only where existing HNO1 contract evidence defines a wire-safe frame.
+// No M4 path derives vehicle semantics or fills an unspecified lane with zero.
+static constexpr LaneSafeWirePolicy kLaneSafeWirePolicies[kLaneCount] = {
+    {{SafeWireAction::FixedSafeFrame, {0xAA, 0x02, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00}},
+     {SafeWireAction::FixedSafeFrame, {0xAA, 0x02, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00}}},
+    {{SafeWireAction::FixedSafeFrame, {0x82, 0x00, 0x00, 0x00,
+                                       0x00, 0x00, 0x00, 0x00}},
+     {SafeWireAction::SuppressTx, {}}},
+    {{SafeWireAction::SuppressTx, {}}, {SafeWireAction::SuppressTx, {}}},
+};
+
 struct LaneExecutionImage {
   uint32_t value_generation = 0;
   uint8_t valid = 0;
@@ -151,6 +179,9 @@ static constexpr uint32_t kHealthFlagErrorPassive = 1u << 4;
 static constexpr uint32_t kHealthFlagM7Fresh = 1u << 5;
 static constexpr uint32_t kHealthFlagControlActive = 1u << 6;
 static constexpr uint32_t kHealthFlagTrackingFault = 1u << 7;
+static constexpr uint32_t kHealthFlagTransportReady = 1u << 8;
+static constexpr uint32_t kHealthFlagActiveMotion = 1u << 9;
+static constexpr uint32_t kHealthFlagSafeWireQualified = 1u << 10;
 static constexpr uint8_t kHardInputEstop = 1u << 0;
 static constexpr uint8_t kHardInputFieldPowerLost = 1u << 1;
 static constexpr uint8_t kHardInputEncoderFault = 1u << 2;
