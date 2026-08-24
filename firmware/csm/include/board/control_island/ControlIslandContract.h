@@ -56,20 +56,16 @@ struct SafeWireFrame {
 
 struct LaneSafeWirePolicy {
   SafeWireFrame idle_safe = {};
-  SafeWireFrame hard_safe = {};
 };
 
 // Frozen only where existing HNO1 contract evidence defines a wire-safe frame.
 // No M4 path derives vehicle semantics or fills an unspecified lane with zero.
 static constexpr LaneSafeWirePolicy kLaneSafeWirePolicies[kLaneCount] = {
-    {{SafeWireAction::FixedSafeFrame, {0xAA, 0x02, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00}},
-     {SafeWireAction::FixedSafeFrame, {0xAA, 0x02, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00}}},
-    {{SafeWireAction::FixedSafeFrame, {0x82, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00}},
-     {SafeWireAction::SuppressTx, {}}},
-    {{SafeWireAction::SuppressTx, {}}, {SafeWireAction::SuppressTx, {}}},
+    {SafeWireAction::FixedSafeFrame, {0xAA, 0x02, 0x00, 0x00,
+                                      0x00, 0x00, 0x00, 0x00}},
+    {SafeWireAction::FixedSafeFrame, {0x82, 0x00, 0x00, 0x00,
+                                      0x00, 0x00, 0x00, 0x00}},
+    {SafeWireAction::SuppressTx, {}},
 };
 
 struct LaneExecutionImage {
@@ -148,6 +144,7 @@ struct ControlHealthPayload {
   uint32_t flags = 0;
   uint32_t m7_publish_sequence_seen = 0;
   uint32_t m7_publish_age_local_ms = UINT32_MAX;
+  uint32_t m7_publish_max_gap_local_ms = 0;
   uint32_t authority_epoch_seen = 0;
   uint32_t active_source_seen = 0;
   uint32_t ipc_integrity_miss = 0;
@@ -162,9 +159,8 @@ struct ControlHealthPayload {
   uint16_t transaction_requested = 0;
   uint16_t transaction_completed = 0;
   uint8_t transaction_state = static_cast<uint8_t>(TransactionState::None);
-  uint8_t hard_inhibit_state = 1;
   uint8_t fdcan_state = 0;
-  uint8_t hard_input_bits = 0;
+  uint8_t reserved_state[2] = {};
   LaneHealth lanes[kLaneCount] = {};
   FdcanRawSnapshot current = {};
   FdcanRawSnapshot first_fault = {};
@@ -173,7 +169,6 @@ struct ControlHealthPayload {
 
 static constexpr uint32_t kHealthFlagReady = 1u << 0;
 static constexpr uint32_t kHealthFlagClockContractOk = 1u << 1;
-static constexpr uint32_t kHealthFlagHardInhibit = 1u << 2;
 static constexpr uint32_t kHealthFlagBusOff = 1u << 3;
 static constexpr uint32_t kHealthFlagErrorPassive = 1u << 4;
 static constexpr uint32_t kHealthFlagM7Fresh = 1u << 5;
@@ -181,10 +176,6 @@ static constexpr uint32_t kHealthFlagControlActive = 1u << 6;
 static constexpr uint32_t kHealthFlagTrackingFault = 1u << 7;
 static constexpr uint32_t kHealthFlagTransportReady = 1u << 8;
 static constexpr uint32_t kHealthFlagActiveMotion = 1u << 9;
-static constexpr uint32_t kHealthFlagSafeWireQualified = 1u << 10;
-static constexpr uint8_t kHardInputEstop = 1u << 0;
-static constexpr uint8_t kHardInputFieldPowerLost = 1u << 1;
-static constexpr uint8_t kHardInputEncoderFault = 1u << 2;
 
 struct alignas(32) ControlHealthSlot {
   uint32_t sequence_begin = 0;

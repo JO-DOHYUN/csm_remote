@@ -350,12 +350,12 @@ speeds are rounded to 50-unit steps through 1000 in standard ID `0x005`, DLC8:
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
 Active mode never carries speed `1..199`.
 Neutral, unqualified RC, and RC failsafe use only `AA 02 00 00 00 00 00 00` when
-upstream autonomy is explicitly released and the hardware/safety gate allows TX.
+upstream autonomy is explicitly released and the authority gate allows TX.
 Drive is periodic at 5 ms; steering is independently periodic at 20 ms. Both pass the limiter,
 and a direction reversal reaches zero before applying the opposite direction. A repeated or frozen
 mailbox sequence cannot refresh source freshness.
 
-Remote authority order is `hard safety > upstream autonomy > RC remote >
+Remote authority order is `upstream autonomy > RC remote >
 service host > monitoring`. RC presence reserves the authority boundary before
 neutral qualification. Loss immediately produces the periodic neutral command;
 only a stable non-malformed release interval may expose a lower-priority source.
@@ -529,20 +529,20 @@ active REV.B profile.
 - `18..19 successful_tx_count u16`, `1..255`
 - `20..27 data[8]`
 
-`CONTROL_ISLAND_HEALTH` schema 1 payload, 320 bytes:
+`CONTROL_ISLAND_HEALTH` schema 2 payload, 324 bytes:
 - `0..7 mono_us u64`, M7 observation time
 - `8 schema u8`, `10..11 payload_len u16`
 - `12..31 schema/wire/memory identity, M4 boot id, health sequence`
 - `32..51 flags, M7 publish sequence/age in M4 local time, authority epoch/source`
 - `52..83 IPC stale/integrity, FDCAN error, raw-ring fill/high-water/drop counters`
-- `84..95 transaction id/requested/completed/state, hard inhibit/FDCAN/hard inputs`
+- `84..95 transaction id/requested/completed/state/FDCAN/reserved`
 - `96..191` three 32-byte lane terminal counters
 - `192..231` current FDCAN register/HAL snapshot
 - `232..271` first-fault snapshot
 - `272..311` last-fault snapshot
-- `312..319` M7 snapshot publish total/failure total
+- `312..323` M7 snapshot publish total/failure/max-gap
 
-Flags distinguish ready/clock-qualified, hard inhibit, bus-off, error-passive,
+Flags distinguish ready/clock, bus-off, error-passive,
 M7 fresh, control active and tracking fault. Lane counters include release due,
 successful terminal, deadline miss, cancel, cancel race, suppressed release,
 tracking fault and last value generation.
@@ -557,10 +557,10 @@ Current active Service/HIL Host policy:
 - M4 releases standard DLC8 `0x005/0x007/0x364` from dedicated Tx buffers on its
   fixed 5/20/20 ms slot table. Value generation and publish liveness are separate.
 - M4 transport readiness와 ACTIVE motion permission은 별개다. source/lease/ARM/M7
-  freshness/permit/safety 상실은 old ACTIVE image를 revoke하며, healthy transport에서는
-  frozen lane-safe policy만 적용한다: `0x005` idle/hard `AA 02 00 00 00 00 00 00`,
-  `0x007` idle `82 00 00 00 00 00 00 00`/hard `SuppressTx`, `0x364` idle/hard
-  `SuppressTx`. 이는 M4 vehicle semantic 계산이나 implicit zero fallback이 아니다.
+  freshness/permit 상실은 old ACTIVE image를 revoke하며, healthy transport에서는
+  frozen lane-safe policy만 적용한다: `0x005` safe `AA 02 00 00 00 00 00 00`,
+  `0x007` safe `82 00 00 00 00 00 00 00`, `0x364` `SuppressTx`.
+  이는 M4 vehicle semantic 계산이나 implicit zero fallback이 아니다.
 - N-shot is a source-agnostic successful-TX budget. `TXBTO` increments the count;
   Nth success immediately blocks further transaction releases.
 - The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
@@ -568,17 +568,16 @@ Current active Service/HIL Host policy:
   host-control source in that profile.
 - TCP arrival spacing and Host timestamps are not CAN cadence clocks. M4 TIM4 is
   the only nominal physical request clock.
-- Heartbeat, lease, authority, safety or backend loss rejects new Host requests.
+- Heartbeat, lease, authority or backend loss rejects new Host requests.
   Host-to-RC handoff is one ordered state transition: close Host admission,
   terminate Host freshness/lease epoch, request cancellation and wait for every
   admitted Host HW terminal, then allow RC. There is neither overlap nor an
   artificial wait after the final terminal. Transport/Host-authority loss requests cancellation of Host-origin HW attempts;
-  hard-safety requests cancellation of all application-control origins. Attempts
+  FDCAN terminal fault requests cancellation of all application-control origins. Attempts
   remain journaled until transmitted/cancelled/faulted terminal truth, and new
   Host ARM waits for that closure.
-- Timing/hardware facts are not inferred from tests. Unfrozen timeout, polarity,
-  IRQ and bitrate qualification values remain `0` and physical release stays
-  fail-closed. Only reviewed/frozen product constants may enable HIL qualification.
+- Timing/hardware facts are not inferred from tests. Qualification remains measured evidence,
+  never a physical runtime permission gate.
 - The Wi-Fi sink owns the accepted raw mbed `TCPSocket` directly. The accepted
   socket is nonblocking; TX, downlink RX, and close are serviced only from the
   single bounded `WifiSocketWorker`. Product firmware must not wrap the accepted

@@ -26,7 +26,7 @@ Authority: `OPERATOR OUTCOMES`
 ## S3 Service/HIL 제어 시작
 
 - Preconditions: 명시적 Service/HIL profile, compatible identity/capability, 유효한 authority,
-  lease, hard-safety와 CAN backend.
+  lease와 CAN backend.
 - Input/action: operator가 ARM하고 상위 제어기가 명령을 요청한다.
 - Expected: 하나의 semantic owner와 하나의 physical execution owner만 유효하며, 각 요청은
   권한·safety·frame admission을 거친다.
@@ -52,10 +52,10 @@ Authority: `OPERATOR OUTCOMES`
 - Failure: unresolved physical work가 있으면 새 owner를 조기에 열지 않는다.
 - Evidence: session close, authority transition, cancellation reason, terminal outcome.
 
-## S6 Hard-safety와 CAN failure
+## S6 CAN failure
 
 - Preconditions: 임의 control source active 가능.
-- Input/action: hard-safety inhibit, bus/backend/tracking failure.
+- Input/action: bus/backend/tracking failure.
 - Expected: 새 실행을 fail closed하고 가능한 범위에서 이미 소유한 작업의 HW outcome을
   보존한다. 실행 불가능한 neutral을 전송했다고 주장하지 않는다.
 - Evidence: safety reason, inhibit/failure class, terminal outcome, board/CAN health.

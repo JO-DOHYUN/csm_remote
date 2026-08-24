@@ -43,8 +43,9 @@ for required in (
     "strict_n_shot_owner: csm_m4_generic_success_budget",
     "physical_transport_readiness: m4_fdcan1_transport_only",
     "active_motion_permission: fresh_coherent_source_all_lane_permit_explicit_arm",
-    "idle_safe: SuppressTx",
-    "hard_safe: SuppressTx",
+    "idle_safe: FixedSafeFrame_AA02000000000000",
+    "idle_safe: FixedSafeFrame_8200000000000000",
+    "evidence_only: true",
 ):
     if required not in manifest:
         fail(f"active manifest missing {required}")
@@ -91,15 +92,10 @@ for forbidden in (
 
 for required in (
     "BOARD_ENABLE_CONTROL_ISLAND=1",
-    "BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS=0UL",
-    "BOARD_HNO1_CAN1_BITRATE_QUALIFIED=0",
-    "BOARD_HNO1_HARD_SAFETY_QUALIFIED=0",
-    "BOARD_HNO1_IRQ_PRIORITY_QUALIFIED=0",
-    "BOARD_M4_M7_PUBLISH_TIMEOUT_US=0UL",
-    "BOARD_HNO1_SAFE_WIRE_QUALIFIED=0",
+    "BOARD_M4_M7_PUBLISH_TIMEOUT_US=300000UL",
 ):
     if required not in platformio:
-        fail(f"qualification/build marker missing {required}")
+        fail(f"required build marker missing {required}")
 
 if "nextEvenSequence" not in shared or "slotCrc" not in shared:
     fail("two-slot sequence/CRC IPC protocol missing")
@@ -114,5 +110,8 @@ for required in (
         fail(f"transport/motion/safe-wire split missing {required}")
 if "globalExecutionAllowed" in executor:
     fail("obsolete transport-motion combined gate remains")
+for obsolete in ("hardInhibitActive", "safeWireQualified", "hardSafetyQualified"):
+    if obsolete in executor:
+        fail(f"obsolete GPIO/qualification gate remains: {obsolete}")
 
 print("Architecture conformance guard PASS")

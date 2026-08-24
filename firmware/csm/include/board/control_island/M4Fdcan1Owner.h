@@ -23,13 +23,8 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   void noteTxComplete(uint32_t buffer_indexes);
   void noteTxAbort(uint32_t buffer_indexes);
   void noteError(uint32_t error_status);
-  void tickHardSafetyWatchdog();
 
   bool ready() const override;
-  bool safeWireQualified() const override;
-  bool hardSafetyQualified() const override;
-  bool hardInhibitActive() const override;
-  uint8_t hardInputBits() const override;
   bool errorPassive() const override;
   bool busOff() const override;
   bool request(uint8_t lane, const uint8_t data[8]) override;
@@ -53,16 +48,11 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   FDCAN_ProtocolStatusTypeDef protocol_ = {};
   FDCAN_ErrorCountersTypeDef errors_ = {};
   uint32_t m4_boot_id_ = 0;
-  uint32_t watchdog_slots_ = 0;
   uint32_t rx_capture_sequence_ = 0;
   uint32_t rx_fifo_lost_count_ = 0;
-  bool watchdog_level_ = false;
   bool fdcan_ready_ = false;
   bool timebase_ready_ = false;
   bool clock_contract_ok_ = false;
-  bool transport_contract_qualified_ = false;
-  bool hard_safety_qualified_ = false;
-  bool safe_wire_contract_qualified_ = false;
   bool protocol_fault_latched_ = false;
 };
 

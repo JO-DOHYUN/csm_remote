@@ -11,8 +11,6 @@ namespace BoardPins {
 // - The earlier internal CAN0/CAN1 + TJA1051 direction is deferred until a
 //   second internal CAN backend is implemented and HIL-proven.
 
-static constexpr pin_size_t SafetyWatchdogToggle = D0;  // PH15
-static constexpr pin_size_t EstopInN = D2;              // PJ11, isolated input
 
 static constexpr pin_size_t EncoderB = D4;              // PC7, TIM3_CH2
 static constexpr pin_size_t EncoderA = D5;              // PC6, TIM3_CH1
@@ -33,8 +31,6 @@ static constexpr pin_size_t SpiSck = LegacyMcp2515Pins::SpiSck;
 static constexpr pin_size_t SpiCipo = LegacyMcp2515Pins::SpiCipo;
 static constexpr pin_size_t CanIntN = LegacyMcp2515Pins::CanIntN;
 
-static constexpr pin_size_t FieldPowerOk = D12;         // PH7
-static constexpr pin_size_t EncoderFaultN = D13;        // PA10
 static constexpr pin_size_t SpareServiceGpio = D14;     // PA9
 static constexpr pin_size_t AdcSpiCsN = D14;            // PA9, future external ADC CS
 static constexpr pin_size_t AdcDataReadyN = D14;        // future ADC DRDY/shared spare

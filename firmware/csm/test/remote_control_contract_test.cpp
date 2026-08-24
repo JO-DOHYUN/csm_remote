@@ -19,23 +19,14 @@ static_assert(kControlMemoryLayoutId ==
 
 struct FakeDriver final : M4LaneDriver {
   bool ready_value = true;
-  bool inhibit = false;
   bool passive = false;
   bool off = false;
-  bool safe_wire = true;
-  bool hard_safety_qualified = true;
   bool pending_value[kLaneCount] = {};
   uint32_t requests[kLaneCount] = {};
   uint32_t cancels[kLaneCount] = {};
   uint8_t last_data[kLaneCount][8] = {};
 
   bool ready() const override { return ready_value && !passive && !off; }
-  bool safeWireQualified() const override { return safe_wire; }
-  bool hardSafetyQualified() const override { return hard_safety_qualified; }
-  bool hardInhibitActive() const override { return inhibit; }
-  uint8_t hardInputBits() const override {
-    return inhibit ? kHardInputEstop : 0u;
-  }
   bool errorPassive() const override { return passive; }
   bool busOff() const override { return off; }
   bool request(uint8_t lane, const uint8_t data[8]) override {
@@ -177,7 +168,7 @@ void testStaticSlotsAndNoReplay() {
   assert(executor.healthForPublish(250000u).m7_stale_count == 1u);
 }
 
-void testBootNoSourceUsesOnlyQualifiedIdleSafeWire() {
+void testBootNoSourceUsesIdleSafeWire() {
   FakeDriver driver;
   M4StaticCyclicExecutor executor;
   executor.begin(3u, 100000u, &driver);
@@ -189,17 +180,6 @@ void testBootNoSourceUsesOnlyQualifiedIdleSafeWire() {
                 kLaneSafeWirePolicies[kLane005].idle_safe.data, 8u) == 0);
   assert(memcmp(driver.last_data[kLane007],
                 kLaneSafeWirePolicies[kLane007].idle_safe.data, 8u) == 0);
-}
-
-void testUnqualifiedSafeWireSuppressesAllInactiveTx() {
-  FakeDriver driver;
-  driver.safe_wire = false;
-  M4StaticCyclicExecutor executor;
-  executor.begin(3u, 100000u, &driver);
-  executor.onFiveMillisecondSlot(5000u);
-  assert(driver.requests[kLane005] == 0u);
-  assert(driver.requests[kLane007] == 0u);
-  assert(driver.requests[kLane364] == 0u);
 }
 
 void testDisarmAndLeaseLossRevokeWithoutOldMotionReplay() {
@@ -248,7 +228,7 @@ void testM7StaleRequiresNewAuthorityArm() {
   assert(executor.hasActiveControl());
 }
 
-void testHardFaultAndTransportFaultCloseActive() {
+void testTransportFaultClosesActive() {
   FakeDriver driver;
   M4StaticCyclicExecutor executor;
   executor.begin(3u, 100000u, &driver);
@@ -256,25 +236,10 @@ void testHardFaultAndTransportFaultCloseActive() {
       makeSnapshot(2u, 1u, ControlSource::Remote, 1u);
   assert(executor.acceptSnapshot(active, 100u));
   executor.onFiveMillisecondSlot(5000u);
-  driver.inhibit = true;
+  driver.off = true;
   executor.onFiveMillisecondSlot(10000u);
   assert(!executor.hasActiveControl());
-  assert(driver.cancels[kLane005] == 1u && driver.cancels[kLane007] == 1u &&
-         driver.cancels[kLane364] == 1u);
-  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
-    driver.terminal(&executor, lane, false, true);
-  }
-  executor.onFiveMillisecondSlot(15000u);
-  assert(driver.requests[kLane005] == 2u);
-  assert(driver.requests[kLane007] == 1u && driver.requests[kLane364] == 1u);
-
-  driver.inhibit = false;
-  active.publish_sequence = 3u;
-  assert(executor.acceptSnapshot(active, 15100u));
-  assert(!executor.hasActiveControl());
-  driver.off = true;
-  executor.onFiveMillisecondSlot(20000u);
-  assert(driver.requests[kLane005] == 2u);
+  assert(driver.requests[kLane005] == 1u);
 }
 
 void testTrackingFaultGloballyRevokesAndBoundsClose() {
@@ -378,11 +343,10 @@ int main() {
   testSourceManagerCoherentLatestState();
   testSharedMemoryIntegrityAndBoundedRing();
   testStaticSlotsAndNoReplay();
-  testBootNoSourceUsesOnlyQualifiedIdleSafeWire();
-  testUnqualifiedSafeWireSuppressesAllInactiveTx();
+  testBootNoSourceUsesIdleSafeWire();
   testDisarmAndLeaseLossRevokeWithoutOldMotionReplay();
   testM7StaleRequiresNewAuthorityArm();
-  testHardFaultAndTransportFaultCloseActive();
+  testTransportFaultClosesActive();
   testTrackingFaultGloballyRevokesAndBoundsClose();
   testErrorPassiveBusOffAndResetDoNotResumeOldMotion();
   testQuiescentAuthoritySwitch();

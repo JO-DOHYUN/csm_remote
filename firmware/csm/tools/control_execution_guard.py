@@ -31,7 +31,7 @@ shared = (
 platformio = (PROJECT / "platformio.ini").read_text(encoding="utf-8")
 
 for token in (
-    "단일 권한·hard-safety",
+    "단일 권한·admission",
     "physical execution owner가 정확히 하나",
     "fail closed",
     "hidden retry",
@@ -44,7 +44,6 @@ for token in (
 
 for token in (
     "physical_can_owner: csm_m4_control_island",
-    "hard_safety_owner: csm_m4_control_island",
     "nominal_request_clock_owner: csm_m4_tim4",
     "host_software_execution_backlog: false",
     "hidden_retry: false",

@@ -210,9 +210,6 @@
 #define BOARD_ENABLE_TIM3_ENCODER 0
 #endif
 
-#ifndef BOARD_ENABLE_SAFETY_IO
-#define BOARD_ENABLE_SAFETY_IO 1
-#endif
 
 #ifndef BOARD_ENABLE_ENCODER_IO
 #define BOARD_ENABLE_ENCODER_IO 1
@@ -3214,19 +3211,9 @@ static uint8_t read_ab_state() {
 }
 
 static uint32_t read_fault_flags() {
-  uint32_t flags = 0;
-#if BOARD_ENABLE_SAFETY_IO
-  if (!digitalRead(BoardPins::EncoderFaultN)) {
-    flags |= (1u << 0);
-  }
-  if (!digitalRead(BoardPins::FieldPowerOk)) {
-    flags |= (1u << 1);
-  }
-  if (!digitalRead(BoardPins::EstopInN)) {
-    flags |= (1u << 2);
-  }
-#endif
-  return flags;
+  // The vehicle interface is power and CAN only; discrete vehicle safety
+  // inputs do not exist on CSM.
+  return 0;
 }
 
 void on_encoder_index() {
@@ -3457,12 +3444,8 @@ static void emit_control_island_health() {
             control_island_health.transaction_completed);
   payload[csm::kControlIslandHealthTransactionStateOffset] =
       control_island_health.transaction_state;
-  payload[csm::kControlIslandHealthHardInhibitOffset] =
-      control_island_health.hard_inhibit_state;
   payload[csm::kControlIslandHealthFdcanStateOffset] =
       control_island_health.fdcan_state;
-  payload[csm::kControlIslandHealthHardInputsOffset] =
-      control_island_health.hard_input_bits;
   for (uint8_t lane = 0;
        lane < csm::board::control_island::kLaneCount; ++lane) {
     const uint16_t offset = csm::kControlIslandHealthLanesOffset +
@@ -3487,6 +3470,8 @@ static void emit_control_island_health() {
             control_snapshot_publish_total);
   wr_u32_le(&payload[csm::kControlIslandHealthM7PublishFailedOffset],
             control_snapshot_publish_failed_total);
+  wr_u32_le(&payload[csm::kControlIslandHealthM7PublishMaxGapOffset],
+            control_island_health.m7_publish_max_gap_local_ms);
   emit_record(RecordType::ControlIslandHealth, payload, sizeof(payload),
               UplinkPriority::Critical);
 }
@@ -3629,19 +3614,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   const csm::board::uplink::WifiTcpSinkCounters wifi_counters = {};
 #endif
 
-  uint8_t inputs = 0;
-  inputs |= (control_island_health.hard_input_bits &
-             csm::board::control_island::kHardInputEstop)
-                ? (1u << 0)
-                : 0u;
-  inputs |= (control_island_health.hard_input_bits &
-             csm::board::control_island::kHardInputFieldPowerLost)
-                ? 0u
-                : (1u << 1);
-  inputs |= (control_island_health.hard_input_bits &
-             csm::board::control_island::kHardInputEncoderFault)
-                ? (1u << 2)
-                : 0u;
+  const uint8_t inputs = 0;
 
   uint8_t payload[csm::kBoardHealthV13PayloadLen];
   memset(payload, 0, sizeof(payload));
@@ -4287,7 +4260,6 @@ static bool control_island_runtime_ready(uint32_t now_ms) {
       csm::board::control_island::kHealthFlagClockContractOk |
       csm::board::control_island::kHealthFlagM7Fresh;
   const uint32_t forbidden =
-      csm::board::control_island::kHealthFlagHardInhibit |
       csm::board::control_island::kHealthFlagBusOff |
       csm::board::control_island::kHealthFlagErrorPassive |
       csm::board::control_island::kHealthFlagTrackingFault;
@@ -4340,20 +4312,6 @@ static void service_host_authority_boundary(uint32_t now_ms) {
 
 static csm::board::SafetyInputs read_safety_inputs() {
   csm::board::SafetyInputs inputs;
-  if (!control_island_health_valid) {
-    inputs.estop_asserted = true;
-    inputs.field_power_ok = false;
-    inputs.encoder_fault = true;
-    inputs.control_backend_ready = false;
-    return inputs;
-  }
-  const uint8_t hard = control_island_health.hard_input_bits;
-  inputs.estop_asserted =
-      (hard & csm::board::control_island::kHardInputEstop) != 0u;
-  inputs.field_power_ok =
-      (hard & csm::board::control_island::kHardInputFieldPowerLost) == 0u;
-  inputs.encoder_fault =
-      (hard & csm::board::control_island::kHardInputEncoderFault) != 0u;
   inputs.control_backend_ready = control_island_runtime_ready(millis());
   return inputs;
 }

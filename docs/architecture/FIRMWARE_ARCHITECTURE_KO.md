@@ -9,7 +9,7 @@ machine-readable owner와 qualification 상태는 `ACTIVE_ARCHITECTURE.yaml`이 
 | 역할 | PlatformIO environment |
 |---|---|
 | M7 semantic/data-plane product | `portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi` |
-| M4 hard-RT control island + RC frontend | `portenta_h7_m4_remote_frontend` |
+| M4 RT control island + RC frontend | `portenta_h7_m4_remote_frontend` |
 
 두 image는 같은 schema/wire/memory identity를 사용한다. 단독 image 교체나 이전 boot의
 source/authority/transaction 재사용은 허용하지 않는다.
@@ -35,8 +35,7 @@ source/authority/transaction 재사용은 허용하지 않는다.
 
 - TIM4 5 ms base와 static slot table
 - FDCAN1, dedicated Tx buffers `0/1/2`, terminal `TXBRP/TXBTO/TXBCF` truth
-- hard-safety GPIO와 external watchdog
-- latest snapshot depth 1, local publish-liveness timeout, bounded cancel
+- latest snapshot depth 1, 300 ms local publish-liveness timeout, bounded cancel
 - raw CAN1 RX ring과 generic successful-TX N-shot budget
 
 ## Execution flow
@@ -46,7 +45,7 @@ Android Host state ─┐
                     ├─> M7 global source authority ─> CRC32 2-slot final snapshot
 R16SM -> M4 mailbox ┘                                  │
                                                       v
-M4 hard-safety -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
+M4 -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
                                                       │
                        health/terminal counters <─────┤
                        bounded raw CAN1 ring <────────┘ -> M7 canonical evidence
@@ -88,12 +87,11 @@ M4 local time은 M4-local deadline/liveness에만 사용한다.
 ## Failure containment and qualification
 
 M4는 `physical transport readiness`, `ACTIVE motion permission`, `safe-wire fallback`을
-분리한다. source/lease/ARM/M7 freshness/permit 또는 safety 상실은 즉시 ACTIVE를 revoke하고
-old motion을 재사용하지 않는다. transport가 healthy이면 M4는 frozen per-lane policy만
-실행한다: `0x005` idle/hard-safe는 existing HNO1 failsafe `AA 02 00 00 00 00 00 00`, `0x007`
-idle-safe는 frozen neutral `82 00 00 00 00 00 00 00`이고 hard-safe는 `SuppressTx`, `0x364`는
-idle/hard 모두 `SuppressTx`다. M4는 vehicle semantic을 계산하거나 unspecified byte를
-zero-fill하지 않는다.
+분리한다. source/lease/ARM/M7 freshness/permit 상실은 즉시 ACTIVE를 revoke하고 old motion을
+재사용하지 않는다. transport가 healthy이면 M4는 frozen per-lane policy만 실행한다:
+`0x005` safe는 `AA 02 00 00 00 00 00 00`, `0x007` safe는 `82 00 00 00 00 00 00 00`,
+`0x364`는 `SuppressTx`다. M4는 vehicle semantic을 계산하거나 unspecified byte를 zero-fill하지
+않는다. FDCAN은 500 kbps로 정상 시작하며 evidence qualification은 runtime permission이 아니다.
 
 bus-off/error-passive 또는 unrecoverable tracking fault는 ACTIVE를 globally revoke하고 other
 pending lane을 bounded-cancel한다. transport recovery는 SAFE만 허용하며 fresh coherent source와
@@ -101,7 +99,7 @@ explicit re-ARM authority epoch 없이는 ACTIVE를 자동 재개하지 않는�
 failure는 M4 slot execution을 막지 않는다. raw ring overflow는 explicit drop/high-water evidence이며
 control backlog가 되지 않는다.
 
-현재 transport/timing, M4↔M7 liveness, hard-safety, safe-wire contract qualification은 각각
-독립 HIL-frozen fact가 아니다. 따라서 해당 flags와 timeout은 `0`이고 production physical release는
-fail-closed다.
+transport/timing, M4↔M7 liveness, safe-wire contract qualification은 측정 evidence이며 runtime
+permission이 아니다. 초기 M4→M7 freshness timeout은 300 ms이고 publish age/max gap/timeout count를
+보고한다.
 Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.

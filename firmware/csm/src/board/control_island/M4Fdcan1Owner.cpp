@@ -7,18 +7,6 @@
 #ifndef BOARD_HNO1_CAN1_BITRATE
 #define BOARD_HNO1_CAN1_BITRATE 500000
 #endif
-#ifndef BOARD_HNO1_CAN1_BITRATE_QUALIFIED
-#define BOARD_HNO1_CAN1_BITRATE_QUALIFIED 0
-#endif
-#ifndef BOARD_HNO1_HARD_SAFETY_QUALIFIED
-#define BOARD_HNO1_HARD_SAFETY_QUALIFIED 0
-#endif
-#ifndef BOARD_HNO1_IRQ_PRIORITY_QUALIFIED
-#define BOARD_HNO1_IRQ_PRIORITY_QUALIFIED 0
-#endif
-#ifndef BOARD_HNO1_SAFE_WIRE_QUALIFIED
-#define BOARD_HNO1_SAFE_WIRE_QUALIFIED 0
-#endif
 #ifndef BOARD_M4_TIM4_IRQ_PRIORITY
 #define BOARD_M4_TIM4_IRQ_PRIORITY 5
 #endif
@@ -55,12 +43,6 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   executor_ = executor;
   m4_boot_id_ = m4_boot_id;
   if (executor_ == nullptr || m4_boot_id_ == 0u) return false;
-  pinMode(BoardPins::SafetyWatchdogToggle, OUTPUT);
-  digitalWrite(BoardPins::SafetyWatchdogToggle, LOW);
-  pinMode(BoardPins::EstopInN, INPUT_PULLUP);
-  pinMode(BoardPins::FieldPowerOk, INPUT_PULLUP);
-  pinMode(BoardPins::EncoderFaultN, INPUT_PULLUP);
-
   // Mbed's low-level CAN bootstrap owns only pin/RCC discovery on M4. It is
   // immediately replaced by the sole direct-HAL dedicated-buffer contract;
   // no mbed::CAN object or cyclic can_write path exists in this image.
@@ -68,11 +50,6 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   handle_ = &can_.CanHandle;
   if (handle_->Instance != FDCAN1 || !configureDirectHal()) return false;
 
-  transport_contract_qualified_ =
-      BOARD_HNO1_CAN1_BITRATE_QUALIFIED != 0 &&
-      BOARD_HNO1_IRQ_PRIORITY_QUALIFIED != 0;
-  hard_safety_qualified_ = BOARD_HNO1_HARD_SAFETY_QUALIFIED != 0;
-  safe_wire_contract_qualified_ = BOARD_HNO1_SAFE_WIRE_QUALIFIED != 0;
   fdcan_ready_ = true;
   g_fdcan_owner = this;
   configureInterrupts();
@@ -199,8 +176,8 @@ void M4Fdcan1Owner::noteTxAbort(uint32_t buffer_indexes) {
 
 void M4Fdcan1Owner::noteError(uint32_t) {
   updateProtocolState();
-  if (protocol_.BusOff != 0u || protocol_.ErrorPassive != 0u) {
-    // Recovery policy is not qualified. Latch until reset and abort every
+  if (protocol_.BusOff != 0u) {
+    // Bus-off is a terminal transport fault. Latch until reset and abort every
     // outstanding dedicated buffer so no stale request can transmit later.
     protocol_fault_latched_ = true;
     for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
@@ -212,46 +189,9 @@ void M4Fdcan1Owner::noteError(uint32_t) {
   }
 }
 
-void M4Fdcan1Owner::tickHardSafetyWatchdog() {
-#if BOARD_HNO1_HARD_SAFETY_QUALIFIED
-  if (++watchdog_slots_ < 20u) return;
-  watchdog_slots_ = 0;
-  watchdog_level_ = !watchdog_level_;
-  digitalWrite(BoardPins::SafetyWatchdogToggle,
-               watchdog_level_ ? HIGH : LOW);
-#else
-  digitalWrite(BoardPins::SafetyWatchdogToggle, LOW);
-#endif
-}
-
 bool M4Fdcan1Owner::ready() const {
   return fdcan_ready_ && timebase_ready_ && clock_contract_ok_ &&
-      transport_contract_qualified_ && !protocol_fault_latched_ &&
-      !busOff() && !errorPassive();
-}
-
-bool M4Fdcan1Owner::safeWireQualified() const {
-  return safe_wire_contract_qualified_;
-}
-
-bool M4Fdcan1Owner::hardSafetyQualified() const {
-  return hard_safety_qualified_;
-}
-
-bool M4Fdcan1Owner::hardInhibitActive() const {
-  return hardInputBits() != 0u;
-}
-
-uint8_t M4Fdcan1Owner::hardInputBits() const {
-  uint8_t bits = 0;
-  if (digitalRead(BoardPins::EstopInN) == LOW) bits |= kHardInputEstop;
-  if (digitalRead(BoardPins::FieldPowerOk) == LOW) {
-    bits |= kHardInputFieldPowerLost;
-  }
-  if (digitalRead(BoardPins::EncoderFaultN) == LOW) {
-    bits |= kHardInputEncoderFault;
-  }
-  return bits;
+      !protocol_fault_latched_ && !busOff();
 }
 
 bool M4Fdcan1Owner::errorPassive() const {
@@ -366,7 +306,6 @@ bool M4ControlTimebase::begin(M4StaticCyclicExecutor* executor,
 void M4ControlTimebase::serviceInterrupt() {
   if ((TIM4->SR & TIM_SR_UIF) == 0u) return;
   TIM4->SR &= ~TIM_SR_UIF;
-  owner_->tickHardSafetyWatchdog();
   executor_->onFiveMillisecondSlot(micros());
 }
 

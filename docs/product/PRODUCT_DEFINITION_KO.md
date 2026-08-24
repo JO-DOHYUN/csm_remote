@@ -7,7 +7,7 @@ Authority: `PRODUCT PURPOSE / PROFILES / OPERATOR GUARANTEES`
 
 ## 제품 목적
 
-CSM Remote는 RC, autonomy, 승인된 service host의 제어 입력을 권한과 hard-safety
+CSM Remote는 RC, autonomy, 승인된 service host의 제어 입력을 권한과 admission
 경계에서 판정해 차량의 단일 물리 CAN 실행 경계로 전달한다. 동시에 차량 수신,
 제어 admission, terminal outcome, 실제 실행, board/transport 상태를 canonical typed
 evidence로 만들어 독립 observer에 제공한다.
@@ -27,7 +27,7 @@ evidence로 만들어 독립 observer에 제공한다.
 ### Production
 
 - VSM은 observer-only다.
-- 제어원 우선순위와 hard-safety가 항상 monitoring보다 앞선다.
+- 제어원 우선순위와 admission이 항상 monitoring보다 앞선다.
 - canonical evidence는 USB와 Wi-Fi observer가 독립적으로 소비할 수 있다.
 
 ### Service/HIL
@@ -35,7 +35,7 @@ evidence로 만들어 독립 observer에 제공한다.
 - 명시적으로 식별된 engineering profile에서만 host control을 허용한다.
 - service host는 차량 의미와 실행 시퀀스를 소유하고 CSM은 권한, safety, 정적 frame
   admission, 물리 실행과 hardware truth를 소유한다.
-- host disconnect, lease/stale, authority 상실, hard-safety와 CAN failure는 새 작업을
+- host disconnect, lease/stale, authority 상실과 CAN failure는 새 작업을
   fail closed하며 이미 수락된 작업의 terminal truth를 조용히 지우지 않는다.
 
 ## Evidence Contract

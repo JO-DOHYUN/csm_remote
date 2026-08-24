@@ -10,12 +10,8 @@ class M4LaneDriver {
  public:
   virtual ~M4LaneDriver() = default;
   // Physical transport availability only; it is deliberately independent of
-  // source authority, permit, lease and hard-safety motion permission.
+  // source authority, permit, lease and motion permission.
   virtual bool ready() const = 0;
-  virtual bool safeWireQualified() const = 0;
-  virtual bool hardSafetyQualified() const = 0;
-  virtual bool hardInhibitActive() const = 0;
-  virtual uint8_t hardInputBits() const = 0;
   virtual bool errorPassive() const = 0;
   virtual bool busOff() const = 0;
   virtual bool request(uint8_t lane, const uint8_t data[8]) = 0;
@@ -43,7 +39,7 @@ class M4StaticCyclicExecutor {
   void activateCandidate();
   void serviceTransition();
   void releaseLane(uint8_t lane, bool active_motion);
-  void releaseSafeLane(uint8_t lane, bool hard_safe);
+  void releaseSafeLane(uint8_t lane);
   void cancelLane(uint8_t lane);
   void cancelAllPending();
   bool allLanesFree() const;

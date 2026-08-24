@@ -36,6 +36,13 @@ bool M4StaticCyclicExecutor::acceptSnapshot(
     saturatingIncrement(&health_.ipc_integrity_miss);
     return false;
   }
+  if (last_publish_seen_us_ != 0u) {
+    const uint32_t gap_ms = static_cast<uint32_t>(
+        observed_at_us - last_publish_seen_us_) / 1000u;
+    if (gap_ms > health_.m7_publish_max_gap_local_ms) {
+      health_.m7_publish_max_gap_local_ms = gap_ms;
+    }
+  }
   last_publish_seen_us_ = observed_at_us;
   health_.m7_publish_sequence_seen = snapshot.publish_sequence;
   stale_latched_ = false;
@@ -102,9 +109,7 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
     next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 0x03u);
     return;
   }
-  const bool hard_safe = driver_->hardInhibitActive();
-  const bool active_motion = !hard_safe && activeMotionAllowed(now_us);
-  if (hard_safe) revokeActive(true);
+  const bool active_motion = activeMotionAllowed(now_us);
   if (next_slot_ == 0u) {
     releaseLane(kLane005, active_motion);
     releaseLane(kLane007, active_motion);
@@ -170,16 +175,6 @@ ControlHealthPayload M4StaticCyclicExecutor::healthForPublish(uint32_t now_us) {
     health_.flags |= kHealthFlagReady | kHealthFlagClockContractOk;
     health_.flags |= kHealthFlagTransportReady;
   }
-  if (driver_ != nullptr && driver_->safeWireQualified()) {
-    health_.flags |= kHealthFlagSafeWireQualified;
-  }
-  if (driver_ != nullptr && driver_->hardInhibitActive()) {
-    health_.flags |= kHealthFlagHardInhibit;
-    health_.hard_inhibit_state = 1u;
-  } else {
-    health_.hard_inhibit_state = 0u;
-  }
-  health_.hard_input_bits = driver_ == nullptr ? 0u : driver_->hardInputBits();
   if (driver_ != nullptr && driver_->busOff()) health_.flags |= kHealthFlagBusOff;
   if (driver_ != nullptr && driver_->errorPassive()) {
     health_.flags |= kHealthFlagErrorPassive;
@@ -250,7 +245,7 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane, bool active_motion) {
     return;
   }
   if (!active_motion) {
-    releaseSafeLane(lane, driver_->hardInhibitActive());
+    releaseSafeLane(lane);
     return;
   }
   if ((active_.permit_mask & (1u << lane)) == 0u ||
@@ -279,16 +274,9 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane, bool active_motion) {
   lane_health.last_value_generation = active_.lanes[lane].value_generation;
 }
 
-void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane, bool hard_safe) {
+void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
   LaneHealth& lane_health = health_.lanes[lane];
-  if (!driver_->safeWireQualified() ||
-      (hard_safe && !driver_->hardSafetyQualified())) {
-    saturatingIncrement(&lane_health.suppressed);
-    return;
-  }
-  const SafeWireFrame& safe = hard_safe
-      ? kLaneSafeWirePolicies[lane].hard_safe
-      : kLaneSafeWirePolicies[lane].idle_safe;
+  const SafeWireFrame& safe = kLaneSafeWirePolicies[lane].idle_safe;
   if (safe.action != SafeWireAction::FixedSafeFrame) {
     saturatingIncrement(&lane_health.suppressed);
     return;
@@ -332,7 +320,7 @@ bool M4StaticCyclicExecutor::allLanesFree() const {
 
 bool M4StaticCyclicExecutor::activeMotionAllowed(uint32_t now_us) {
   if (!active_valid_ || driver_ == nullptr || !driver_->ready() ||
-      driver_->hardInhibitActive() || publish_timeout_us_ == 0u ||
+      publish_timeout_us_ == 0u ||
       active_.active_source == static_cast<uint32_t>(ControlSource::None)) {
     return false;
   }
