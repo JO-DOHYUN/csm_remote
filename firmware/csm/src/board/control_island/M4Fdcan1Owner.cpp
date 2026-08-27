@@ -39,21 +39,31 @@ uint8_t dlcBytes(uint32_t data_length) {
 }  // namespace
 
 bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
-                          M4StaticCyclicExecutor* executor) {
+                          M4StaticCyclicExecutor* executor,
+                          BringupTracePayload* trace) {
   fdcan_ready_ = false;
-  timebase_ready_ = false;
   clock_contract_ok_ = false;
   protocol_fault_latched_ = false;
   error_status_latch_ = 0u;
   executor_ = executor;
+  trace_ = trace;
   m4_boot_id_ = m4_boot_id;
-  if (executor_ == nullptr || m4_boot_id_ == 0u) return false;
+  stage(BringupStage::FdcanBeginEntered);
+  if (executor_ == nullptr || m4_boot_id_ == 0u) {
+    stage(BringupStage::FdcanBeginEntered, BringupFailure::Executor);
+    return false;
+  }
   // Mbed's low-level CAN bootstrap owns only pin/RCC discovery on M4. It is
   // immediately replaced by the sole direct-HAL dedicated-buffer contract;
   // no mbed::CAN object or cyclic can_write path exists in this image.
   can_init_freq(&can_, PB_8, PH_13, BOARD_HNO1_CAN1_BITRATE);
+  stage(BringupStage::MbedBootstrapReturned);
   handle_ = &can_.CanHandle;
-  if (handle_->Instance != FDCAN1) return false;
+  if (handle_->Instance != FDCAN1) {
+    stage(BringupStage::MbedBootstrapReturned, BringupFailure::FdcanInstance);
+    return false;
+  }
+  stage(BringupStage::Fdcan1InstanceValidated);
   if (!configureDirectHal()) {
     (void)HAL_FDCAN_Stop(handle_);
     (void)HAL_FDCAN_DeInit(handle_);
@@ -71,6 +81,7 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   }
   fdcan_ready_ = true;
   updateProtocolState();
+  stage(BringupStage::FdcanOperational);
   return true;
 }
 
@@ -105,7 +116,12 @@ bool M4Fdcan1Owner::configureDirectHal() {
   handle_->Init.TxFifoQueueElmtsNbr = 0;
   handle_->Init.TxElmtSize = FDCAN_DATA_BYTES_8;
   handle_->Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-  if (HAL_FDCAN_Init(handle_) != HAL_OK) return false;
+  if (HAL_FDCAN_Init(handle_) != HAL_OK) {
+    stage(BringupStage::Fdcan1InstanceValidated, BringupFailure::HalInit,
+          HAL_FDCAN_GetError(handle_));
+    return false;
+  }
+  stage(BringupStage::HalInitialized);
 
   FDCAN_FilterTypeDef filter = {};
   filter.IdType = FDCAN_STANDARD_ID;
@@ -114,16 +130,32 @@ bool M4Fdcan1Owner::configureDirectHal() {
   filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
   filter.FilterID1 = 0;
   filter.FilterID2 = 0;
-  if (HAL_FDCAN_ConfigFilter(handle_, &filter) != HAL_OK) return false;
+  if (HAL_FDCAN_ConfigFilter(handle_, &filter) != HAL_OK) {
+    stage(BringupStage::HalInitialized, BringupFailure::Filter,
+          HAL_FDCAN_GetError(handle_));
+    return false;
+  }
+  stage(BringupStage::FilterConfigured);
   if (HAL_FDCAN_ConfigGlobalFilter(
           handle_, FDCAN_ACCEPT_IN_RX_FIFO0, FDCAN_REJECT,
           FDCAN_REJECT_REMOTE, FDCAN_REJECT_REMOTE) != HAL_OK) {
+    stage(BringupStage::FilterConfigured, BringupFailure::GlobalFilter,
+          HAL_FDCAN_GetError(handle_));
     return false;
   }
-  if (HAL_FDCAN_Start(handle_) != HAL_OK) return false;
-  clock_contract_ok_ = handle_->Init.NominalPrescaler != 0u &&
-      handle_->Init.NominalTimeSeg1 != 0u &&
-      handle_->Init.NominalTimeSeg2 != 0u;
+  stage(BringupStage::GlobalFilterConfigured);
+  if (HAL_FDCAN_Start(handle_) != HAL_OK) {
+    stage(BringupStage::GlobalFilterConfigured, BringupFailure::HalStart,
+          HAL_FDCAN_GetError(handle_));
+    return false;
+  }
+  stage(BringupStage::HalStarted);
+  fdcan_kernel_clock_hz_ = HAL_RCCEx_GetPeriphCLKFreq(RCC_PERIPHCLK_FDCAN);
+  const uint32_t quanta = 1u + handle_->Init.NominalTimeSeg1 +
+      handle_->Init.NominalTimeSeg2;
+  nominal_bitrate_ = handle_->Init.NominalPrescaler == 0u || quanta == 0u
+      ? 0u : fdcan_kernel_clock_hz_ / handle_->Init.NominalPrescaler / quanta;
+  clock_contract_ok_ = nominal_bitrate_ == BOARD_HNO1_CAN1_BITRATE;
   return clock_contract_ok_;
 }
 
@@ -135,14 +167,20 @@ bool M4Fdcan1Owner::configureInterrupts() {
       FDCAN_IT_ARB_PROTOCOL_ERROR | FDCAN_IT_DATA_PROTOCOL_ERROR;
   if (HAL_FDCAN_ConfigInterruptLines(handle_, notifications,
                                      FDCAN_INTERRUPT_LINE0) != HAL_OK) {
+    stage(BringupStage::HalStarted, BringupFailure::InterruptLine,
+          HAL_FDCAN_GetError(handle_));
     return false;
   }
+  stage(BringupStage::InterruptLinesConfigured);
   if (HAL_FDCAN_ActivateNotification(handle_, notifications,
                                      FDCAN_TX_BUFFER0 |
                                          FDCAN_TX_BUFFER1 |
-                                         FDCAN_TX_BUFFER2) != HAL_OK) {
+                                     FDCAN_TX_BUFFER2) != HAL_OK) {
+    stage(BringupStage::InterruptLinesConfigured,
+          BringupFailure::Notification, HAL_FDCAN_GetError(handle_));
     return false;
   }
+  stage(BringupStage::NotificationsActivated);
   NVIC_SetVector(FDCAN1_IT0_IRQn,
                  reinterpret_cast<uint32_t>(fdcanIrqTrampoline));
   NVIC_SetVector(FDCAN1_IT1_IRQn,
@@ -151,10 +189,12 @@ bool M4Fdcan1Owner::configureInterrupts() {
   NVIC_SetPriority(FDCAN1_IT1_IRQn, BOARD_M4_FDCAN_IRQ_PRIORITY);
   NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
   NVIC_EnableIRQ(FDCAN1_IT1_IRQn);
+  stage(BringupStage::NvicConfigured);
   return true;
 }
 
 void M4Fdcan1Owner::serviceInterrupt() {
+  if (fdcan_irq_total_ != UINT32_MAX) ++fdcan_irq_total_;
   if (handle_ != nullptr) HAL_FDCAN_IRQHandler(handle_);
 }
 
@@ -189,22 +229,25 @@ void M4Fdcan1Owner::serviceRxInterrupt(uint32_t interrupt_flags) {
 }
 
 void M4Fdcan1Owner::noteTxComplete(uint32_t buffer_indexes) {
+  if (tx_complete_callback_total_ != UINT32_MAX) ++tx_complete_callback_total_;
   terminal(buffer_indexes, false);
 }
 
 void M4Fdcan1Owner::noteTxAbort(uint32_t buffer_indexes) {
+  if (tx_abort_callback_total_ != UINT32_MAX) ++tx_abort_callback_total_;
   terminal(buffer_indexes, true);
 }
 
-void M4Fdcan1Owner::noteError(uint32_t) {
+void M4Fdcan1Owner::noteError(uint32_t status) {
+  if (error_callback_total_ != UINT32_MAX) ++error_callback_total_;
+  last_error_callback_status_ = status;
   error_status_latch_ = 1u;
 }
 
 void M4Fdcan1Owner::consumeLatchedEvents() {
-  const bool error_latched = error_status_latch_ != 0u;
   error_status_latch_ = 0u;
   updateProtocolState();
-  if (error_latched && protocol_.BusOff != 0u && !protocol_fault_latched_) {
+  if (protocol_.BusOff != 0u && !protocol_fault_latched_) {
     // Bus-off is a terminal transport fault. Latch until reset and abort every
     // outstanding dedicated buffer so no stale request can transmit later.
     protocol_fault_latched_ = true;
@@ -217,7 +260,7 @@ void M4Fdcan1Owner::consumeLatchedEvents() {
 }
 
 bool M4Fdcan1Owner::ready() const {
-  return fdcan_ready_ && timebase_ready_ && clock_contract_ok_ &&
+  return fdcan_ready_ && clock_contract_ok_ &&
       !protocol_fault_latched_ && !busOff();
 }
 
@@ -231,10 +274,11 @@ bool M4Fdcan1Owner::errorPassive() const {
 
 bool M4Fdcan1Owner::busOff() const { return protocol_.BusOff != 0u; }
 
-bool M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
-  if (lane >= kLaneCount || data == nullptr || !ready() || pending(lane)) {
-    return false;
+TxRequestResult M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
+  if (lane >= kLaneCount || data == nullptr || !ready()) {
+    return TxRequestResult::TransportUnavailable;
   }
+  if (pending(lane)) return TxRequestResult::AlreadyPending;
   FDCAN_TxHeaderTypeDef header = {};
   header.Identifier = kLaneIds[lane];
   header.IdType = FDCAN_STANDARD_ID;
@@ -250,19 +294,28 @@ bool M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
   memcpy(payload, data, sizeof(payload));
   if (HAL_FDCAN_AddMessageToTxBuffer(handle_, &header, payload, buffer) !=
       HAL_OK) {
-    return false;
+    if (add_failure_total_ != UINT32_MAX) ++add_failure_total_;
+    return TxRequestResult::AddFailed;
   }
-  if (HAL_FDCAN_EnableTxBufferRequest(handle_, buffer) == HAL_OK) return true;
-  if (!pending(lane)) return false;
-  if (HAL_FDCAN_AbortTxRequest(handle_, buffer) != HAL_OK && executor_ != nullptr) {
-    executor_->latchTrackingFault(lane);
+  if (HAL_FDCAN_EnableTxBufferRequest(handle_, buffer) == HAL_OK) {
+    return TxRequestResult::Accepted;
   }
-  return true;
+  if (enable_failure_total_ != UINT32_MAX) ++enable_failure_total_;
+  if (!pending(lane)) return TxRequestResult::EnableFailedNoPending;
+  if (HAL_FDCAN_AbortTxRequest(handle_, buffer) == HAL_OK) {
+    return TxRequestResult::EnableFailedAbortPending;
+  }
+  if (abort_failure_total_ != UINT32_MAX) ++abort_failure_total_;
+  protocol_fault_latched_ = true;
+  return TxRequestResult::EnableFailedAbortFailed;
 }
 
 bool M4Fdcan1Owner::cancel(uint8_t lane) {
-  return lane < kLaneCount &&
+  if (lane >= kLaneCount || handle_ == nullptr) return false;
+  const bool accepted =
       HAL_FDCAN_AbortTxRequest(handle_, bufferMask(lane)) == HAL_OK;
+  if (!accepted && abort_failure_total_ != UINT32_MAX) ++abort_failure_total_;
+  return accepted;
 }
 
 bool M4Fdcan1Owner::pending(uint8_t lane) const {
@@ -309,17 +362,43 @@ uint32_t M4Fdcan1Owner::bufferMask(uint8_t lane) {
   return lane < kLaneCount ? kBuffers[lane] : 0u;
 }
 
-bool M4ControlTimebase::begin(M4StaticCyclicExecutor* executor,
-                              M4Fdcan1Owner* owner) {
+void M4Fdcan1Owner::augmentHealth(ControlHealthPayload* health) const {
+  if (health == nullptr) return;
+  health->fdcan_kernel_clock_hz = fdcan_kernel_clock_hz_;
+  if (handle_ != nullptr) {
+    health->nominal_prescaler = handle_->Init.NominalPrescaler;
+    health->nominal_sjw = handle_->Init.NominalSyncJumpWidth;
+    health->nominal_time_seg1 = handle_->Init.NominalTimeSeg1;
+    health->nominal_time_seg2 = handle_->Init.NominalTimeSeg2;
+  }
+  health->nominal_bitrate = nominal_bitrate_;
+  health->fdcan_irq_total = fdcan_irq_total_;
+  health->tx_complete_callback_total = tx_complete_callback_total_;
+  health->tx_abort_callback_total = tx_abort_callback_total_;
+  health->error_callback_total = error_callback_total_;
+  health->last_error_callback_status = last_error_callback_status_;
+  health->add_failure_total = add_failure_total_;
+  health->enable_failure_total = enable_failure_total_;
+  health->abort_failure_total = abort_failure_total_;
+}
+
+void M4Fdcan1Owner::stage(BringupStage stage_value,
+                           BringupFailure failure, uint32_t detail) {
+  if (trace_ == nullptr) return;
+  trace_->stage = static_cast<uint16_t>(stage_value);
+  trace_->failure = static_cast<uint16_t>(failure);
+  trace_->failure_detail = detail;
+  (void)publishBringupTrace(*trace_);
+}
+
+bool M4ControlTimebase::begin(M4StaticCyclicExecutor* executor) {
   executor_ = executor;
-  owner_ = owner;
-  if (executor_ == nullptr || owner_ == nullptr) return false;
+  if (executor_ == nullptr) return false;
   const uint32_t pclk1 = HAL_RCC_GetPCLK1Freq();
   const bool apb_divided = (RCC->D2CFGR & RCC_D2CFGR_D2PPRE1) != 0u;
   timer_clock_hz_ = apb_divided ? pclk1 * 2u : pclk1;
   if (timer_clock_hz_ == 0u || timer_clock_hz_ % 1000000u != 0u ||
       timer_clock_hz_ / 1000000u > 65536u) {
-    owner_->markTimebaseReady(false);
     return false;
   }
   __HAL_RCC_TIM4_CLK_ENABLE();
@@ -336,13 +415,14 @@ bool M4ControlTimebase::begin(M4StaticCyclicExecutor* executor,
   NVIC_SetPriority(TIM4_IRQn, BOARD_M4_TIM4_IRQ_PRIORITY);
   NVIC_EnableIRQ(TIM4_IRQn);
   TIM4->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
-  owner_->markTimebaseReady(true);
+  executor_->markTimebaseConfigured(true);
   return true;
 }
 
 void M4ControlTimebase::serviceInterrupt() {
   if ((TIM4->SR & TIM_SR_UIF) == 0u) return;
   TIM4->SR &= ~TIM_SR_UIF;
+  first_tick_seen_ = true;
   executor_->onFiveMillisecondSlot(micros());
 }
 

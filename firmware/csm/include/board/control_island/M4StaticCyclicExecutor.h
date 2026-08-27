@@ -16,7 +16,7 @@ class M4LaneDriver {
   virtual bool errorWarning() const { return false; }
   virtual bool errorPassive() const = 0;
   virtual bool busOff() const = 0;
-  virtual bool request(uint8_t lane, const uint8_t data[8]) = 0;
+  virtual TxRequestResult request(uint8_t lane, const uint8_t data[8]) = 0;
   virtual bool cancel(uint8_t lane) = 0;
   virtual bool pending(uint8_t lane) const = 0;
   virtual FdcanRawSnapshot rawSnapshot() const = 0;
@@ -32,9 +32,10 @@ class M4StaticCyclicExecutor {
   void latchTerminalEvent(uint8_t lane, bool transmitted, bool cancelled);
   void latchTrackingFault(uint8_t lane);
   void onFiveMillisecondSlot(uint32_t now_us);
+  void markTimebaseConfigured(bool configured) { timebase_configured_ = configured; }
 
   const ControlHealthPayload& health() const { return health_; }
-  ControlHealthPayload healthSnapshot(uint32_t now_us) const;
+  bool healthSnapshot(uint32_t now_us, ControlHealthPayload* result) const;
   bool hasActiveControl() const { return active_valid_; }
 
  private:
@@ -80,6 +81,8 @@ class M4StaticCyclicExecutor {
   bool error_passive_seen_ = false;
   bool bus_off_seen_ = false;
   uint32_t rejected_activation_epoch_ = 0;
+  volatile uint32_t health_write_sequence_ = 0;
+  bool timebase_configured_ = false;
 };
 
 }  // namespace csm::board::control_island

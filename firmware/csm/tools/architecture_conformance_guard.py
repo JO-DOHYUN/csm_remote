@@ -27,6 +27,12 @@ executor = (
 fdcan = (
     project / "src/board/control_island/M4Fdcan1Owner.cpp"
 ).read_text(encoding="utf-8")
+remote_runtime = (
+    project / "src/board/control/RemoteControlRuntime.cpp"
+).read_text(encoding="utf-8")
+typed_records = (project / "include/protocol/TypedRecords.h").read_text(
+    encoding="utf-8"
+)
 m7_linker = (project / "linker/portenta_h7_m7_product.ld").read_text(
     encoding="utf-8"
 )
@@ -80,10 +86,39 @@ for required in (
     "control_source_manager.updateRemote",
     "publishFinalControlSnapshot",
     "readControlHealth",
+    "readBringupTrace",
+    "service_control_island",
     "popRawCanForM7",
 ):
     if required not in main:
         fail(f"M7 integration missing {required}")
+for required in (
+    "initializeControlIpcForM7",
+    "initializeRemoteSharedMemoryForM7",
+    "bootM4();",
+):
+    if required not in main:
+        fail(f"M7 preboot sequence missing {required}")
+if main.find("bootM4();") > main.find("remote_control_runtime.begin("):
+    fail("M4 boot remains gated behind RC semantic initialization")
+preboot = (
+    main.find("initializeControlIpcForM7"),
+    main.find("initializeRemoteSharedMemoryForM7"),
+    main.find("bootM4();"),
+    main.find("remote_control_runtime.begin("),
+    main.find("wifi_tcp_sink.begin("),
+)
+if any(index < 0 for index in preboot) or tuple(sorted(preboot)) != preboot:
+    fail("M7 Control/Remote IPC -> M4 -> RC -> Wi-Fi preboot order drift")
+if "if (!remote_control_runtime_ok) return" in main:
+    fail("Control-Island service still short-circuits on RC runtime")
+if main.count("service_control_island();") < 5:
+    fail("independent Control-Island coordinator service points missing")
+if "initializeRemoteSharedMemoryForM7" in remote_runtime:
+    fail("RC semantic runtime still owns Remote IPC initialization")
+for obsolete in ("authority_manager_", "RemoteControlOrchestrator", "backend_state"):
+    if obsolete in remote_runtime:
+        fail(f"RC semantic runtime retains global authority owner: {obsolete}")
 
 for forbidden in (
     "HostCanTxRequest))",
@@ -157,6 +192,11 @@ for required in (
     "TXBTO",
     "TXBCF",
     "TIM4",
+    "TxRequestResult::Accepted",
+    "EnableFailedAbortFailed",
+    "nominal_bitrate_ == BOARD_HNO1_CAN1_BITRATE",
+    "fdcan_irq_total_",
+    "tx_complete_callback_total_",
 ):
     if required not in fdcan:
         fail(f"M4 physical owner missing {required}")
@@ -177,9 +217,24 @@ for required in (
     "TransactionState::Complete",
     "cancelActivePending()",
     "consumeTerminalEvents",
+    "health_write_sequence_",
+    "schedule_due",
+    "transport_blocked",
+    "request_attempt",
+    "request_accepted",
+    "request_failed",
 ):
     if required not in executor:
         fail(f"M4 executor missing {required}")
+for required in (
+    "kControlIslandHealthPayloadLen = 512",
+    "kControlIslandHealthSchema = 4",
+    "kRemoteControlStateSchema = 3",
+    "kControlIslandHealthBringupStageOffset",
+    "kControlIslandHealthAuthorityWordOffset",
+):
+    if required not in typed_records:
+        fail(f"schema-4 observability contract missing {required}")
 if executor.count("driver_->cancel(lane)") != 1:
     fail("cancellation must remain one bounded request until terminal closure")
 for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):

@@ -30,6 +30,9 @@ source/authority/transaction 재사용은 허용하지 않는다.
 - Host/RC 전역 단일 source authority와 coherent final snapshot
 - canonical typed evidence, feeder bus, bounded USB/Wi-Fi sinks
 - FDCAN1 register/pin/interrupt/static release ownership 없음
+- D3 Control/Remote IPC를 boot epoch당 한 번 초기화한 뒤 RC/Wi-Fi 결과와 무관하게
+  M4를 부팅한다. 독립 Control-Island coordinator가 health/Host session/RC candidate/
+  global selection/permit/final snapshot을 계속 서비스한다.
 
 ### M4 control island
 
@@ -110,3 +113,9 @@ transport/timing, M4↔M7 liveness, safe-wire contract qualification은 측정 e
 permission이 아니다. 초기 M4→M7 freshness timeout은 300 ms이고 publish age/max gap/timeout count를
 보고한다.
 Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.
+
+TIM4 configured와 실제 tick은 분리 보고되며 FDCAN begin 실패에도 static due truth가
+누적된다. FDCAN request는 Add/Enable/Abort reconciliation 결과를 명시하며 Accepted만
+executor pending을 만든다. schema-4 Control-Island health는 independent M4 bring-up identity,
+TIM4/FDCAN/IRQ/callback, per-lane due→request→terminal, M7 coordinator/read reject를 함께 싣고
+normal M4 health가 아직 없을 때도 진단 record 자체를 폐기하지 않는다.

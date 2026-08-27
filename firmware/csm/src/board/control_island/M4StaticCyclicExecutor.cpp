@@ -3,6 +3,32 @@
 namespace csm::board::control_island {
 namespace {
 constexpr uint32_t laneBit(uint8_t lane) { return 1u << lane; }
+
+void atomicAdd(volatile uint32_t* value, uint32_t increment) {
+#if defined(_MSC_VER)
+  *value += increment;
+#else
+  __atomic_fetch_add(value, increment, __ATOMIC_RELEASE);
+#endif
+}
+
+void atomicOr(volatile uint32_t* value, uint32_t bits) {
+#if defined(_MSC_VER)
+  *value |= bits;
+#else
+  __atomic_fetch_or(value, bits, __ATOMIC_RELEASE);
+#endif
+}
+
+uint32_t atomicExchangeZero(volatile uint32_t* value) {
+#if defined(_MSC_VER)
+  const uint32_t previous = *value;
+  *value = 0u;
+  return previous;
+#else
+  return __atomic_exchange_n(value, 0u, __ATOMIC_ACQ_REL);
+#endif
+}
 }
 
 void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
@@ -27,6 +53,8 @@ void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
   fault_closing_ = false;
   error_warning_seen_ = error_passive_seen_ = bus_off_seen_ = false;
   rejected_activation_epoch_ = 0;
+  health_write_sequence_ = 0;
+  timebase_configured_ = false;
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     lane_state_[lane] = LaneState::Free;
     cancel_issued_[lane] = false;
@@ -51,22 +79,32 @@ bool M4StaticCyclicExecutor::stageSnapshot(
 }
 
 void M4StaticCyclicExecutor::stageIpcIntegrityFailure() {
-  if (ipc_integrity_events_ != UINT32_MAX) ++ipc_integrity_events_;
+  atomicAdd(&ipc_integrity_events_, 1u);
 }
 
 void M4StaticCyclicExecutor::latchTerminalEvent(
     uint8_t lane, bool transmitted, bool cancelled) {
   if (lane >= kLaneCount) return;
-  if (transmitted) terminal_tx_mask_ |= laneBit(lane);
-  if (cancelled) terminal_cancel_mask_ |= laneBit(lane);
+  if (transmitted) atomicOr(&terminal_tx_mask_, laneBit(lane));
+  if (cancelled) atomicOr(&terminal_cancel_mask_, laneBit(lane));
 }
 
 void M4StaticCyclicExecutor::latchTrackingFault(uint8_t lane) {
-  if (lane < kLaneCount) tracking_fault_mask_ |= laneBit(lane);
+  if (lane < kLaneCount) {
+    atomicOr(&tracking_fault_mask_, laneBit(lane));
+  }
 }
 
 void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
   if (driver_ == nullptr) return;
+  ++health_write_sequence_;
+  saturatingIncrement(&health_.tim4_tick_total);
+  if (health_.tim4_first_tick_us == 0u) health_.tim4_first_tick_us = now_us;
+  if (health_.tim4_last_tick_us != 0u) {
+    const uint32_t gap = now_us - health_.tim4_last_tick_us;
+    if (gap > health_.tim4_max_gap_us) health_.tim4_max_gap_us = gap;
+  }
+  health_.tim4_last_tick_us = now_us;
   driver_->consumeLatchedEvents();
   const bool warning = driver_->errorWarning();
   const bool passive = driver_->errorPassive();
@@ -79,11 +117,7 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
   bus_off_seen_ = bus_off;
   health_.fdcan_state = static_cast<uint8_t>(driver_->rawSnapshot().hal_state);
   consumeIngress(now_us);
-  if (driver_->busOff() || !driver_->ready()) {
-    revokeActive(true);
-    next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 3u);
-    return;
-  }
+  if (driver_->busOff() || !driver_->ready()) revokeActive(true);
   if (driver_->errorPassive()) revokeActive(true);
   if (active_valid_ &&
       (last_publish_seen_us_ == 0u || publish_timeout_us_ == 0u ||
@@ -103,19 +137,18 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
     releaseLane(kLane005);
   }
   next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 3u);
+  ++health_write_sequence_;
 }
 
 void M4StaticCyclicExecutor::consumeIngress(uint32_t now_us) {
   consumeTerminalEvents();
-  const uint32_t integrity = ipc_integrity_events_;
-  ipc_integrity_events_ = 0;
+  const uint32_t integrity = atomicExchangeZero(&ipc_integrity_events_);
   if (integrity != 0u) {
     const uint32_t room = UINT32_MAX - health_.ipc_integrity_miss;
     health_.ipc_integrity_miss += integrity > room ? room : integrity;
     revokeActive(true);
   }
-  const uint32_t faults = tracking_fault_mask_;
-  tracking_fault_mask_ = 0;
+  const uint32_t faults = atomicExchangeZero(&tracking_fault_mask_);
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     if ((faults & laneBit(lane)) != 0u) latchFault(lane);
   }
@@ -126,9 +159,8 @@ void M4StaticCyclicExecutor::consumeIngress(uint32_t now_us) {
 }
 
 void M4StaticCyclicExecutor::consumeTerminalEvents() {
-  const uint32_t transmitted = terminal_tx_mask_;
-  const uint32_t cancelled = terminal_cancel_mask_;
-  terminal_tx_mask_ = terminal_cancel_mask_ = 0;
+  const uint32_t transmitted = atomicExchangeZero(&terminal_tx_mask_);
+  const uint32_t cancelled = atomicExchangeZero(&terminal_cancel_mask_);
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     const uint32_t bit = laneBit(lane);
     if (((transmitted | cancelled) & bit) == 0u) continue;
@@ -225,10 +257,14 @@ void M4StaticCyclicExecutor::activateStaged() {
 
 void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
   LaneHealth& health = health_.lanes[lane];
-  saturatingIncrement(&health.release_due);
+  saturatingIncrement(&health.schedule_due);
   if (lane_state_[lane] != LaneState::Free) {
-    saturatingIncrement(&health.deadline_miss);
+    saturatingIncrement(&health.pending_blocked);
     cancelLane(lane);
+    return;
+  }
+  if (driver_->pending(lane)) {
+    saturatingIncrement(&health.pending_blocked);
     return;
   }
   if (!activeMotionAllowed() || !laneOwnedByActiveSource(lane)) {
@@ -241,15 +277,24 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
     if (health_.transaction_id != active_.transaction.transaction_id ||
         health_.transaction_state !=
             static_cast<uint8_t>(TransactionState::Active)) {
-      saturatingIncrement(&health.suppressed);
+      saturatingIncrement(&health.policy_suppressed);
       return;
     }
     data = active_.transaction.data;
   }
-  if (!driver_->request(lane, data)) {
-    latchFault(lane);
+  if (!driver_->ready()) {
+    saturatingIncrement(&health.transport_blocked);
     return;
   }
+  saturatingIncrement(&health.request_attempt);
+  const TxRequestResult result = driver_->request(lane, data);
+  if (result != TxRequestResult::Accepted) {
+    saturatingIncrement(&health.request_failed);
+    if (result == TxRequestResult::AlreadyPending ||
+        result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
+    return;
+  }
+  saturatingIncrement(&health.request_accepted);
   lane_state_[lane] = LaneState::PendingActive;
   cancel_issued_[lane] = false;
   health.state = static_cast<uint8_t>(LaneState::PendingActive);
@@ -260,13 +305,22 @@ void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
   LaneHealth& health = health_.lanes[lane];
   const SafeWireFrame& safe = kLaneSafeWirePolicies[lane].idle_safe;
   if (safe.action != SafeWireAction::FixedSafeFrame) {
-    saturatingIncrement(&health.suppressed);
+    saturatingIncrement(&health.policy_suppressed);
     return;
   }
-  if (!driver_->request(lane, safe.data)) {
-    saturatingIncrement(&health.suppressed);
+  if (!driver_->ready()) {
+    saturatingIncrement(&health.transport_blocked);
     return;
   }
+  saturatingIncrement(&health.request_attempt);
+  const TxRequestResult result = driver_->request(lane, safe.data);
+  if (result != TxRequestResult::Accepted) {
+    saturatingIncrement(&health.request_failed);
+    if (result == TxRequestResult::AlreadyPending ||
+        result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
+    return;
+  }
+  saturatingIncrement(&health.request_accepted);
   lane_state_[lane] = LaneState::PendingSafe;
   cancel_issued_[lane] = false;
   health.state = static_cast<uint8_t>(LaneState::PendingSafe);
@@ -369,14 +423,28 @@ void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
   }
 }
 
-ControlHealthPayload M4StaticCyclicExecutor::healthSnapshot(
-    uint32_t now_us) const {
-  ControlHealthPayload result = health_;
-  result.flags = 0;
+bool M4StaticCyclicExecutor::healthSnapshot(
+    uint32_t now_us, ControlHealthPayload* output) const {
+  if (output == nullptr) return false;
+  ControlHealthPayload result;
+  bool coherent = false;
+  for (uint8_t attempt = 0; attempt < 3u; ++attempt) {
+    const uint32_t begin = health_write_sequence_;
+    if ((begin & 1u) != 0u) continue;
+    result = health_;
+    const uint32_t end = health_write_sequence_;
+    if (begin == end && (end & 1u) == 0u) {
+      coherent = true;
+      break;
+    }
+  }
+  if (!coherent) return false;
+  result.flags = timebase_configured_ ? kHealthFlagTim4Configured : 0u;
   if (driver_ != nullptr && driver_->ready()) {
     result.flags |= kHealthFlagReady | kHealthFlagClockContractOk |
                     kHealthFlagTransportReady;
   }
+  if (result.tim4_tick_total != 0u) result.flags |= kHealthFlagTim4Ticking;
   if (driver_ != nullptr && driver_->busOff()) result.flags |= kHealthFlagBusOff;
   if (driver_ != nullptr && driver_->errorPassive()) {
     result.flags |= kHealthFlagErrorPassive;
@@ -394,7 +462,8 @@ ControlHealthPayload M4StaticCyclicExecutor::healthSnapshot(
       : static_cast<uint32_t>(now_us - last_publish_seen_us_) / 1000u;
   result.current = driver_ == nullptr ? FdcanRawSnapshot{}
                                       : driver_->rawSnapshot();
-  return result;
+  *output = result;
+  return true;
 }
 
 void M4StaticCyclicExecutor::saturatingIncrement(uint32_t* value) {

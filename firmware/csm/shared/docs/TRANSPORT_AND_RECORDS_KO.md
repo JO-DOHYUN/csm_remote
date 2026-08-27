@@ -526,25 +526,35 @@ active REV.B profile.
 - `18..19 successful_tx_count u16`, `1..255`
 - `20..27 data[8]`
 
-`CONTROL_ISLAND_HEALTH` schema 3 payload, 328 bytes:
+`CONTROL_ISLAND_HEALTH` schema 4 payload, 512 bytes:
 - `0..7 mono_us u64`, M7 observation time
 - `8 schema u8`, `10..11 payload_len u16`
 - `12..31 schema/wire/memory identity, M4 boot id, health sequence`
 - `32..51 flags, M7 publish sequence/age in M4 local time, source epoch/source`
 - `52..83 IPC stale/integrity, FDCAN error, raw-ring fill/high-water/drop counters`
-- `84..95 transaction id/requested/completed/state/FDCAN/reserved`
-- `96..191` three 32-byte lane terminal counters
-- `192..231` current FDCAN register/HAL snapshot
-- `232..271` first-fault snapshot
-- `272..311` last-fault snapshot
-- `312..323` M7 snapshot publish total/failure/max-gap
-- `324..327 activation_epoch u32`: explicit ARM/fresh activation identity, separate
+- `84..95 transaction id/requested/completed/state/FDCAN/M7 health-reject detail`
+- `96..239` three 48-byte lane accounting blocks: schedule due, policy suppressed,
+  transport blocked, pending blocked, request attempt/accepted/failed, terminal
+  success/cancel/cancel-race, tracking fault, value generation
+- `240..359` current/first-fault/last-fault FDCAN register/HAL snapshots
+- `360..371` M7 snapshot publish total/failure/max-gap
+- `372..375 activation_epoch u32`: explicit ARM/fresh activation identity, separate
   from global source selection epoch
+- `376..403` exact M4 source/runtime/build identity and bring-up stage/failure/detail
+- `404..443` TIM4 execution and actual FDCAN timing/500 kbps calculation
+- `444..479` IRQ/callback/Add/Enable/Abort/coherent-health counters
+- `480..511` M4 boot request, independent coordinator/read health, health age and
+  packed global selected-source/permit truth
 
 Flags distinguish ready/clock, bus-off, error-passive,
-M7 fresh, control active and tracking fault. Lane counters include release due,
-successful terminal, deadline miss, cancel, cancel race, suppressed release,
-tracking fault and last value generation.
+M7 fresh, control active, TIM4 configured/ticking and tracking fault. The record
+is emitted periodically even before normal M4 health exists; zero boot/health
+sequence is explicit diagnostic truth, while the independent bring-up trace can
+still identify the last completed or failed boot stage.
+
+`REMOTE_CONTROL_STATE` schema 3 is RC frontend/candidate evidence only. It owns
+CRSF/mailbox/normalization/semantic-candidate counters and no global authority,
+physical cadence, request, terminal, or FDCAN success meaning.
 
 Current active Service/HIL Host policy:
 - Android owns vehicle semantics and the final three payloads but no physical

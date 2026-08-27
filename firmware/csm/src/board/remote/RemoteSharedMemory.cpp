@@ -97,12 +97,7 @@ void initializeRemoteSharedMemoryForM7(uint32_t m7_boot_id) {
 
 uint32_t initializeRemoteSharedMemoryForM4() {
   RemoteSharedMemoryRegion* region = remoteSharedMemoryRegion();
-  if (!hasValidHeader(*region)) {
-    memset(region, 0, sizeof(*region));
-    region->header.magic = kRemoteSharedMemoryMagic;
-    region->header.version = kRemoteSharedMemoryVersion;
-    region->header.region_size = sizeof(RemoteSharedMemoryRegion);
-  }
+  if (!hasValidHeader(*region) || region->header.m7_boot_id == 0u) return 0u;
   uint32_t boot_id = region->m4_to_m7.m4_boot_id + 1u;
   if (boot_id == 0) boot_id = 1;
   region->m4_to_m7.m4_boot_id = boot_id;

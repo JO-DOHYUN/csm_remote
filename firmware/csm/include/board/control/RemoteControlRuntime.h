@@ -2,10 +2,11 @@
 
 #include <stdint.h>
 
-#include "board/authority/AuthorityManager.h"
-#include "board/control/RemoteControlOrchestrator.h"
+#include "board/control/CommandLimiter.h"
+#include "board/control/VehicleCommandMapper.h"
 #include "board/control_island/ControlIslandContract.h"
 #include "board/remote/M4RemoteMailboxReader.h"
+#include "board/remote/RemoteControlSource.h"
 #include "board/remote/RemoteSharedMemory.h"
 
 namespace csm::board::control {
@@ -35,25 +36,14 @@ struct RemoteControlRuntimeConfig {
   bool invert_steering = false;
 };
 
-struct RemoteControlRuntimeInputs {
-  bool local_tx_inhibit_latched = true;
-  bool host_output_reserved = false;
-  authority::AutonomyAuthorityState autonomy_state =
-      authority::AutonomyAuthorityState::Unknown;
-  can::CanBackendState backend_state = {};
-};
-
 struct RemoteControlRuntimeStatus {
   bool configured = false;
   bool semantic_output_enabled = false;
   bool frontend_alive = false;
   bool remote_reserved = true;
   bool remote_valid = false;
-  bool host_control_allowed = false;
   bool source_image_valid = false;
   remote::RemoteLinkState link_state = remote::RemoteLinkState::NoFrame;
-  authority::AuthorityState authority_state = authority::AuthorityState::BootInhibit;
-  authority::ControlSourceId active_source = authority::ControlSourceId::None;
   authority::ControlDecisionCode last_decision =
       authority::ControlDecisionCode::RejectedBuildProfile;
   uint32_t m4_boot_id = 0;
@@ -87,10 +77,8 @@ class RemoteControlRuntime {
  public:
   bool begin(uint32_t now_ms, uint32_t m7_boot_id,
              const RemoteControlRuntimeConfig& config);
-  RemoteControlRuntimeOutput service(uint32_t now_ms,
-                                     const RemoteControlRuntimeInputs& inputs);
+  RemoteControlRuntimeOutput service(uint32_t now_ms);
 
-  bool hostControlAllowed() const { return status_.host_control_allowed; }
   const RemoteControlRuntimeConfig& config() const { return config_; }
   const RemoteControlRuntimeStatus& status() const { return status_; }
   const remote::M4RemoteMailboxSnapshot& mailboxSnapshot() const {
@@ -101,7 +89,6 @@ class RemoteControlRuntime {
   void updateRemoteState(uint32_t now_ms);
   void publishTelemetry(uint32_t now_ms);
   bool buildSourceImage(uint32_t now_ms,
-                        const RemoteControlRuntimeInputs& inputs,
                         RemoteControlRuntimeOutput* output);
   void invalidateSource();
   static bool sameImage(const control_island::LaneExecutionImage* lhs,
@@ -110,11 +97,9 @@ class RemoteControlRuntime {
   RemoteControlRuntimeConfig config_ = {};
   RemoteControlRuntimeStatus status_ = {};
   remote::M4RemoteMailboxReader mailbox_reader_ = {};
-  authority::AuthorityManager authority_manager_ = {};
+  remote::RemoteControlSource remote_source_ = {};
   CommandLimiter command_limiter_ = {};
   VehicleCommandMapper vehicle_mapper_ = {};
-  CanTxGateway can_tx_gateway_ = {};
-  RemoteControlOrchestrator orchestrator_ = {};
   control_island::LaneExecutionImage source_lanes_[control_island::kLaneCount] = {};
 
   uint32_t last_shared_sequence_ = 0;

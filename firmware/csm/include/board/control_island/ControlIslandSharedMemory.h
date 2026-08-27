@@ -22,6 +22,14 @@ struct HealthReadResult {
   ControlHealthPayload payload = {};
 };
 
+struct BringupReadResult {
+  bool accepted = false;
+  bool new_snapshot = false;
+  uint16_t detail = 0;
+  uint32_t sequence = 0;
+  BringupTracePayload payload = {};
+};
+
 ControlIpcRegion* controlIpcRegion();
 RawCanEntry* rawCanRingEntries();
 
@@ -32,6 +40,8 @@ ControlReadResult readFinalControlSnapshot(uint32_t last_sequence);
 
 bool publishControlHealth(ControlHealthPayload payload);
 HealthReadResult readControlHealth(uint32_t last_sequence);
+bool publishBringupTrace(const BringupTracePayload& payload);
+BringupReadResult readBringupTrace(uint32_t last_sequence);
 
 bool pushRawCanFromM4(const RawCanEntry& entry);
 bool popRawCanForM7(RawCanEntry* entry);

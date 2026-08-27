@@ -26,16 +26,29 @@ struct FakeDriver final : M4LaneDriver {
   uint32_t requests[kLaneCount] = {};
   uint32_t cancels[kLaneCount] = {};
   uint8_t last_data[kLaneCount][8] = {};
+  TxRequestResult next_result = TxRequestResult::Accepted;
 
   bool ready() const override { return ready_value && !off; }
   bool errorPassive() const override { return passive; }
   bool busOff() const override { return off; }
-  bool request(uint8_t lane, const uint8_t data[8]) override {
-    if (lane >= kLaneCount || pending_value[lane] || off || !ready_value) return false;
+  TxRequestResult request(uint8_t lane, const uint8_t data[8]) override {
+    if (lane >= kLaneCount || off || !ready_value) {
+      return TxRequestResult::TransportUnavailable;
+    }
+    if (pending_value[lane]) return TxRequestResult::AlreadyPending;
+    const TxRequestResult result = next_result;
+    next_result = TxRequestResult::Accepted;
+    if (result != TxRequestResult::Accepted) {
+      if (result == TxRequestResult::EnableFailedAbortPending ||
+          result == TxRequestResult::EnableFailedAbortFailed) {
+        pending_value[lane] = true;
+      }
+      return result;
+    }
     pending_value[lane] = true;
     ++requests[lane];
     memcpy(last_data[lane], data, 8u);
-    return true;
+    return TxRequestResult::Accepted;
   }
   bool cancel(uint8_t lane) override {
     if (lane >= kLaneCount || !pending_value[lane]) return false;
@@ -78,6 +91,65 @@ FinalControlSnapshotPayload makeSnapshot(uint32_t publish_sequence,
     }
   }
   return snapshot;
+}
+
+void testStaticDueAndExplicitRequestAccounting() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  driver.ready_value = false;
+  for (uint32_t slot = 0; slot < 4u; ++slot) {
+    executor.onFiveMillisecondSlot((slot + 1u) * 5000u);
+  }
+  assert(executor.health().lanes[kLane005].schedule_due == 4u);
+  assert(executor.health().lanes[kLane007].schedule_due == 1u);
+  assert(executor.health().lanes[kLane364].schedule_due == 1u);
+  assert(executor.health().lanes[kLane005].transport_blocked == 4u);
+  assert(executor.health().lanes[kLane007].transport_blocked == 1u);
+  assert(executor.health().lanes[kLane364].policy_suppressed == 1u);
+
+  driver.ready_value = true;
+  driver.next_result = TxRequestResult::AddFailed;
+  executor.onFiveMillisecondSlot(25000u);
+  const LaneHealth& lane = executor.health().lanes[kLane005];
+  assert(lane.request_attempt == 1u);
+  assert(lane.request_accepted == 0u);
+  assert(lane.request_failed == 1u);
+  assert(lane.schedule_due == lane.pending_blocked + lane.policy_suppressed +
+      lane.transport_blocked + lane.request_attempt);
+}
+
+void testOnlyAcceptedCreatesPending() {
+  const TxRequestResult failures[] = {
+      TxRequestResult::TransportUnavailable,
+      TxRequestResult::AlreadyPending,
+      TxRequestResult::AddFailed,
+      TxRequestResult::EnableFailedNoPending,
+      TxRequestResult::EnableFailedAbortPending,
+  };
+  for (TxRequestResult failure : failures) {
+    FakeDriver driver;
+    M4StaticCyclicExecutor executor;
+    executor.begin(3u, 300000u, &driver);
+    driver.next_result = failure;
+    executor.onFiveMillisecondSlot(5000u);
+    assert(executor.health().lanes[kLane005].state ==
+           static_cast<uint8_t>(LaneState::Free));
+    assert(executor.health().lanes[kLane005].request_failed == 1u);
+  }
+  FakeDriver fatal_driver;
+  M4StaticCyclicExecutor fatal_executor;
+  fatal_executor.begin(3u, 300000u, &fatal_driver);
+  fatal_driver.next_result = TxRequestResult::EnableFailedAbortFailed;
+  fatal_executor.onFiveMillisecondSlot(5000u);
+  assert(fatal_executor.health().lanes[kLane005].tracking_fault == 1u);
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  executor.onFiveMillisecondSlot(5000u);
+  assert(executor.health().lanes[kLane005].state ==
+         static_cast<uint8_t>(LaneState::PendingSafe));
+  assert(executor.health().lanes[kLane005].request_accepted == 1u);
 }
 
 void stage(M4StaticCyclicExecutor* executor,
@@ -212,7 +284,9 @@ void testSameSourceRearmAndStale() {
   closeAll(&driver, &executor);
   executor.onFiveMillisecondSlot(20000u);
   assert(!executor.hasActiveControl());
-  assert(executor.healthSnapshot(20000u).m7_stale_count == 1u);
+  ControlHealthPayload health;
+  assert(executor.healthSnapshot(20000u, &health));
+  assert(health.m7_stale_count == 1u);
   active.publish_sequence = 2u;
   stage(&executor, active, 20100u);
   executor.onFiveMillisecondSlot(25000u);
@@ -236,8 +310,9 @@ void testErrorPassiveBusOffResetAndHealthPurity() {
   executor.onFiveMillisecondSlot(5000u);
   closeAll(&driver, &executor);
   const uint32_t cancels = driver.cancels[kLane005];
-  (void)executor.healthSnapshot(6000u);
-  (void)executor.healthSnapshot(7000u);
+  ControlHealthPayload health;
+  assert(executor.healthSnapshot(6000u, &health));
+  assert(executor.healthSnapshot(7000u, &health));
   assert(driver.cancels[kLane005] == cancels && executor.hasActiveControl());
   driver.passive = true;
   executor.onFiveMillisecondSlot(10000u);
@@ -270,7 +345,9 @@ void testTrackingFaultGloballyClosesActive() {
   assert(driver.cancels[kLane005] == 1u);
   assert(driver.cancels[kLane007] == 1u);
   assert(driver.cancels[kLane364] == 1u);
-  assert((executor.healthSnapshot(10000u).flags & kHealthFlagTrackingFault) != 0u);
+  ControlHealthPayload health;
+  assert(executor.healthSnapshot(10000u, &health));
+  assert((health.flags & kHealthFlagTrackingFault) != 0u);
 }
 
 void testHostSessionAndSenderTimeBounds() {
@@ -313,5 +390,7 @@ int main() {
   testSameSourceRearmAndStale();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
+  testStaticDueAndExplicitRequestAccounting();
+  testOnlyAcceptedCreatesPending();
   return 0;
 }

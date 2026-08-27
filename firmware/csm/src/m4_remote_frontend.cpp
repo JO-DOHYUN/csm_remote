@@ -34,6 +34,16 @@
 #define BOARD_M4_M7_PUBLISH_TIMEOUT_US 0UL
 #endif
 
+#ifndef CSM_FW_SOURCE_ID64
+#define CSM_FW_SOURCE_ID64 0ULL
+#endif
+#ifndef CSM_FW_RUNTIME_CONTRACT_ID64
+#define CSM_FW_RUNTIME_CONTRACT_ID64 0ULL
+#endif
+#ifndef CSM_FW_BUILD_ID
+#define CSM_FW_BUILD_ID 0
+#endif
+
 namespace {
 
 using namespace csm::board::remote;
@@ -69,6 +79,10 @@ uint32_t last_control_sequence = 0;
 uint32_t last_control_health_ms = 0;
 bool fdcan1_owner_initialized = false;
 bool control_timebase_initialized = false;
+BringupTracePayload bringup_trace;
+uint32_t health_snapshot_reject_total = 0;
+bool foreground_loop_entered = false;
+bool first_tick_reported = false;
 
 uint32_t frontendMalformedTotal() {
   return diagnostics.rejected_length + diagnostics.rejected_crc +
@@ -257,7 +271,15 @@ void serviceControlIngress() {
 void publishControlIslandHealth(uint32_t now_ms) {
   if (now_ms - last_control_health_ms < 20u) return;
   last_control_health_ms = now_ms;
-  ControlHealthPayload health = control_executor.healthSnapshot(micros());
+  ControlHealthPayload health;
+  if (!control_executor.healthSnapshot(micros(), &health)) {
+    if (health_snapshot_reject_total != UINT32_MAX) {
+      ++health_snapshot_reject_total;
+    }
+    return;
+  }
+  health.health_snapshot_reject_total = health_snapshot_reject_total;
+  fdcan1_owner.augmentHealth(&health);
   ControlIpcRegion* region = controlIpcRegion();
   health.raw_ring_fill = rawCanRingFill();
   health.raw_ring_high_water = region->raw_high_water;
@@ -271,6 +293,12 @@ void publishControlIslandHealth(uint32_t now_ms) {
 }  // namespace
 
 void setup() {
+  bringup_trace.source_id = static_cast<uint64_t>(CSM_FW_SOURCE_ID64);
+  bringup_trace.runtime_contract_id =
+      static_cast<uint64_t>(CSM_FW_RUNTIME_CONTRACT_ID64);
+  bringup_trace.build_id = static_cast<uint32_t>(CSM_FW_BUILD_ID);
+  bringup_trace.stage = static_cast<uint16_t>(BringupStage::M4Entered);
+  (void)publishBringupTrace(bringup_trace);
   RcNormalizerConfig config;
   config.configured = true;
   config.required_channel_mask = kRemoteRequiredRcChannelMask;
@@ -282,20 +310,46 @@ void setup() {
   diagnostics = {};
   diagnostics.uart_baud = BOARD_M4_REMOTE_BAUD;
   control_m4_boot_id = initializeControlIpcForM4();
+  bringup_trace.m4_boot_id = control_m4_boot_id;
+  bringup_trace.stage = static_cast<uint16_t>(BringupStage::ControlIpcValidated);
+  if (control_m4_boot_id == 0u) {
+    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::ControlIpc);
+  }
+  (void)publishBringupTrace(bringup_trace);
   m4_boot_id = initializeRemoteSharedMemoryForM4();
+  bringup_trace.stage = static_cast<uint16_t>(BringupStage::RemoteIpcValidated);
+  if (m4_boot_id == 0u) {
+    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::RemoteIpc);
+  }
+  (void)publishBringupTrace(bringup_trace);
   control_executor.begin(control_m4_boot_id,
                          BOARD_M4_M7_PUBLISH_TIMEOUT_US, &fdcan1_owner);
+  bringup_trace.stage = static_cast<uint16_t>(BringupStage::ExecutorInitialized);
+  (void)publishBringupTrace(bringup_trace);
+  control_timebase_initialized = control_timebase.begin(&control_executor);
+  bringup_trace.stage = static_cast<uint16_t>(BringupStage::Tim4Configured);
+  if (!control_timebase_initialized) {
+    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::Tim4);
+  }
+  (void)publishBringupTrace(bringup_trace);
   fdcan1_owner_initialized =
-      fdcan1_owner.begin(control_m4_boot_id, &control_executor);
-  control_timebase_initialized = fdcan1_owner_initialized &&
-      control_timebase.begin(&control_executor, &fdcan1_owner);
-  fdcan1_owner.markTimebaseReady(control_timebase_initialized);
+      fdcan1_owner.begin(control_m4_boot_id, &control_executor, &bringup_trace);
   Serial3.begin(BOARD_M4_REMOTE_BAUD, SERIAL_8N1);
   publishSample(millis());
   publishControlIslandHealth(millis());
 }
 
 void loop() {
+  if (!foreground_loop_entered) {
+    foreground_loop_entered = true;
+    bringup_trace.stage = static_cast<uint16_t>(BringupStage::ForegroundLoopEntered);
+    (void)publishBringupTrace(bringup_trace);
+  }
+  if (!first_tick_reported && control_timebase.hasTicked()) {
+    first_tick_reported = true;
+    bringup_trace.stage = static_cast<uint16_t>(BringupStage::FirstTim4Tick);
+    (void)publishBringupTrace(bringup_trace);
+  }
   const uint32_t now_ms = millis();
   while (Serial3.available() > 0) {
     const int value = Serial3.read();

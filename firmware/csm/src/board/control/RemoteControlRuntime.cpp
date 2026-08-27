@@ -33,13 +33,10 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   status_.remote_reserved = true;
   memset(source_lanes_, 0, sizeof(source_lanes_));
 
-  remote::initializeRemoteSharedMemoryForM7(m7_boot_id);
   mailbox_reader_.begin(now_ms);
-  authority_manager_.begin(now_ms);
   command_limiter_.begin(now_ms);
   vehicle_mapper_.begin(now_ms);
-  can_tx_gateway_.begin(now_ms);
-  orchestrator_.begin(now_ms);
+  remote_source_.begin(now_ms);
 
   remote::RemoteControlSourceConfig source_config;
   source_config.drive_channel_index = config.drive_channel_index;
@@ -52,7 +49,7 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   source_config.auxiliary_threshold_permille = config.auxiliary_threshold_permille;
   source_config.invert_drive = config.invert_drive;
   source_config.invert_steering = config.invert_steering;
-  if (!orchestrator_.configureRemoteSource(source_config)) return false;
+  if (!remote_source_.configure(source_config)) return false;
 
   CommandLimiterConfig limiter;
   limiter.configured = true;
@@ -88,19 +85,11 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   mapper.brake_limit_permille = 1000;
   if (!vehicle_mapper_.configure(mapper)) return false;
 
-  CanTxGatewayPolicy gateway;
-  gateway.configured = true;
-  gateway.build_profile_allows_local_tx = config.semantic_output_enabled;
-  gateway.bus = config.bus;
-  gateway.policy_id = config.policy_id;
-  gateway.allowlist_count = 2;
-  gateway.allowlist_ids[0] = kRemoteDriveCanId;
-  gateway.allowlist_ids[1] = kRemoteSteeringCanId;
-  return can_tx_gateway_.configure(gateway);
+  return true;
 }
 
 RemoteControlRuntimeOutput RemoteControlRuntime::service(
-    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs) {
+    uint32_t now_ms) {
   RemoteControlRuntimeOutput output;
   if (!status_.configured) return output;
 
@@ -133,13 +122,9 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
   }
 
   updateRemoteState(now_ms);
-  status_.host_control_allowed = !status_.remote_valid;
   publishTelemetry(now_ms);
 
-  if (!config_.semantic_output_enabled || inputs.host_output_reserved ||
-      !status_.remote_valid || inputs.local_tx_inhibit_latched ||
-      !inputs.backend_state.ready || inputs.backend_state.bus_off ||
-      inputs.backend_state.error_passive) {
+  if (!config_.semantic_output_enabled || !status_.remote_valid) {
     invalidateSource();
     return output;
   }
@@ -151,7 +136,7 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
     return output;
   }
   last_semantic_update_ms_ = now_ms;
-  if (!buildSourceImage(now_ms, inputs, &output)) {
+  if (!buildSourceImage(now_ms, &output)) {
     saturatingIncrement(&status_.semantic_rejects);
     invalidateSource();
     return output;
@@ -181,7 +166,9 @@ void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {
   last_telemetry_ms_ = now_ms;
   remote::RemoteTelemetrySlot telemetry;
   telemetry.m7_time_ms = now_ms;
-  telemetry.authority_state = static_cast<uint8_t>(status_.authority_state);
+  telemetry.authority_state = static_cast<uint8_t>(
+      status_.source_image_valid ? authority::AuthorityState::RemoteActive
+                                 : authority::AuthorityState::LocalReady);
   telemetry.remote_link_state = static_cast<uint8_t>(status_.link_state);
   telemetry.flags = (status_.remote_valid ? 1u : 0u) |
       (status_.source_image_valid ? 1u << 2 : 0u);
@@ -191,27 +178,19 @@ void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {
 }
 
 bool RemoteControlRuntime::buildSourceImage(
-    uint32_t now_ms, const RemoteControlRuntimeInputs& inputs,
-    RemoteControlRuntimeOutput* output) {
-  RemoteControlOrchestratorInputs orchestrator_inputs;
-  orchestrator_inputs.mailbox_snapshot = mailbox_reader_.snapshot();
-  orchestrator_inputs.output_sequence = status_.source_lease_sequence + 1u;
-  orchestrator_inputs.autonomy_state = inputs.autonomy_state;
-  orchestrator_inputs.local_tx_inhibit_latched = inputs.local_tx_inhibit_latched;
-  orchestrator_inputs.remote_source_present = status_.remote_valid;
-  orchestrator_inputs.remote_takeover_request = status_.remote_valid;
-  orchestrator_inputs.backend_state = inputs.backend_state;
-  RemoteControlOrchestratorDeps deps;
-  deps.authority_manager = &authority_manager_;
-  deps.command_limiter = &command_limiter_;
-  deps.vehicle_mapper = &vehicle_mapper_;
-  deps.can_tx_gateway = &can_tx_gateway_;
-  const RemoteControlOrchestratorResult result =
-      orchestrator_.tick(now_ms, orchestrator_inputs, deps);
-  status_.authority_state = result.authority_decision.authority_state;
-  status_.active_source = result.authority_decision.source;
+    uint32_t now_ms, RemoteControlRuntimeOutput* output) {
+  remote_source_.update(now_ms, mailbox_reader_.snapshot(), true, false);
+  OperatorCommand command = remote_source_.command();
+  command.command_seq = status_.source_lease_sequence + 1u;
+  const CommandLimitResult limited = command_limiter_.evaluate(now_ms, command);
+  status_.last_decision = limited.decision;
+  if (!limited.accepted) return false;
+  const VehicleCommandMapResult result = vehicle_mapper_.map(limited.command);
   status_.last_decision = result.decision;
-  if (!result.accepted || result.frame_count == 0u) return false;
+  if (!result.mapped || result.frame_count == 0u) return false;
+
+  command_limiter_.noteAccepted(now_ms, limited.command);
+  status_.last_decision = authority::ControlDecisionCode::Accepted;
 
   control_island::LaneExecutionImage next[control_island::kLaneCount] = {};
   for (uint8_t index = 0; index < result.frame_count; ++index) {

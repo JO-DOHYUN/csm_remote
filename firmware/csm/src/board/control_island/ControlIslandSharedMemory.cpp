@@ -264,6 +264,52 @@ HealthReadResult readControlHealth(uint32_t last_sequence) {
   return result;
 }
 
+bool publishBringupTrace(const BringupTracePayload& payload) {
+  ControlIpcRegion* region = controlIpcRegion();
+  if (!validHeader(*region)) return false;
+  const uint32_t sequence = nextEvenSequence(region->bringup_sequence);
+  BringupTraceSlot slot;
+  slot.sequence_begin = sequence | 1u;
+  slot.payload = payload;
+  slot.sequence_end = sequence;
+  region->bringup = slot;
+  __DMB();
+  region->bringup.sequence_begin = sequence;
+  __DMB();
+  region->bringup_sequence = sequence;
+  __DMB();
+  return true;
+}
+
+BringupReadResult readBringupTrace(uint32_t last_sequence) {
+  BringupReadResult result;
+  ControlIpcRegion* region = controlIpcRegion();
+  invalidateM7Cache(region, sizeof(*region));
+  if (!validHeader(*region)) {
+    result.detail = kDetailBadHeader;
+    return result;
+  }
+  const uint32_t sequence = region->bringup_sequence;
+  result.sequence = sequence;
+  if (sequence == 0u) return result;
+  if (sequence == last_sequence) {
+    result.accepted = true;
+    return result;
+  }
+  const BringupTraceSlot slot = region->bringup;
+  invalidateM7Cache(region, sizeof(*region));
+  if ((slot.sequence_begin & 1u) != 0u ||
+      slot.sequence_begin != slot.sequence_end ||
+      slot.sequence_begin != sequence || region->bringup_sequence != sequence) {
+    result.detail = kDetailTorn;
+    return result;
+  }
+  result.accepted = true;
+  result.new_snapshot = true;
+  result.payload = slot.payload;
+  return result;
+}
+
 uint32_t rawCanRingFill() {
   ControlIpcRegion* region = controlIpcRegion();
   const uint32_t fill = region->raw_write_sequence - region->raw_read_sequence;

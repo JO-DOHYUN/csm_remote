@@ -19,6 +19,7 @@
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
 #include "board/control_island/ControlSourceManager.h"
+#include "board/remote/RemoteSharedMemory.h"
 #include "board/diagnostics/BootProgress.h"
 #include "board/diagnostics/RetainedCallLatch.h"
 #include "board/diagnostics/RuntimeSupervisor.h"
@@ -977,6 +978,17 @@ static uint32_t last_control_snapshot_publish_ms = 0;
 static uint32_t last_control_health_emit_ms = 0;
 static uint32_t host_control_lease_sequence = 0;
 static bool control_island_health_valid = false;
+static csm::board::control_island::BringupTracePayload control_island_bringup = {};
+static uint32_t control_island_bringup_sequence = 0;
+static uint32_t control_island_service_cycles = 0;
+static uint32_t control_island_health_read_attempts = 0;
+static uint32_t control_island_health_read_accepted = 0;
+static uint32_t control_island_health_new_snapshots = 0;
+static uint32_t control_island_health_reject_total = 0;
+static uint16_t control_island_health_last_reject_detail = 0;
+static uint32_t control_island_boot_request_count = 0;
+static uint32_t control_island_selected_source = 0;
+static uint32_t control_island_permit_mask = 0;
 
 static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
@@ -2792,9 +2804,9 @@ static void emit_capability() {
       BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
-      control_island_health_valid ? 1 : 0,
       1,
-      control_island_runtime_ready(millis()) ? 1 : 0,
+      1,
+      1,
       0,
       0);
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -2831,9 +2843,9 @@ static void emit_capability() {
       BOARD_BUILTIN_CAN_BUS_ROLE,
       2,
       3,
-      control_island_health_valid ? 1 : 0,
       1,
-      control_island_runtime_ready(millis()) ? 1 : 0,
+      1,
+      1,
       0,
       0);
   config.bus_mode[1] = kBusModeNormal;
@@ -3388,13 +3400,14 @@ static void emit_control_island_health() {
   wr_u16_le(&payload[csm::kControlIslandHealthPayloadLenOffset],
             csm::kControlIslandHealthPayloadLen);
   wr_u32_le(&payload[csm::kControlIslandHealthSchemaIdOffset],
-            control_island_health.schema_id);
+            csm::kControlIslandHealthSchemaId);
   wr_u32_le(&payload[csm::kControlIslandHealthWireContractIdOffset],
-            control_island_health.wire_contract_id);
+            csm::kControlIslandHealthWireContractId);
   wr_u32_le(&payload[csm::kControlIslandHealthMemoryLayoutIdOffset],
-            control_island_health.memory_layout_id);
+            csm::kControlIslandHealthMemoryLayoutId);
   wr_u32_le(&payload[csm::kControlIslandHealthM4BootIdOffset],
-            control_island_health.m4_boot_id);
+            control_island_health_valid ? control_island_health.m4_boot_id
+                                        : control_island_bringup.m4_boot_id);
   wr_u32_le(&payload[csm::kControlIslandHealthSequenceOffset],
             control_island_health.health_sequence);
   wr_u32_le(&payload[csm::kControlIslandHealthFlagsOffset],
@@ -3433,16 +3446,21 @@ static void emit_control_island_health() {
       control_island_health.transaction_state;
   payload[csm::kControlIslandHealthFdcanStateOffset] =
       control_island_health.fdcan_state;
+  wr_u16_le(&payload[csm::kControlIslandHealthM7HealthRejectDetailOffset],
+            control_island_health_last_reject_detail);
   for (uint8_t lane = 0;
        lane < csm::board::control_island::kLaneCount; ++lane) {
     const uint16_t offset = csm::kControlIslandHealthLanesOffset +
         lane * csm::kControlIslandHealthLaneLen;
     const auto& health = control_island_health.lanes[lane];
-    const uint32_t values[8] = {
-        health.release_due, health.tx_success, health.deadline_miss,
-        health.cancel_count, health.cancel_race_count, health.suppressed,
-        health.tracking_fault, health.last_value_generation};
-    for (uint8_t index = 0; index < 8u; ++index) {
+    const uint32_t values[12] = {
+        health.schedule_due, health.policy_suppressed,
+        health.transport_blocked, health.pending_blocked,
+        health.request_attempt, health.request_accepted,
+        health.request_failed, health.tx_success, health.cancel_count,
+        health.cancel_race_count, health.tracking_fault,
+        health.last_value_generation};
+    for (uint8_t index = 0; index < 12u; ++index) {
       wr_u32_le(&payload[offset + index * 4u], values[index]);
     }
   }
@@ -3461,6 +3479,54 @@ static void emit_control_island_health() {
             control_island_health.m7_publish_max_gap_local_ms);
   wr_u32_le(&payload[csm::kControlIslandHealthActivationEpochOffset],
             control_island_health.activation_epoch_seen);
+  wr_u64_le(&payload[csm::kControlIslandHealthM4SourceIdOffset],
+            control_island_bringup.source_id);
+  wr_u64_le(&payload[csm::kControlIslandHealthM4RuntimeContractIdOffset],
+            control_island_bringup.runtime_contract_id);
+  wr_u32_le(&payload[csm::kControlIslandHealthM4BuildIdOffset],
+            control_island_bringup.build_id);
+  wr_u16_le(&payload[csm::kControlIslandHealthBringupStageOffset],
+            control_island_bringup.stage);
+  wr_u16_le(&payload[csm::kControlIslandHealthBringupFailureOffset],
+            control_island_bringup.failure);
+  wr_u32_le(&payload[csm::kControlIslandHealthBringupFailureDetailOffset],
+            control_island_bringup.failure_detail);
+  const uint32_t extended[] = {
+      control_island_health.tim4_tick_total,
+      control_island_health.tim4_first_tick_us,
+      control_island_health.tim4_last_tick_us,
+      control_island_health.tim4_max_gap_us,
+      control_island_health.fdcan_kernel_clock_hz,
+      control_island_health.nominal_prescaler,
+      control_island_health.nominal_sjw,
+      control_island_health.nominal_time_seg1,
+      control_island_health.nominal_time_seg2,
+      control_island_health.nominal_bitrate,
+      control_island_health.fdcan_irq_total,
+      control_island_health.tx_complete_callback_total,
+      control_island_health.tx_abort_callback_total,
+      control_island_health.error_callback_total,
+      control_island_health.last_error_callback_status,
+      control_island_health.add_failure_total,
+      control_island_health.enable_failure_total,
+      control_island_health.abort_failure_total,
+      control_island_health.health_snapshot_reject_total,
+      control_island_boot_request_count,
+      control_island_service_cycles,
+      control_island_health_read_attempts,
+      control_island_health_read_accepted,
+      control_island_health_new_snapshots,
+      control_island_health_reject_total,
+      control_island_health_valid
+          ? static_cast<uint32_t>(millis() - control_island_health_seen_ms)
+          : UINT32_MAX,
+      (control_island_selected_source & 0xFFFFu) |
+          ((control_island_permit_mask & 0xFFFFu) << 16u)};
+  for (uint8_t index = 0; index < sizeof(extended) / sizeof(extended[0]);
+       ++index) {
+    wr_u32_le(&payload[csm::kControlIslandHealthTim4TickTotalOffset +
+                       index * 4u], extended[index]);
+  }
   emit_record(RecordType::ControlIslandHealth, payload, sizeof(payload),
               UplinkPriority::Critical);
 }
@@ -3476,16 +3542,12 @@ static void emit_remote_control_state() {
   wr_u64_le(&payload[csm::kRemoteControlStateMonoUsOffset], mono64_us());
   payload[csm::kRemoteControlStateSchemaOffset] = csm::kRemoteControlStateSchema;
   payload[csm::kRemoteControlStateLinkStateOffset] = static_cast<uint8_t>(status.link_state);
-  payload[csm::kRemoteControlStateAuthorityStateOffset] =
-      static_cast<uint8_t>(status.authority_state);
-  payload[csm::kRemoteControlStateActiveSourceOffset] =
-      static_cast<uint8_t>(status.active_source);
   payload[csm::kRemoteControlStateFlagsOffset] =
       (status.configured ? 0x01u : 0u) |
       (status.frontend_alive ? 0x02u : 0u) |
       (status.remote_reserved ? 0x04u : 0u) |
       (status.remote_valid ? 0x08u : 0u) |
-      (status.host_control_allowed ? 0x80u : 0u);
+      (status.source_image_valid ? 0x10u : 0u);
   payload[csm::kRemoteControlStateLinkQualityOffset] = status.link_quality;
   payload[csm::kRemoteControlStateRssiOffset] = status.rssi_magnitude;
   payload[csm::kRemoteControlStateLastCrsfTypeOffset] = diag.last_type;
@@ -3511,22 +3573,10 @@ static void emit_remote_control_state() {
   wr_u32_le(&payload[csm::kRemoteControlStateTelemetryBytesOffset], diag.telemetry_tx_bytes);
   wr_u32_le(&payload[csm::kRemoteControlStateSerialWriteFailuresOffset],
             diag.serial_write_failures);
-  wr_u32_le(&payload[csm::kRemoteControlStateControlCyclesOffset],
+  wr_u32_le(&payload[csm::kRemoteControlStateCandidateUpdatesOffset],
             status.semantic_updates);
-  wr_u32_le(&payload[csm::kRemoteControlStateNeutralCyclesOffset], 0u);
-  uint32_t deadline_misses = 0u;
-  uint32_t tx_success = 0u;
-  uint32_t tx_failures = 0u;
-  for (uint8_t lane = 0;
-       lane < csm::board::control_island::kLaneCount; ++lane) {
-    deadline_misses += control_island_health.lanes[lane].deadline_miss;
-    tx_success += control_island_health.lanes[lane].tx_success;
-    tx_failures += control_island_health.lanes[lane].tracking_fault;
-  }
-  wr_u32_le(&payload[csm::kRemoteControlStateDeadlineMissesOffset],
-            deadline_misses);
-  wr_u32_le(&payload[csm::kRemoteControlStateCanTxSuccessOffset], tx_success);
-  wr_u32_le(&payload[csm::kRemoteControlStateCanTxFailedOffset], tx_failures);
+  wr_u32_le(&payload[csm::kRemoteControlStateCandidateRejectsOffset],
+            status.semantic_rejects);
   wr_u32_le(&payload[csm::kRemoteControlStateIpcRejectsOffset], status.ipc_rejects);
   payload[csm::kRemoteControlStateDecisionOffset] = static_cast<uint8_t>(status.last_decision);
   payload[csm::kRemoteControlStateLastAddressOffset] = diag.last_address;
@@ -3534,9 +3584,8 @@ static void emit_remote_control_state() {
       static_cast<uint8_t>(snapshot.sample.sample_state);
   payload[csm::kRemoteControlStateLastIpcRejectDetailOffset] =
       status.last_ipc_reject_detail;
-  wr_u16_le(&payload[csm::kRemoteControlStateCyclePeriodOffset],
+  wr_u16_le(&payload[csm::kRemoteControlStateSemanticPeriodOffset],
             config.semantic_update_period_ms);
-  wr_u16_le(&payload[csm::kRemoteControlStateFrameGapOffset], 0u);
   wr_u16_le(&payload[csm::kRemoteControlStateReserved116Offset], 0u);
   wr_u16_le(&payload[csm::kRemoteControlStateReserved118Offset], 0u);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxForwardRpmOffset], config.max_forward_rpm);
@@ -3664,7 +3713,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
     control_tx_success_total += control_island_health.lanes[lane].tx_success;
     control_tx_failure_total +=
         control_island_health.lanes[lane].tracking_fault +
-        control_island_health.lanes[lane].deadline_miss;
+        control_island_health.lanes[lane].pending_blocked;
   }
   wr_u32_le(&payload[88], control_tx_success_total);
   wr_u32_le(&payload[92], control_tx_failure_total);
@@ -4207,18 +4256,33 @@ static void service_voltage_adc_lane() {
 
 static void poll_control_island_health(uint32_t now_ms) {
 #if BOARD_ENABLE_CONTROL_ISLAND
+  ++control_island_health_read_attempts;
+  const auto bringup = csm::board::control_island::readBringupTrace(
+      control_island_bringup_sequence);
+  if (bringup.accepted && bringup.new_snapshot) {
+    control_island_bringup = bringup.payload;
+    control_island_bringup_sequence = bringup.sequence;
+  }
   const csm::board::control_island::HealthReadResult result =
       csm::board::control_island::readControlHealth(
           control_island_health_sequence);
+  if (result.accepted) {
+    ++control_island_health_read_accepted;
+    control_island_health_last_reject_detail = 0u;
+  } else if (result.detail != 0u) {
+    ++control_island_health_reject_total;
+    control_island_health_last_reject_detail = result.detail;
+  }
   if (result.accepted && result.new_snapshot) {
+    ++control_island_health_new_snapshots;
     control_island_health = result.payload;
     control_island_health_sequence = result.sequence;
     control_island_health_seen_ms = now_ms;
     control_island_health_valid = true;
-    if (static_cast<uint32_t>(now_ms - last_control_health_emit_ms) >= 100u) {
-      emit_control_island_health();
-      last_control_health_emit_ms = now_ms;
-    }
+  }
+  if (static_cast<uint32_t>(now_ms - last_control_health_emit_ms) >= 100u) {
+    emit_control_island_health();
+    last_control_health_emit_ms = now_ms;
   }
 #else
   (void)now_ms;
@@ -4259,9 +4323,9 @@ static bool any_control_backend_ready() {
 }
 
 static bool __attribute__((unused)) host_control_authority_allowed() {
-#if BOARD_ENABLE_REMOTE_AUTHORITY
-  return remote_control_runtime_ok &&
-      remote_control_runtime.status().host_control_allowed;
+#if BOARD_ENABLE_REMOTE_AUTHORITY && BOARD_ENABLE_REMOTE_CONTROL
+  return !remote_control_runtime_ok ||
+      !remote_control_runtime.status().source_image_valid;
 #else
   return true;
 #endif
@@ -4294,62 +4358,43 @@ static void update_host_control_session() {
   service_host_authority_boundary(now_ms);
 }
 
-#if BOARD_ENABLE_REMOTE_CONTROL
-static void service_remote_control() {
-  if (!remote_control_runtime_ok) return;
-
+static void service_control_island() {
+#if BOARD_ENABLE_CONTROL_ISLAND
   const uint32_t now_ms = millis();
+  ++control_island_service_cycles;
   poll_control_island_health(now_ms);
   service_host_authority_boundary(now_ms);
-  csm::board::control::RemoteControlRuntimeInputs inputs;
-  inputs.host_output_reserved = !host_authority_gate.rcAllowed();
-#if BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
-  // The provider owns freshness and positive inactive evidence. Until the
-  // final vehicle adapter is bound this branch is intentionally unavailable.
-  inputs.local_tx_inhibit_latched = false;
-  inputs.autonomy_state =
-      csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
-#elif BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
-  // Explicit engineering bench only; never valid as production evidence.
-  inputs.local_tx_inhibit_latched = false;
-  inputs.autonomy_state =
-      csm::board::authority::AutonomyAuthorityState::InactiveConfirmed;
-#else
-  inputs.local_tx_inhibit_latched = true;
-  inputs.autonomy_state = csm::board::authority::AutonomyAuthorityState::Unknown;
+  csm::board::control::RemoteControlRuntimeOutput output;
+#if BOARD_ENABLE_REMOTE_CONTROL
+  if (remote_control_runtime_ok) output = remote_control_runtime.service(now_ms);
 #endif
-  inputs.backend_state.ready = control_island_runtime_ready(now_ms);
-  inputs.backend_state.error_passive =
-      (control_island_health.flags &
-       csm::board::control_island::kHealthFlagErrorPassive) != 0u;
-  inputs.backend_state.bus_off =
-      (control_island_health.flags &
-       csm::board::control_island::kHealthFlagBusOff) != 0u;
-
-  const csm::board::control::RemoteControlRuntimeOutput output =
-      remote_control_runtime.service(now_ms, inputs);
   if (output.source_valid && !remote_source_was_valid) {
     ++remote_activation_epoch;
     if (remote_activation_epoch == 0u) remote_activation_epoch = 1u;
   }
   remote_source_was_valid = output.source_valid;
-  control_source_manager.updateRemote(
-      output.image_generation, output.lease_sequence, output.lanes,
-      output.source_valid);
+  control_source_manager.updateRemote(output.image_generation,
+      output.lease_sequence, output.lanes, output.source_valid);
+  if (output.source_valid && host_authority_gate.admissionOpen()) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::AuthorityPreempted,
+        now_ms);
+  }
 
   using csm::board::control_island::ControlSource;
   ControlSource selected = ControlSource::None;
-  if (host_authority_gate.admissionOpen() &&
-      control_source_manager.host().valid) {
-    selected = ControlSource::Host;
-  } else if (host_authority_gate.rcAllowed() && output.source_valid) {
+  if (host_authority_gate.rcAllowed() && output.source_valid) {
     selected = ControlSource::Remote;
+  } else if (host_authority_gate.admissionOpen() &&
+             control_source_manager.host().valid) {
+    selected = ControlSource::Host;
   }
   control_source_manager.select(selected);
+  control_island_selected_source = static_cast<uint32_t>(selected);
 
   uint32_t permit_mask = 0u;
   if (selected != ControlSource::None && control_island_runtime_ready(now_ms)) {
-    if (selected == ControlSource::Remote && !inputs.local_tx_inhibit_latched) {
+    if (selected == ControlSource::Remote) {
       permit_mask = (1u << csm::board::control_island::kLane005) |
                     (1u << csm::board::control_island::kLane007);
     } else if (selected == ControlSource::Host) {
@@ -4359,6 +4404,7 @@ static void service_remote_control() {
       }
     }
   }
+  control_island_permit_mask = permit_mask;
   if (static_cast<uint32_t>(now_ms - last_control_snapshot_publish_ms) >= 20u) {
     const csm::board::control_island::FinalControlSnapshotPayload snapshot =
         control_source_manager.snapshot(
@@ -4374,10 +4420,11 @@ static void service_remote_control() {
     last_control_snapshot_publish_ms = now_ms;
   }
 
+#if BOARD_ENABLE_REMOTE_CONTROL
+  if (remote_control_runtime_ok) {
   const auto& status = remote_control_runtime.status();
   const uint16_t state_signature =
       static_cast<uint16_t>(static_cast<uint8_t>(status.link_state)) |
-      (static_cast<uint16_t>(static_cast<uint8_t>(status.authority_state)) << 4u) |
       (status.frontend_alive ? (1u << 8) : 0u) |
       (status.remote_valid ? (1u << 9) : 0u) |
       (status.source_image_valid ? (1u << 10) : 0u);
@@ -4391,8 +4438,12 @@ static void service_remote_control() {
     emit_remote_control_state();
     last_remote_state_emit_ms = now_ms;
   }
-}
+  }
 #endif
+ #else
+  (void)0;
+#endif
+}
 
 #if BOARD_ENABLE_MCP2515
 static constexpr uint8_t kMcpRegCanctrl = 0x0F;
@@ -5686,11 +5737,20 @@ void setup() {
   }
 #endif
 
-  host_control_session.begin(millis());
-  host_authority_gate.reset();
+  // One M7 boot epoch initializes both IPC regions before M4 can observe
+  // either. M4 boot is a Control-Island prerequisite, never an RC result.
   csm::board::control_island::initializeControlIpcForM7(
       static_cast<uint32_t>(boot_session_id));
+  csm::board::remote::initializeRemoteSharedMemoryForM7(
+      static_cast<uint32_t>(boot_session_id));
   control_source_manager.begin(static_cast<uint32_t>(boot_session_id));
+  ++control_island_boot_request_count;
+  bootM4();
+#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
+  runtime_diagnostic_boot_checkpoint(RuntimeDiagBootM4Issued);
+#endif
+  host_control_session.begin(millis());
+  host_authority_gate.reset();
   csm::board::control::HostCommandFreshnessConfig freshness_config;
   freshness_config.heartbeat_max_extra_lag_ms =
       BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
@@ -5787,12 +5847,7 @@ void setup() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootRemoteRuntimeReturn);
 #endif
-  if (remote_control_runtime_ok) {
-    bootM4();
-#if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
-    runtime_diagnostic_boot_checkpoint(RuntimeDiagBootM4Issued);
-#endif
-  } else {
+  if (!remote_control_runtime_ok) {
     emit_board_event(EventRemoteControlInitFailed, 1, 1);
   }
 #endif
@@ -5846,15 +5901,13 @@ void loop() {
   kick_runtime_watchdog();
   service_usb_cdc_reconnect_watchdog();
   mono64_us();
-#if BOARD_ENABLE_REMOTE_CONTROL
   // The first bounded control poll precedes feeder, host, publisher, and
   // Wi-Fi work. Later bounded polls reduce release latency without changing
   // the runtime's absolute timeline or producing catch-up bursts.
   update_host_control_session();
-  service_remote_control();
+  service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
-#endif
 #endif
   poll_uplink_connections(millis());
   service_uplink_session_state();
@@ -5909,15 +5962,11 @@ void loop() {
   }
   service_uplink(1024);
   service_deferred_loss_events();
-#if BOARD_ENABLE_REMOTE_CONTROL
-  service_remote_control();
-#endif
+  service_control_island();
   update_host_control_session();
-#if BOARD_ENABLE_REMOTE_CONTROL
-  service_remote_control();
+  service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
-#endif
 #endif
 
   if (kTestMode) {
@@ -5947,11 +5996,9 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageBuiltinCanDrain);
   service_builtin_can_rx_to_queue(128);
   record_runtime_breadcrumb(RuntimeStageIdle);
-#if BOARD_ENABLE_REMOTE_CONTROL
-  service_remote_control();
+  service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
-#endif
 #endif
 #if BOARD_ENABLE_MCP2515
   record_runtime_breadcrumb(RuntimeStageMcpMainDrain, 2);
@@ -5977,11 +6024,9 @@ void loop() {
   record_runtime_breadcrumb(RuntimeStageStatusAndSensors, 1);
   service_voltage_adc_lane();
   record_runtime_breadcrumb(RuntimeStageIdle);
-#if BOARD_ENABLE_REMOTE_CONTROL
-  service_remote_control();
+  service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
-#endif
 #endif
 
   const uint32_t now_ms = millis();

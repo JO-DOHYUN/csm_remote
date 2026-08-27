@@ -35,6 +35,54 @@ enum class LaneState : uint8_t {
   PendingActive = 2,
 };
 
+enum class TxRequestResult : uint8_t {
+  Accepted = 0,
+  TransportUnavailable = 1,
+  AlreadyPending = 2,
+  AddFailed = 3,
+  EnableFailedNoPending = 4,
+  EnableFailedAbortPending = 5,
+  EnableFailedAbortFailed = 6,
+};
+
+enum class BringupStage : uint16_t {
+  None = 0,
+  M4Entered = 1,
+  ControlIpcValidated = 2,
+  RemoteIpcValidated = 3,
+  ExecutorInitialized = 4,
+  Tim4Configured = 5,
+  FdcanBeginEntered = 6,
+  MbedBootstrapReturned = 7,
+  Fdcan1InstanceValidated = 8,
+  HalInitialized = 9,
+  FilterConfigured = 10,
+  GlobalFilterConfigured = 11,
+  HalStarted = 12,
+  InterruptLinesConfigured = 13,
+  NotificationsActivated = 14,
+  NvicConfigured = 15,
+  FdcanOperational = 16,
+  FirstTim4Tick = 17,
+  ForegroundLoopEntered = 18,
+};
+
+enum class BringupFailure : uint16_t {
+  None = 0,
+  ControlIpc = 1,
+  RemoteIpc = 2,
+  Executor = 3,
+  Tim4 = 4,
+  MbedBootstrap = 5,
+  FdcanInstance = 6,
+  HalInit = 7,
+  Filter = 8,
+  GlobalFilter = 9,
+  HalStart = 10,
+  InterruptLine = 11,
+  Notification = 12,
+};
+
 enum class TransactionState : uint8_t {
   None = 0,
   Active = 1,
@@ -122,12 +170,16 @@ struct FdcanRawSnapshot {
 };
 
 struct LaneHealth {
-  uint32_t release_due = 0;
+  uint32_t schedule_due = 0;
+  uint32_t policy_suppressed = 0;
+  uint32_t transport_blocked = 0;
+  uint32_t pending_blocked = 0;
+  uint32_t request_attempt = 0;
+  uint32_t request_accepted = 0;
+  uint32_t request_failed = 0;
   uint32_t tx_success = 0;
-  uint32_t deadline_miss = 0;
   uint32_t cancel_count = 0;
   uint32_t cancel_race_count = 0;
-  uint32_t suppressed = 0;
   uint32_t tracking_fault = 0;
   uint32_t last_value_generation = 0;
   uint8_t state = static_cast<uint8_t>(LaneState::Free);
@@ -155,6 +207,25 @@ struct ControlHealthPayload {
   uint32_t raw_ring_fill = 0;
   uint32_t raw_ring_high_water = 0;
   uint32_t raw_ring_drop = 0;
+  uint32_t tim4_tick_total = 0;
+  uint32_t tim4_first_tick_us = 0;
+  uint32_t tim4_last_tick_us = 0;
+  uint32_t tim4_max_gap_us = 0;
+  uint32_t fdcan_kernel_clock_hz = 0;
+  uint32_t nominal_prescaler = 0;
+  uint32_t nominal_sjw = 0;
+  uint32_t nominal_time_seg1 = 0;
+  uint32_t nominal_time_seg2 = 0;
+  uint32_t nominal_bitrate = 0;
+  uint32_t fdcan_irq_total = 0;
+  uint32_t tx_complete_callback_total = 0;
+  uint32_t tx_abort_callback_total = 0;
+  uint32_t error_callback_total = 0;
+  uint32_t last_error_callback_status = 0;
+  uint32_t add_failure_total = 0;
+  uint32_t enable_failure_total = 0;
+  uint32_t abort_failure_total = 0;
+  uint32_t health_snapshot_reject_total = 0;
   uint32_t transaction_id = 0;
   uint16_t transaction_requested = 0;
   uint16_t transaction_completed = 0;
@@ -176,6 +247,25 @@ static constexpr uint32_t kHealthFlagControlActive = 1u << 6;
 static constexpr uint32_t kHealthFlagTrackingFault = 1u << 7;
 static constexpr uint32_t kHealthFlagTransportReady = 1u << 8;
 static constexpr uint32_t kHealthFlagActiveMotion = 1u << 9;
+static constexpr uint32_t kHealthFlagTim4Configured = 1u << 10;
+static constexpr uint32_t kHealthFlagTim4Ticking = 1u << 11;
+
+struct BringupTracePayload {
+  uint64_t source_id = 0;
+  uint64_t runtime_contract_id = 0;
+  uint32_t build_id = 0;
+  uint32_t m4_boot_id = 0;
+  uint16_t stage = static_cast<uint16_t>(BringupStage::None);
+  uint16_t failure = static_cast<uint16_t>(BringupFailure::None);
+  uint32_t failure_detail = 0;
+  uint32_t flags = 0;
+};
+
+struct alignas(32) BringupTraceSlot {
+  uint32_t sequence_begin = 0;
+  BringupTracePayload payload = {};
+  uint32_t sequence_end = 0;
+};
 
 struct alignas(32) ControlHealthSlot {
   uint32_t sequence_begin = 0;
@@ -199,7 +289,9 @@ struct alignas(32) ControlIpcRegion {
   uint32_t raw_drop_count = 0;
   uint32_t raw_high_water = 0;
   uint32_t m4_boot_id = 0;
-  uint32_t reserved_header[2] = {};
+  uint32_t bringup_sequence = 0;
+  uint32_t reserved_header = 0;
+  BringupTraceSlot bringup = {};
   ControlSnapshotSlot control[2] = {};
   ControlHealthSlot health[2] = {};
 };
