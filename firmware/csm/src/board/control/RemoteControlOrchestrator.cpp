@@ -25,14 +25,12 @@ RemoteControlOrchestratorResult RemoteControlOrchestrator::tick(
 
   remote_source_.update(now_ms,
                         inputs.mailbox_snapshot,
-                        inputs.remote_handoff_qualified,
                         inputs.remote_takeover_request,
                         inputs.remote_release_request);
 
   authority::AuthorityInputs authority_inputs = buildAuthorityInputs(inputs);
   authority_inputs.remote_source_present = inputs.remote_source_present;
   authority_inputs.remote_source_valid = isRemoteSnapshotUsable(inputs.mailbox_snapshot);
-  authority_inputs.remote_handoff_qualified = inputs.remote_handoff_qualified;
   authority_inputs.remote_takeover_request = inputs.remote_takeover_request;
   authority_inputs.remote_release_request = inputs.remote_release_request;
 
@@ -163,9 +161,6 @@ authority::AuthorityInputs RemoteControlOrchestrator::buildAuthorityInputs(
   authority::AuthorityInputs authority_inputs;
   authority_inputs.autonomy_state = inputs.autonomy_state;
   authority_inputs.local_tx_inhibit_latched = inputs.local_tx_inhibit_latched;
-  authority_inputs.estop_asserted = inputs.estop_asserted;
-  authority_inputs.fault_lockout = inputs.fault_lockout;
-  authority_inputs.safety_supervisor_allows = inputs.safety_supervisor_allows;
   return authority_inputs;
 }
 
@@ -175,7 +170,6 @@ CanTxGatewayInputs RemoteControlOrchestrator::buildGatewayInputs(
   CanTxGatewayInputs gateway_inputs;
   gateway_inputs.authority_decision = authority_decision;
   gateway_inputs.local_tx_inhibit_latched = inputs.local_tx_inhibit_latched;
-  gateway_inputs.safety_supervisor_allows = inputs.safety_supervisor_allows;
   gateway_inputs.backend_state = inputs.backend_state;
   return gateway_inputs;
 }

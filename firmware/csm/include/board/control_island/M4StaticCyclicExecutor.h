@@ -11,7 +11,9 @@ class M4LaneDriver {
   virtual ~M4LaneDriver() = default;
   // Physical transport availability only; it is deliberately independent of
   // source authority, permit, lease and motion permission.
+  virtual void consumeLatchedEvents() {}
   virtual bool ready() const = 0;
+  virtual bool errorWarning() const { return false; }
   virtual bool errorPassive() const = 0;
   virtual bool busOff() const = 0;
   virtual bool request(uint8_t lane, const uint8_t data[8]) = 0;
@@ -24,46 +26,60 @@ class M4StaticCyclicExecutor {
  public:
   void begin(uint32_t m4_boot_id, uint32_t publish_timeout_us,
              M4LaneDriver* driver);
-  bool acceptSnapshot(const FinalControlSnapshotPayload& snapshot,
-                      uint32_t observed_at_us);
+  bool stageSnapshot(const FinalControlSnapshotPayload& snapshot,
+                     uint32_t observed_at_us);
+  void stageIpcIntegrityFailure();
+  void latchTerminalEvent(uint8_t lane, bool transmitted, bool cancelled);
+  void latchTrackingFault(uint8_t lane);
   void onFiveMillisecondSlot(uint32_t now_us);
-  void onTerminal(uint8_t lane, bool transmitted, bool cancelled);
-  void onTrackingFault(uint8_t lane);
-  void noteIpcIntegrityFailure();
 
   const ControlHealthPayload& health() const { return health_; }
-  ControlHealthPayload healthForPublish(uint32_t now_us);
+  ControlHealthPayload healthSnapshot(uint32_t now_us) const;
   bool hasActiveControl() const { return active_valid_; }
 
  private:
-  void activateCandidate();
-  void serviceTransition();
-  void releaseLane(uint8_t lane, bool active_motion);
+  void consumeIngress(uint32_t now_us);
+  void consumeTerminalEvents();
+  void applyStagedSnapshot(uint32_t now_us);
+  void activateStaged();
+  void releaseLane(uint8_t lane);
   void releaseSafeLane(uint8_t lane);
   void cancelLane(uint8_t lane);
-  void cancelAllPending();
-  bool allLanesFree() const;
-  bool activeMotionAllowed(uint32_t now_us);
+  void cancelActivePending();
+  bool activeMotionAllowed() const;
   bool snapshotHasActiveMotion(const FinalControlSnapshotPayload& snapshot) const;
+  bool laneOwnedByActiveSource(uint8_t lane) const;
   void revokeActive(bool require_rearm);
   void latchFault(uint8_t lane);
   void saturatingIncrement(uint32_t* value);
 
   M4LaneDriver* driver_ = nullptr;
   FinalControlSnapshotPayload active_ = {};
-  FinalControlSnapshotPayload candidate_ = {};
+  FinalControlSnapshotPayload staged_ = {};
   ControlHealthPayload health_ = {};
   LaneState lane_state_[kLaneCount] = {LaneState::Free, LaneState::Free,
                                        LaneState::Free};
+  bool cancel_issued_[kLaneCount] = {};
   uint32_t last_publish_seen_us_ = 0;
   uint32_t publish_timeout_us_ = 0;
   uint8_t next_slot_ = 0;
   bool active_valid_ = false;
-  bool candidate_valid_ = false;
-  bool transition_pending_ = false;
+  bool activation_pending_ = false;
+  volatile uint32_t staged_generation_ = 0;
+  uint32_t consumed_staged_generation_ = 0;
+  uint32_t staged_observed_at_us_ = 0;
+  volatile uint32_t terminal_tx_mask_ = 0;
+  volatile uint32_t terminal_cancel_mask_ = 0;
+  volatile uint32_t tracking_fault_mask_ = 0;
+  volatile uint32_t ipc_integrity_events_ = 0;
   bool stale_latched_ = true;
   bool rearm_required_ = true;
-  uint32_t rearm_authority_epoch_ = 0;
+  bool tracking_fault_active_ = false;
+  bool fault_closing_ = false;
+  bool error_warning_seen_ = false;
+  bool error_passive_seen_ = false;
+  bool bus_off_seen_ = false;
+  uint32_t rejected_activation_epoch_ = 0;
 };
 
 }  // namespace csm::board::control_island

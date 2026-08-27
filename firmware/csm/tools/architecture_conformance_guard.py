@@ -42,7 +42,9 @@ for required in (
     "raw_can_ring_capacity: 512",
     "strict_n_shot_owner: csm_m4_generic_success_budget",
     "physical_transport_readiness: m4_fdcan1_transport_only",
-    "active_motion_permission: fresh_coherent_source_all_lane_permit_explicit_arm",
+    "active_motion_permission: fresh_coherent_source_owned_lane_permit_explicit_arm",
+    "mutable_executor_state_writer: csm_m4_tim4_only",
+    "health_read_side_effects: forbidden",
     "idle_safe: FixedSafeFrame_AA02000000000000",
     "idle_safe: FixedSafeFrame_8200000000000000",
     "evidence_only: true",
@@ -113,5 +115,20 @@ if "globalExecutionAllowed" in executor:
 for obsolete in ("hardInhibitActive", "safeWireQualified", "hardSafetyQualified"):
     if obsolete in executor:
         fail(f"obsolete GPIO/qualification gate remains: {obsolete}")
+
+for obsolete in (
+    "SafetySupervisor", "SafetyState", "SafetyInputs", "HostClearFaultLockout",
+    "estop_asserted", "fault_lockout", "safety_supervisor_allows",
+):
+    if obsolete in main:
+        fail(f"retired GPIO safety path remains: {obsolete}")
+
+for required in (
+    "stageSnapshot", "latchTerminalEvent", "latchTrackingFault",
+    "consumeIngress", "consumeTerminalEvents", "PendingSafe", "PendingActive",
+    "source_epoch", "activation_epoch", "healthSnapshot",
+):
+    if required not in executor and required not in contract:
+        fail(f"TIM4 event-state contract missing {required}")
 
 print("Architecture conformance guard PASS")

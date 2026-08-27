@@ -24,7 +24,9 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   void noteTxAbort(uint32_t buffer_indexes);
   void noteError(uint32_t error_status);
 
+  void consumeLatchedEvents() override;
   bool ready() const override;
+  bool errorWarning() const override;
   bool errorPassive() const override;
   bool busOff() const override;
   bool request(uint8_t lane, const uint8_t data[8]) override;
@@ -37,7 +39,7 @@ class M4Fdcan1Owner final : public M4LaneDriver {
 
  private:
   bool configureDirectHal();
-  void configureInterrupts();
+  bool configureInterrupts();
   void updateProtocolState();
   void terminal(uint32_t buffer_indexes, bool abort_callback);
   static uint32_t bufferMask(uint8_t lane);
@@ -54,6 +56,7 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   bool timebase_ready_ = false;
   bool clock_contract_ok_ = false;
   bool protocol_fault_latched_ = false;
+  volatile uint32_t error_status_latch_ = 0;
 };
 
 class M4ControlTimebase {

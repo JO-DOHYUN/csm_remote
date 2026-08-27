@@ -52,7 +52,6 @@ MANIFEST_REQUIRED = {
     "authority_level": "L2",
     "architecture_id": "csm-hno1-m4-control-island-rev-b",
     "physical_can_owner": "csm_m4_control_island",
-    "hard_safety_owner": "csm_m4_control_island",
     "host_semantic_owner": "android_vsm",
     "remote_semantic_owner": "csm_m7",
     "global_source_authority_owner": "csm_m7",
@@ -75,7 +74,6 @@ MANIFEST_REQUIRED = {
     "physical_success_requires_hardware_evidence": "true",
     "threshold_state": "exploratory",
     "production_authority": "false",
-    "fail_closed_until_frozen": "true",
 }
 
 

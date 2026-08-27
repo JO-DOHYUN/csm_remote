@@ -29,11 +29,7 @@ struct RemoteControlOrchestratorInputs {
   authority::AutonomyAuthorityState autonomy_state =
       authority::AutonomyAuthorityState::Unknown;
   bool local_tx_inhibit_latched = true;
-  bool estop_asserted = false;
-  bool fault_lockout = false;
-  bool safety_supervisor_allows = false;
   bool remote_source_present = false;
-  bool remote_handoff_qualified = false;
   bool remote_takeover_request = false;
   bool remote_release_request = false;
   can::CanBackendState backend_state = {};

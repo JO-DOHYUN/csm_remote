@@ -123,11 +123,7 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
     status_.raw_ch4 = shared.slot.diagnostics.raw_ch4;
     if (observed_m4_boot_id_ != shared.slot.m4_boot_id) {
       observed_m4_boot_id_ = shared.slot.m4_boot_id;
-      status_.handoff_qualified = false;
-      status_.release_qualified = false;
       status_.remote_reserved = true;
-      neutral_timer_active_ = false;
-      release_timer_active_ = false;
       command_limiter_.begin(now_ms);
       invalidateSource();
     }
@@ -137,14 +133,11 @@ RemoteControlRuntimeOutput RemoteControlRuntime::service(
   }
 
   updateRemoteState(now_ms);
-  status_.host_control_allowed = status_.frontend_alive &&
-      status_.release_qualified && !status_.remote_reserved;
+  status_.host_control_allowed = !status_.remote_valid;
   publishTelemetry(now_ms);
 
   if (!config_.semantic_output_enabled || inputs.host_output_reserved ||
-      !status_.remote_valid || !status_.handoff_qualified ||
-      !inputs.hard_safety_allows || inputs.estop_asserted ||
-      inputs.fault_lockout || inputs.local_tx_inhibit_latched ||
+      !status_.remote_valid || inputs.local_tx_inhibit_latched ||
       !inputs.backend_state.ready || inputs.backend_state.bus_off ||
       inputs.backend_state.error_passive) {
     invalidateSource();
@@ -180,48 +173,7 @@ void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
   status_.auxiliary_permille = snapshot.sample.ch[4];
   status_.remote_valid = status_.frontend_alive &&
       mailbox_reader_.hasFreshUsableSample();
-  status_.neutral_now = status_.remote_valid && isNeutralSample(snapshot);
-
-  if (status_.remote_valid) {
-    status_.remote_reserved = true;
-    status_.release_qualified = false;
-    release_timer_active_ = false;
-    if (!status_.handoff_qualified) {
-      if (status_.neutral_now) {
-        if (!neutral_timer_active_) {
-          neutral_timer_active_ = true;
-          neutral_since_ms_ = now_ms;
-        }
-        if (now_ms - neutral_since_ms_ >= config_.neutral_qualification_ms) {
-          status_.handoff_qualified = true;
-        }
-      } else {
-        neutral_timer_active_ = false;
-      }
-    }
-    return;
-  }
-
-  status_.handoff_qualified = false;
-  neutral_timer_active_ = false;
-  if (!status_.frontend_alive ||
-      status_.link_state == remote::RemoteLinkState::Malformed ||
-      status_.link_state == remote::RemoteLinkState::ProtocolFault) {
-    status_.remote_reserved = true;
-    status_.release_qualified = false;
-    release_timer_active_ = false;
-    return;
-  }
-  if (!release_timer_active_) {
-    release_timer_active_ = true;
-    release_since_ms_ = now_ms;
-  }
-  if (now_ms - release_since_ms_ >= config_.release_qualification_ms) {
-    status_.release_qualified = true;
-    status_.remote_reserved = false;
-  } else {
-    status_.remote_reserved = true;
-  }
+  status_.remote_reserved = status_.remote_valid;
 }
 
 void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {
@@ -232,25 +184,10 @@ void RemoteControlRuntime::publishTelemetry(uint32_t now_ms) {
   telemetry.authority_state = static_cast<uint8_t>(status_.authority_state);
   telemetry.remote_link_state = static_cast<uint8_t>(status_.link_state);
   telemetry.flags = (status_.remote_valid ? 1u : 0u) |
-      (status_.handoff_qualified ? 1u << 1 : 0u) |
       (status_.source_image_valid ? 1u << 2 : 0u);
   const char* mode = status_.source_image_valid ? "RC ACTIVE" : "CSM SAFE";
   strncpy(telemetry.flight_mode, mode, sizeof(telemetry.flight_mode) - 1u);
   (void)remote::publishRemoteTelemetry(telemetry);
-}
-
-bool RemoteControlRuntime::isNeutralSample(
-    const remote::M4RemoteMailboxSnapshot& snapshot) const {
-  return snapshot.sample_present && snapshot.integrity_ok &&
-      snapshot.sample.sample_state == remote::RcSampleState::Ok &&
-      (snapshot.sample.ch[config_.drive_channel_index] >=
-       -static_cast<int16_t>(config_.neutral_deadband_permille)) &&
-      (snapshot.sample.ch[config_.drive_channel_index] <=
-       static_cast<int16_t>(config_.neutral_deadband_permille)) &&
-      (snapshot.sample.ch[config_.steering_channel_index] >=
-       -static_cast<int16_t>(config_.neutral_deadband_permille)) &&
-      (snapshot.sample.ch[config_.steering_channel_index] <=
-       static_cast<int16_t>(config_.neutral_deadband_permille));
 }
 
 bool RemoteControlRuntime::buildSourceImage(
@@ -261,11 +198,7 @@ bool RemoteControlRuntime::buildSourceImage(
   orchestrator_inputs.output_sequence = status_.source_lease_sequence + 1u;
   orchestrator_inputs.autonomy_state = inputs.autonomy_state;
   orchestrator_inputs.local_tx_inhibit_latched = inputs.local_tx_inhibit_latched;
-  orchestrator_inputs.estop_asserted = inputs.estop_asserted;
-  orchestrator_inputs.fault_lockout = inputs.fault_lockout;
-  orchestrator_inputs.safety_supervisor_allows = inputs.hard_safety_allows;
   orchestrator_inputs.remote_source_present = status_.remote_valid;
-  orchestrator_inputs.remote_handoff_qualified = status_.handoff_qualified;
   orchestrator_inputs.remote_takeover_request = status_.remote_valid;
   orchestrator_inputs.backend_state = inputs.backend_state;
   RemoteControlOrchestratorDeps deps;
@@ -294,9 +227,8 @@ bool RemoteControlRuntime::buildSourceImage(
     next[lane].valid = 1u;
     memcpy(next[lane].data, frame.data, 8u);
   }
-  // RC does not command EHB; its coherent source image explicitly owns a
-  // neutral lane instead of mixing the previous Host lane into one snapshot.
-  next[control_island::kLane364].valid = 1u;
+  // RC owns only 005/007. Lane 364 remains invalid and is resolved by M4's
+  // frozen safe-wire policy (SuppressTx).
   if (next[control_island::kLane005].valid == 0u ||
       next[control_island::kLane007].valid == 0u) {
     return false;

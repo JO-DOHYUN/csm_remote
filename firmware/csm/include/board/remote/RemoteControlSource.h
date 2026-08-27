@@ -27,7 +27,6 @@ class RemoteControlSource {
 
   void update(uint32_t now_ms,
               const M4RemoteMailboxSnapshot& snapshot,
-              bool handoff_qualified,
               bool takeover_request,
               bool release_request);
 

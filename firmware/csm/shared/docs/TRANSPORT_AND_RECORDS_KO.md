@@ -189,7 +189,6 @@ Record types:
 - `12 HOST_CONTROL_SESSION` host-to-board downlink only
 - `13 HOST_SET_CONTROL_POLICY` host-to-board downlink only, reserved
 - `14 HOST_QUERY_CAPABILITY` host-to-board downlink only
-- `15 HOST_CLEAR_FAULT_LOCKOUT` host-to-board downlink only
 - `16 CAN_RX_SEGMENT`
 - `17 STREAM_SESSION`
 - `18 REMOTE_CONTROL_STATE`
@@ -201,7 +200,7 @@ Record types:
 - `23 CONTROL_TX_EVIDENCE` terminal Service/HIL command-to-driver evidence
 - `24 HOST_CONTROL_STATE_V2` coherent Host 3-lane state, downlink only
 - `25 HOST_CONTROL_NSHOT` generic successful-TX budget, downlink only
-- `26 CONTROL_ISLAND_HEALTH` M4 terminal/safety/IPC evidence
+- `26 CONTROL_ISLAND_HEALTH` M4 terminal/transport/IPC evidence
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -255,8 +254,7 @@ growth beyond one 4 KiB pump budget.
 - `8 schema u8`, currently `2`
 - `9 remote_link_state u8`, `10 authority_state u8`, `11 active_source u8`
 - `12 flags u8`: bit0 configured, bit1 M4 frontend alive, bit2 RC boundary
-  reserved, bit3 usable RC sample, bit4 CH2/CH4 neutral, bit5 neutral handoff
-  qualified, bit6 stable RC release qualified, bit7 service host allowed
+  reserved, bit3 usable RC sample, bits4..6 reserved, bit7 service host allowed
 - `13 link_quality u8`, `14 RSSI dBm magnitude u8`, `15 last CRSF type u8`
 - `16..19 m4_boot_id u32`, `20..23 shared_sequence u32`
 - `24..27 mailbox_age_ms u32`: age of the last accepted M4 mailbox sequence;
@@ -272,8 +270,8 @@ growth beyond one 4 KiB pump budget.
 - `108 last_decision u8`, `109 last CRSF address u8`, `110 sample_state u8`
 - `111 last_ipc_reject_detail u8`: `0` none, `1` bad shared header, `2` torn
   commit, `3` checksum mismatch
-- `112..127` cycle period, inter-frame gap, neutral qualification, release
-  qualification, max forward RPM, max reverse RPM, max steering deci-degree,
+- `112..127` cycle period, inter-frame gap, two reserved `u16`, max forward RPM,
+  max reverse RPM, max steering deci-degree,
   and policy id as `u16` fields
 - `128..159 normalized channel[16] i16`
 - `160 link_statistics_valid u8`; `161..169` exact CRSF uplink/downlink RSSI,
@@ -349,17 +347,16 @@ magnitude through 5% emits stop. Above 5%, the first active speed is 200 and lat
 speeds are rounded to 50-unit steps through 1000 in standard ID `0x005`, DLC8:
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
 Active mode never carries speed `1..199`.
-Neutral, unqualified RC, and RC failsafe use only `AA 02 00 00 00 00 00 00` when
+RC source loss and RC failsafe use only `AA 02 00 00 00 00 00 00` when
 upstream autonomy is explicitly released and the authority gate allows TX.
 Drive is periodic at 5 ms; steering is independently periodic at 20 ms. Both pass the limiter,
 and a direction reversal reaches zero before applying the opposite direction. A repeated or frozen
 mailbox sequence cannot refresh source freshness.
 
 Remote authority order is `upstream autonomy > RC remote >
-service host > monitoring`. RC presence reserves the authority boundary before
-neutral qualification. Loss immediately produces the periodic neutral command;
-only a stable non-malformed release interval may expose a lower-priority source.
-Malformed CRSF or IPC evidence fails closed and does not release authority.
+service host > monitoring`. A fresh usable RC sample owns only `0x005/0x007`;
+loss immediately revokes RC ACTIVE and exposes the lower-priority source boundary.
+Malformed CRSF or IPC evidence cannot remain ACTIVE.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
 - `0..7 mono_us u64`
@@ -529,11 +526,11 @@ active REV.B profile.
 - `18..19 successful_tx_count u16`, `1..255`
 - `20..27 data[8]`
 
-`CONTROL_ISLAND_HEALTH` schema 2 payload, 324 bytes:
+`CONTROL_ISLAND_HEALTH` schema 3 payload, 328 bytes:
 - `0..7 mono_us u64`, M7 observation time
 - `8 schema u8`, `10..11 payload_len u16`
 - `12..31 schema/wire/memory identity, M4 boot id, health sequence`
-- `32..51 flags, M7 publish sequence/age in M4 local time, authority epoch/source`
+- `32..51 flags, M7 publish sequence/age in M4 local time, source epoch/source`
 - `52..83 IPC stale/integrity, FDCAN error, raw-ring fill/high-water/drop counters`
 - `84..95 transaction id/requested/completed/state/FDCAN/reserved`
 - `96..191` three 32-byte lane terminal counters
@@ -541,6 +538,8 @@ active REV.B profile.
 - `232..271` first-fault snapshot
 - `272..311` last-fault snapshot
 - `312..323` M7 snapshot publish total/failure/max-gap
+- `324..327 activation_epoch u32`: explicit ARM/fresh activation identity, separate
+  from global source selection epoch
 
 Flags distinguish ready/clock, bus-off, error-passive,
 M7 fresh, control active and tracking fault. Lane counters include release due,
@@ -665,10 +664,9 @@ Safety-gated control session:
   `STREAM_SESSION -> CAPABILITY -> CONTROL_ACK` in that order. The query is
   idempotent and gives a reconnecting host a fresh boot identity/sequence
   anchor even if it missed the connection-edge announcement.
-- `HOST_CLEAR_FAULT_LOCKOUT` payload is `command_id u32`.
-- Production host TX requires heartbeat alive, arm accepted, lease valid, safe
-  inputs, a qualified sender-time timeline, and a ready target backend. The first
-  heartbeat anchors a transport epoch; a second coherent sample qualifies it.
+- Production host TX requires heartbeat alive, arm accepted, lease valid, a
+  bounded sender-time timeline, and a ready target backend. The first heartbeat
+  anchors a transport epoch; a second coherent sample makes commands admissible.
   Excess sender/arrival divergence latches the epoch until reconnect. Heartbeat
   resume alone never auto-arms.
 - Initial fixed Service/HIL budgets are heartbeat extra transport lag `100 ms`,
@@ -1054,8 +1052,7 @@ Extended 128-byte `BOARD_HEALTH` payload:
 - `52 health_payload_version u8`: `2` for the old extended payload, `4` for the
   high-load CSM payload
 - `53 health_payload_len u8`
-- `54 safety_state u8`
-- `55 safety_fault_bits u8`
+- `54..55 reserved u8` (retired GPIO safety model; always zero)
 - `56..59 heartbeat_age_ms u32`
 - `60..63 lease_remaining_ms u32`
 - `64..67 host_crc_fail_total u32`
@@ -1066,7 +1063,7 @@ Extended 128-byte `BOARD_HEALTH` payload:
 - `88..95 J4 built-in CAN TX success/fail counters`
 - `96..107 MCP SPI/error/register snapshot`
 - `108..111 CAN RX queue depth u32`
-- `112..115 safety_transition_counter u32`
+- `112..115 host_activation_epoch u32`
 - `116..119 backend_flags u32`
 - `120..123 host_heartbeat_total u32`
 - `124..127 host_control_session_total u32`

@@ -38,7 +38,7 @@ reset / power event
   -> deterministic main service loop
 
 R16SM -> M4 UART/CRSF -> SRAM4 latest sample -> M7 RC source
-      -> hard safety -> upstream-autonomy release -> RC/service arbitration
+      -> upstream-autonomy release -> RC/service arbitration
       -> limiter -> explicit vehicle mapper -> CanTxGateway -> CAN backend
 
 CAN/RC/safety/recovery evidence

@@ -6,7 +6,7 @@ namespace csm::board::control_island {
 
 void ControlSourceManager::begin(uint32_t m7_boot_id) {
   m7_boot_id_ = m7_boot_id == 0u ? 1u : m7_boot_id;
-  authority_epoch_ = 1u;
+  source_epoch_ = 1u;
   active_source_ = ControlSource::None;
   host_ = {};
   remote_ = {};
@@ -78,9 +78,10 @@ void ControlSourceManager::updateRemote(
   remote_.valid = true;
   remote_.image_generation = image_generation;
   remote_.lease_sequence = lease_sequence;
-  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+  for (uint8_t lane = 0; lane < kLane364; ++lane) {
     remote_.lanes[lane] = lanes[lane];
   }
+  remote_.lanes[kLane364] = {};
   remote_.transaction = {};
 }
 
@@ -96,16 +97,16 @@ void ControlSourceManager::select(ControlSource source) {
   }
   if (active_source_ == source) return;
   active_source_ = source;
-  ++authority_epoch_;
-  if (authority_epoch_ == 0u) authority_epoch_ = 1u;
+  ++source_epoch_;
+  if (source_epoch_ == 0u) source_epoch_ = 1u;
 }
 
 FinalControlSnapshotPayload ControlSourceManager::snapshot(
-    uint32_t permit_mask, uint32_t safety_epoch) const {
+    uint32_t permit_mask, uint32_t activation_epoch) const {
   FinalControlSnapshotPayload result;
   result.m7_boot_id = m7_boot_id_;
-  result.authority_epoch = authority_epoch_;
-  result.safety_epoch = safety_epoch;
+  result.source_epoch = source_epoch_;
+  result.activation_epoch = activation_epoch;
   result.active_source = static_cast<uint32_t>(active_source_);
   const SourceImage* source = nullptr;
   if (active_source_ == ControlSource::Host && host_.valid) source = &host_;
@@ -113,7 +114,10 @@ FinalControlSnapshotPayload ControlSourceManager::snapshot(
   if (source == nullptr) return result;
   result.source_image_generation = source->image_generation;
   result.source_lease_sequence = source->lease_sequence;
-  result.permit_mask = permit_mask & kAllLanePermitMask;
+  const uint32_t source_mask = active_source_ == ControlSource::Remote
+      ? ((1u << kLane005) | (1u << kLane007))
+      : kAllLanePermitMask;
+  result.permit_mask = permit_mask & source_mask;
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     result.lanes[lane] = source->lanes[lane];
   }

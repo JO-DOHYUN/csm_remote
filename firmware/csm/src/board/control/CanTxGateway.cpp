@@ -7,7 +7,6 @@ constexpr uint16_t kDetailPolicyNotConfigured = 1;
 constexpr uint16_t kDetailBuildProfileBlocked = 2;
 constexpr uint16_t kDetailAuthorityRejected = 3;
 constexpr uint16_t kDetailLocalInhibit = 4;
-constexpr uint16_t kDetailSafetyDenied = 5;
 constexpr uint16_t kDetailBackendNotReady = 7;
 constexpr uint16_t kDetailFramePolicy = 8;
 
@@ -58,13 +57,9 @@ CanTxGatewayResult CanTxGateway::evaluate(const CanFrameRequest& request,
     return reject(authority::ControlDecisionCode::RejectedLocalTxInhibit,
                   kDetailLocalInhibit);
   }
-  if (!inputs.safety_supervisor_allows) {
-    return reject(authority::ControlDecisionCode::RejectedSafetySupervisor,
-                  kDetailSafetyDenied);
-  }
   if (!inputs.backend_state.ready || inputs.backend_state.bus_off ||
       inputs.backend_state.error_passive || inputs.backend_state.tx_busy) {
-    return reject(authority::ControlDecisionCode::RejectedSafetySupervisor,
+    return reject(authority::ControlDecisionCode::RejectedSourceFailsafe,
                   kDetailBackendNotReady);
   }
   if (!isAllowedFrame(request)) {

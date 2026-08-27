@@ -40,6 +40,11 @@ uint8_t dlcBytes(uint32_t data_length) {
 
 bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
                           M4StaticCyclicExecutor* executor) {
+  fdcan_ready_ = false;
+  timebase_ready_ = false;
+  clock_contract_ok_ = false;
+  protocol_fault_latched_ = false;
+  error_status_latch_ = 0u;
   executor_ = executor;
   m4_boot_id_ = m4_boot_id;
   if (executor_ == nullptr || m4_boot_id_ == 0u) return false;
@@ -48,11 +53,23 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   // no mbed::CAN object or cyclic can_write path exists in this image.
   can_init_freq(&can_, PB_8, PH_13, BOARD_HNO1_CAN1_BITRATE);
   handle_ = &can_.CanHandle;
-  if (handle_->Instance != FDCAN1 || !configureDirectHal()) return false;
+  if (handle_->Instance != FDCAN1) return false;
+  if (!configureDirectHal()) {
+    (void)HAL_FDCAN_Stop(handle_);
+    (void)HAL_FDCAN_DeInit(handle_);
+    return false;
+  }
 
-  fdcan_ready_ = true;
   g_fdcan_owner = this;
-  configureInterrupts();
+  if (!configureInterrupts()) {
+    g_fdcan_owner = nullptr;
+    NVIC_DisableIRQ(FDCAN1_IT0_IRQn);
+    NVIC_DisableIRQ(FDCAN1_IT1_IRQn);
+    (void)HAL_FDCAN_Stop(handle_);
+    (void)HAL_FDCAN_DeInit(handle_);
+    return false;
+  }
+  fdcan_ready_ = true;
   updateProtocolState();
   return true;
 }
@@ -110,18 +127,22 @@ bool M4Fdcan1Owner::configureDirectHal() {
   return clock_contract_ok_;
 }
 
-void M4Fdcan1Owner::configureInterrupts() {
+bool M4Fdcan1Owner::configureInterrupts() {
   const uint32_t notifications =
       FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_RX_FIFO0_MESSAGE_LOST |
       FDCAN_IT_TX_COMPLETE | FDCAN_IT_TX_ABORT_COMPLETE |
       FDCAN_IT_ERROR_WARNING | FDCAN_IT_ERROR_PASSIVE | FDCAN_IT_BUS_OFF |
       FDCAN_IT_ARB_PROTOCOL_ERROR | FDCAN_IT_DATA_PROTOCOL_ERROR;
-  (void)HAL_FDCAN_ConfigInterruptLines(handle_, notifications,
-                                       FDCAN_INTERRUPT_LINE0);
-  (void)HAL_FDCAN_ActivateNotification(handle_, notifications,
-                                       FDCAN_TX_BUFFER0 |
-                                           FDCAN_TX_BUFFER1 |
-                                           FDCAN_TX_BUFFER2);
+  if (HAL_FDCAN_ConfigInterruptLines(handle_, notifications,
+                                     FDCAN_INTERRUPT_LINE0) != HAL_OK) {
+    return false;
+  }
+  if (HAL_FDCAN_ActivateNotification(handle_, notifications,
+                                     FDCAN_TX_BUFFER0 |
+                                         FDCAN_TX_BUFFER1 |
+                                         FDCAN_TX_BUFFER2) != HAL_OK) {
+    return false;
+  }
   NVIC_SetVector(FDCAN1_IT0_IRQn,
                  reinterpret_cast<uint32_t>(fdcanIrqTrampoline));
   NVIC_SetVector(FDCAN1_IT1_IRQn,
@@ -130,6 +151,7 @@ void M4Fdcan1Owner::configureInterrupts() {
   NVIC_SetPriority(FDCAN1_IT1_IRQn, BOARD_M4_FDCAN_IRQ_PRIORITY);
   NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
   NVIC_EnableIRQ(FDCAN1_IT1_IRQn);
+  return true;
 }
 
 void M4Fdcan1Owner::serviceInterrupt() {
@@ -175,15 +197,20 @@ void M4Fdcan1Owner::noteTxAbort(uint32_t buffer_indexes) {
 }
 
 void M4Fdcan1Owner::noteError(uint32_t) {
+  error_status_latch_ = 1u;
+}
+
+void M4Fdcan1Owner::consumeLatchedEvents() {
+  const bool error_latched = error_status_latch_ != 0u;
+  error_status_latch_ = 0u;
   updateProtocolState();
-  if (protocol_.BusOff != 0u) {
+  if (error_latched && protocol_.BusOff != 0u && !protocol_fault_latched_) {
     // Bus-off is a terminal transport fault. Latch until reset and abort every
     // outstanding dedicated buffer so no stale request can transmit later.
     protocol_fault_latched_ = true;
     for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
       if (pending(lane)) {
         (void)HAL_FDCAN_AbortTxRequest(handle_, bufferMask(lane));
-        executor_->onTrackingFault(lane);
       }
     }
   }
@@ -192,6 +219,10 @@ void M4Fdcan1Owner::noteError(uint32_t) {
 bool M4Fdcan1Owner::ready() const {
   return fdcan_ready_ && timebase_ready_ && clock_contract_ok_ &&
       !protocol_fault_latched_ && !busOff();
+}
+
+bool M4Fdcan1Owner::errorWarning() const {
+  return protocol_.Warning != 0u;
 }
 
 bool M4Fdcan1Owner::errorPassive() const {
@@ -217,9 +248,16 @@ bool M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
   const uint32_t buffer = bufferMask(lane);
   uint8_t payload[8];
   memcpy(payload, data, sizeof(payload));
-  return HAL_FDCAN_AddMessageToTxBuffer(handle_, &header, payload, buffer) ==
-             HAL_OK &&
-      HAL_FDCAN_EnableTxBufferRequest(handle_, buffer) == HAL_OK;
+  if (HAL_FDCAN_AddMessageToTxBuffer(handle_, &header, payload, buffer) !=
+      HAL_OK) {
+    return false;
+  }
+  if (HAL_FDCAN_EnableTxBufferRequest(handle_, buffer) == HAL_OK) return true;
+  if (!pending(lane)) return false;
+  if (HAL_FDCAN_AbortTxRequest(handle_, buffer) != HAL_OK && executor_ != nullptr) {
+    executor_->latchTrackingFault(lane);
+  }
+  return true;
 }
 
 bool M4Fdcan1Owner::cancel(uint8_t lane) {
@@ -261,9 +299,8 @@ void M4Fdcan1Owner::terminal(uint32_t buffer_indexes, bool abort_callback) {
     if ((buffer_indexes & mask) == 0u) continue;
     const bool transmitted = (raw.txbto & mask) != 0u;
     const bool cancelled = abort_callback || (raw.txbcf & mask) != 0u;
-    executor_->onTerminal(lane, transmitted, cancelled);
+    executor_->latchTerminalEvent(lane, transmitted, cancelled);
   }
-  updateProtocolState();
 }
 
 uint32_t M4Fdcan1Owner::bufferMask(uint8_t lane) {

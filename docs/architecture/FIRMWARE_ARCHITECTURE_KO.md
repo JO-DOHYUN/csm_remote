@@ -25,7 +25,7 @@ source/authority/transaction 재사용은 허용하지 않는다.
 
 ### M7
 
-- Host ingress/freshness/lease와 M4 RC mailbox 검증
+- `HostControlSession` heartbeat/ARM/lease와 sender-time freshness, M4 RC mailbox 검증
 - RC channel semantics, limiter, HNO1 payload mapping
 - Host/RC 전역 단일 source authority와 coherent final snapshot
 - canonical typed evidence, feeder bus, bounded USB/Wi-Fi sinks
@@ -37,6 +37,9 @@ source/authority/transaction 재사용은 허용하지 않는다.
 - FDCAN1, dedicated Tx buffers `0/1/2`, terminal `TXBRP/TXBTO/TXBCF` truth
 - latest snapshot depth 1, 300 ms local publish-liveness timeout, bounded cancel
 - raw CAN1 RX ring과 generic successful-TX N-shot budget
+- mutable executor state의 유일 writer. foreground는 검증된 latest snapshot/event 하나만
+  stage하고 FDCAN IRQ는 terminal/error bit만 latch한다. 모든 transition/release/health counter
+  갱신은 TIM4가 소비한 뒤 수행하며 health publish read는 상태를 바꾸지 않는다.
 
 ## Execution flow
 
@@ -51,8 +54,10 @@ M4 -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
                        bounded raw CAN1 ring <────────┘ -> M7 canonical evidence
 ```
 
-Source는 image 전체로만 선택한다. lane별 Host/RC 혼합은 금지한다. authority 전환 시 old
-pending을 cancel 요청하고 terminal closure를 확인한 뒤에만 새 source release를 시작한다.
+Source는 image 전체로만 선택한다. Host는 `005/007/364`, RC는 `005/007`만 소유하며 RC가
+소유하지 않는 `364`는 M4 `SuppressTx`로 해석한다. source별 lane을 다른 source의 old image와
+혼합하지 않는다. authority 전환 시 old ACTIVE pending만 cancel 요청하고 terminal closure를
+확인한 뒤 새 source release를 시작한다. SAFE pending은 source transition과 무관하게 보존한다.
 transition overlap은 없으며 별도 sleep으로 공백을 만들지 않는다.
 
 ## Static schedule and latest state
@@ -61,7 +66,7 @@ transition overlap은 없으며 별도 sleep으로 공백을 만들지 않는다
 - slot 0: `0x005`, `0x007`, `0x364`
 - slot 1/2/3: `0x005`
 - dedicated Tx buffers: 각각 `0/1/2`
-- Host/RC state depth: 1; 새 coherent image는 같은 authority의 latest value만 교체
+- Host/RC state depth: 1; 새 coherent image는 같은 source의 latest value만 교체
 - missed slot catch-up, replay, per-frame Host queue, hidden retry 없음
 - constant payload는 stale이 아니다. M7 publish liveness와 value generation은 별도다.
 
@@ -93,9 +98,11 @@ M4는 `physical transport readiness`, `ACTIVE motion permission`, `safe-wire fal
 `0x364`는 `SuppressTx`다. M4는 vehicle semantic을 계산하거나 unspecified byte를 zero-fill하지
 않는다. FDCAN은 500 kbps로 정상 시작하며 evidence qualification은 runtime permission이 아니다.
 
-bus-off/error-passive 또는 unrecoverable tracking fault는 ACTIVE를 globally revoke하고 other
-pending lane을 bounded-cancel한다. transport recovery는 SAFE만 허용하며 fresh coherent source와
-explicit re-ARM authority epoch 없이는 ACTIVE를 자동 재개하지 않는다. telemetry/network/storage
+error-passive 또는 unrecoverable tracking fault는 ACTIVE를 globally revoke하고 other ACTIVE
+pending lane을 bounded-cancel한다. error-passive에서도 viable physical request에는 SAFE cyclic을
+유지한다. bus-off/fatal은 physical TX를 latch-stop하며 reset 이후 SAFE로만 복귀한다. fresh coherent
+source와 더 새로운 activation epoch의 explicit re-ARM 없이는 ACTIVE를 자동 재개하지 않는다.
+source epoch와 activation epoch는 분리되므로 같은 Host source의 명시 re-ARM도 가능하다. telemetry/network/storage
 failure는 M4 slot execution을 막지 않는다. raw ring overflow는 explicit drop/high-water evidence이며
 control backlog가 되지 않는다.
 

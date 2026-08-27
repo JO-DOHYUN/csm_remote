@@ -26,8 +26,6 @@ enum class AuthorityState : uint8_t {
   LocalReady = 7,
   RemoteActive = 8,
   HostServiceActive = 9,
-  FaultLockout = 10,
-  Estop = 11,
 };
 
 enum class ControlSourceId : uint8_t {
@@ -47,14 +45,12 @@ enum class ControlDecisionCode : uint8_t {
   RejectedAutonomyAmbiguous = 5,
   RejectedAutonomyProtocolFault = 6,
   RejectedLocalTxInhibit = 7,
-  RejectedSafetySupervisor = 8,
   RejectedSourceStale = 9,
   RejectedSourceFailsafe = 10,
   RejectedNotNeutral = 11,
   RejectedNoTakeover = 12,
   RejectedRateLimit = 13,
   RejectedFramePolicy = 14,
-  RejectedFaultLockout = 16,
 };
 
 struct AutonomyCommandProfile {

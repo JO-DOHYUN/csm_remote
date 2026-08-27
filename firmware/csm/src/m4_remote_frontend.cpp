@@ -240,7 +240,7 @@ void serviceControlIngress() {
       readFinalControlSnapshot(last_control_sequence);
   if (!read.accepted) {
     if (read.detail != 0u) {
-      control_executor.noteIpcIntegrityFailure();
+      control_executor.stageIpcIntegrityFailure();
     }
     return;
   }
@@ -249,7 +249,7 @@ void serviceControlIngress() {
   // bounded local-store swap so the ISR never observes a partially copied
   // coherent image; FDCAN/CRSF interrupts remain independent.
   NVIC_DisableIRQ(TIM4_IRQn);
-  const bool accepted = control_executor.acceptSnapshot(read.payload, micros());
+  const bool accepted = control_executor.stageSnapshot(read.payload, micros());
   NVIC_EnableIRQ(TIM4_IRQn);
   if (accepted) last_control_sequence = read.sequence;
 }
@@ -257,7 +257,7 @@ void serviceControlIngress() {
 void publishControlIslandHealth(uint32_t now_ms) {
   if (now_ms - last_control_health_ms < 20u) return;
   last_control_health_ms = now_ms;
-  ControlHealthPayload health = control_executor.healthForPublish(micros());
+  ControlHealthPayload health = control_executor.healthSnapshot(micros());
   ControlIpcRegion* region = controlIpcRegion();
   health.raw_ring_fill = rawCanRingFill();
   health.raw_ring_high_water = region->raw_high_water;

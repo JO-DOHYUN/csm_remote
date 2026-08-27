@@ -78,6 +78,8 @@ for required in (
     "HAL_FDCAN_AddMessageToTxBuffer",
     "HAL_FDCAN_EnableTxBufferRequest",
     "HAL_FDCAN_AbortTxRequest",
+    "HAL_FDCAN_ConfigInterruptLines",
+    "HAL_FDCAN_ActivateNotification",
     "TXBRP",
     "TXBTO",
     "TXBCF",
@@ -86,24 +88,38 @@ for required in (
     if required not in fdcan:
         fail(f"M4 physical owner missing {required}")
 
+for ignored in (
+    "(void)HAL_FDCAN_ConfigInterruptLines",
+    "(void)HAL_FDCAN_ActivateNotification",
+):
+    if ignored in fdcan:
+        fail(f"FDCAN init failure is ignored: {ignored}")
+
 for required in (
     "if (next_slot_ == 0u)",
-    "releaseLane(kLane005, active_motion)",
-    "releaseLane(kLane007, active_motion)",
-    "releaseLane(kLane364, active_motion)",
+    "releaseLane(kLane005)",
+    "releaseLane(kLane007)",
+    "releaseLane(kLane364)",
     "elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)",
     "transaction_completed",
     "TransactionState::Complete",
-    "cancelAllPending()",
+    "cancelActivePending()",
     "activeMotionAllowed",
     "releaseSafeLane",
     "revokeActive",
+    "PendingSafe",
+    "PendingActive",
+    "consumeTerminalEvents",
+    "healthSnapshot",
 ):
     if required not in executor:
         fail(f"M4 executor missing {required}")
 
-if executor.count("driver_->cancel(lane)") != 2:
-    fail("cancellation must remain bounded to one request plus one resnapshot retry")
+if executor.count("driver_->cancel(lane)") != 1:
+    fail("cancellation must remain one bounded request until terminal closure")
+for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):
+    if obsolete in executor:
+        fail(f"obsolete executor race path remains: {obsolete}")
 if "while (" in executor or "for (;;" in executor:
     fail("M4 slot execution may not contain an unbounded loop")
 

@@ -6,7 +6,7 @@
 namespace csm::board::control_island {
 
 // Frozen REV.B cross-image identity and fixed SRAM4 ownership.
-static constexpr uint32_t kControlIslandSchemaId = 0x43495342u;   // "CISB"
+static constexpr uint32_t kControlIslandSchemaId = 0x43495343u;   // "CISC"
 static constexpr uint32_t kHno1WireContractId = 0x484E4F31u;     // "HNO1"
 static constexpr uint32_t kControlMemoryLayoutId = 0xD3A8B800u;
 static constexpr uintptr_t kControlIpcAddress = 0x3800A800u;
@@ -31,9 +31,8 @@ enum class ControlSource : uint32_t {
 
 enum class LaneState : uint8_t {
   Free = 0,
-  Pending = 1,
-  CancelRequested = 2,
-  Faulted = 3,
+  PendingSafe = 1,
+  PendingActive = 2,
 };
 
 enum class TransactionState : uint8_t {
@@ -94,8 +93,8 @@ struct FinalControlSnapshotPayload {
   uint32_t publish_sequence = 0;
   uint32_t source_image_generation = 0;
   uint32_t source_lease_sequence = 0;
-  uint32_t authority_epoch = 0;
-  uint32_t safety_epoch = 0;
+  uint32_t source_epoch = 0;
+  uint32_t activation_epoch = 0;
   uint32_t active_source = static_cast<uint32_t>(ControlSource::None);
   uint32_t permit_mask = 0;
   LaneExecutionImage lanes[kLaneCount] = {};
@@ -145,7 +144,8 @@ struct ControlHealthPayload {
   uint32_t m7_publish_sequence_seen = 0;
   uint32_t m7_publish_age_local_ms = UINT32_MAX;
   uint32_t m7_publish_max_gap_local_ms = 0;
-  uint32_t authority_epoch_seen = 0;
+  uint32_t source_epoch_seen = 0;
+  uint32_t activation_epoch_seen = 0;
   uint32_t active_source_seen = 0;
   uint32_t ipc_integrity_miss = 0;
   uint32_t m7_stale_count = 0;

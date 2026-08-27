@@ -4,7 +4,6 @@ namespace csm::board::remote {
 namespace {
 
 constexpr uint16_t kDetailNoUsableSample = 1;
-constexpr uint16_t kDetailNotNeutral = 2;
 constexpr uint16_t kDetailNoTakeover = 3;
 
 int16_t applyDeadband(int16_t value, uint16_t deadband) {
@@ -55,7 +54,6 @@ bool RemoteControlSource::configure(const RemoteControlSourceConfig& config) {
 
 void RemoteControlSource::update(uint32_t now_ms,
                                  const M4RemoteMailboxSnapshot& snapshot,
-                                 bool handoff_qualified,
                                  bool takeover_request,
                                  bool release_request) {
   link_state_ = snapshot.link_state;
@@ -72,12 +70,6 @@ void RemoteControlSource::update(uint32_t now_ms,
       !isUsableRcSampleState(snapshot.sample.sample_state)) {
     clearCommand(now_ms);
     reject_detail_ = kDetailNoUsableSample;
-    return;
-  }
-
-  if (!handoff_qualified) {
-    clearCommand(now_ms);
-    reject_detail_ = kDetailNotNeutral;
     return;
   }
 

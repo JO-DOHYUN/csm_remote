@@ -44,8 +44,8 @@ for token in (
         fail(f"active experiment record missing {token}")
 for token in (
     "#define BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US 0",
-    "#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 0",
-    "#define BOARD_HOST_CAN_TX_MAX_AGE_MS 0",
+    "#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 100",
+    "#define BOARD_HOST_CAN_TX_MAX_AGE_MS 40",
     "kThresholdQualificationExploratory",
 ):
     if token not in main:

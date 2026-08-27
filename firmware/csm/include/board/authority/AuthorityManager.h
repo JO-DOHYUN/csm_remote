@@ -10,12 +10,8 @@ namespace csm::board::authority {
 struct AuthorityInputs {
   AutonomyAuthorityState autonomy_state = AutonomyAuthorityState::Unknown;
   bool local_tx_inhibit_latched = false;
-  bool estop_asserted = false;
-  bool fault_lockout = false;
-  bool safety_supervisor_allows = false;
   bool remote_source_present = false;
   bool remote_source_valid = false;
-  bool remote_handoff_qualified = false;
   bool remote_takeover_request = false;
   bool remote_release_request = false;
   bool host_service_enabled = false;

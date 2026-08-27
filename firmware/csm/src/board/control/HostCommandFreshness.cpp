@@ -4,15 +4,12 @@ namespace csm::board::control {
 
 bool HostCommandFreshness::begin(
     const HostCommandFreshnessConfig& config) {
-  const bool all_zero = config.heartbeat_max_extra_lag_ms == 0 &&
-      config.command_max_age_ms == 0 &&
-      config.clock_future_tolerance_ms == 0;
   const bool all_frozen = config.heartbeat_max_extra_lag_ms > 0 &&
       config.heartbeat_max_extra_lag_ms < 0x80000000u &&
       config.command_max_age_ms > 0 &&
       config.command_max_age_ms < 0x80000000u &&
       config.clock_future_tolerance_ms < 0x80000000u;
-  configured_ = all_zero || all_frozen;
+  configured_ = all_frozen;
   timing_qualified_ = all_frozen;
   config_ = configured_ ? config : HostCommandFreshnessConfig{};
   observed_heartbeat_extra_lag_ms_ = 0;
@@ -57,13 +54,12 @@ HostFreshnessResult HostCommandFreshness::acceptHeartbeat(
       observed_heartbeat_extra_lag_ms_ = extra_lag;
     }
   }
-  if (timing_qualified_ &&
-      (static_cast<uint64_t>(arrival_elapsed) >
+  if (static_cast<uint64_t>(arrival_elapsed) >
            static_cast<uint64_t>(sender_elapsed) +
                config_.heartbeat_max_extra_lag_ms ||
        static_cast<uint64_t>(sender_elapsed) >
            static_cast<uint64_t>(arrival_elapsed) +
-               config_.clock_future_tolerance_ms)) {
+               config_.clock_future_tolerance_ms) {
     return latchFault();
   }
 
@@ -101,11 +97,10 @@ HostFreshnessResult HostCommandFreshness::acceptCommand(
       observed_command_future_lead_ms_ = lead;
     }
   }
-  if (timing_qualified_ &&
-      signed_age > static_cast<int32_t>(config_.command_max_age_ms)) {
+  if (signed_age > static_cast<int32_t>(config_.command_max_age_ms)) {
     return HostFreshnessResult::Stale;
   }
-  if (timing_qualified_ && signed_age <
+  if (signed_age <
       -static_cast<int32_t>(config_.clock_future_tolerance_ms)) {
     return HostFreshnessResult::Future;
   }

@@ -20,8 +20,6 @@ struct RemoteControlRuntimeConfig {
   uint16_t policy_id = 0;
   uint16_t semantic_update_period_ms = 5;
   uint16_t m4_heartbeat_timeout_ms = 100;
-  uint16_t neutral_qualification_ms = 500;
-  uint16_t release_qualification_ms = 1000;
   uint16_t neutral_deadband_permille = 50;
   uint16_t drive_deadband_permille = 20;
   uint16_t steering_deadband_permille = 20;
@@ -38,9 +36,6 @@ struct RemoteControlRuntimeConfig {
 };
 
 struct RemoteControlRuntimeInputs {
-  bool hard_safety_allows = false;
-  bool estop_asserted = false;
-  bool fault_lockout = false;
   bool local_tx_inhibit_latched = true;
   bool host_output_reserved = false;
   authority::AutonomyAuthorityState autonomy_state =
@@ -54,9 +49,6 @@ struct RemoteControlRuntimeStatus {
   bool frontend_alive = false;
   bool remote_reserved = true;
   bool remote_valid = false;
-  bool neutral_now = false;
-  bool handoff_qualified = false;
-  bool release_qualified = false;
   bool host_control_allowed = false;
   bool source_image_valid = false;
   remote::RemoteLinkState link_state = remote::RemoteLinkState::NoFrame;
@@ -108,7 +100,6 @@ class RemoteControlRuntime {
  private:
   void updateRemoteState(uint32_t now_ms);
   void publishTelemetry(uint32_t now_ms);
-  bool isNeutralSample(const remote::M4RemoteMailboxSnapshot& snapshot) const;
   bool buildSourceImage(uint32_t now_ms,
                         const RemoteControlRuntimeInputs& inputs,
                         RemoteControlRuntimeOutput* output);
@@ -128,14 +119,10 @@ class RemoteControlRuntime {
 
   uint32_t last_shared_sequence_ = 0;
   uint32_t last_frontend_seen_ms_ = 0;
-  uint32_t neutral_since_ms_ = 0;
-  uint32_t release_since_ms_ = 0;
   uint32_t last_semantic_update_ms_ = 0;
   uint32_t last_telemetry_ms_ = 0;
   uint32_t observed_m4_boot_id_ = 0;
   bool frontend_seen_ = false;
-  bool neutral_timer_active_ = false;
-  bool release_timer_active_ = false;
 };
 
 }  // namespace csm::board::control

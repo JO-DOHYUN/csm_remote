@@ -12,10 +12,10 @@
 #include "BoardPins.h"
 #include "board/CapabilityPublisher.h"
 #include "board/HostDownlinkParser.h"
-#include "board/SafetySupervisor.h"
 #include "board/StatusLed.h"
 #include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlAuthorityGate.h"
+#include "board/control/HostControlSession.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
 #include "board/control_island/ControlSourceManager.h"
@@ -453,13 +453,13 @@
 #endif
 
 #ifndef BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS
-#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 0
+#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 100
 #endif
 #ifndef BOARD_HOST_CAN_TX_MAX_AGE_MS
-#define BOARD_HOST_CAN_TX_MAX_AGE_MS 0
+#define BOARD_HOST_CAN_TX_MAX_AGE_MS 40
 #endif
 #ifndef BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS
-#define BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS 0
+#define BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS 20
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -790,15 +790,10 @@ using csm::board::feeder::FeederUartIngressConfig;
 using csm::board::feeder::FeederUartIngressStats;
 using csm::board::feeder::FeederWireStats;
 
-using SafetyState = csm::board::SafetyState;
-
 enum BoardEventCode : uint16_t {
   EventBoot = csm::kBoardEventBootCode,
   EventCanBeginFailed = csm::kBoardEventCanBeginFailedCode,
   EventCanRxQueueDrop = csm::kBoardEventCanRxQueueDropCode,
-  EventEncoderFaultAsserted = csm::kBoardEventEncoderFaultAssertedCode,
-  EventFieldPowerLost = csm::kBoardEventFieldPowerLostCode,
-  EventEstopAsserted = csm::kBoardEventEstopAssertedCode,
   EventEncoderIndex = csm::kBoardEventEncoderIndexCode,
   EventEncoderWrap = csm::kBoardEventEncoderWrapCode,
   EventMcp2515Error = csm::kBoardEventMcp2515ErrorCode,
@@ -810,11 +805,9 @@ enum BoardEventCode : uint16_t {
   EventHostCanTxAccepted = csm::kBoardEventHostCanTxAcceptedCode,
   EventCan0BackendUnavailable = csm::kBoardEventCan0BackendUnavailableCode,
   EventMcp2515TxFailed = csm::kBoardEventMcp2515TxFailedCode,
-  EventSafetyStateChanged = csm::kBoardEventSafetyStateChangedCode,
   EventHostHeartbeat = csm::kBoardEventHostHeartbeatCode,
   EventHostControlSession = csm::kBoardEventHostControlSessionCode,
   EventHostCommandUnsupported = csm::kBoardEventHostCommandUnsupportedCode,
-  EventFaultLockoutCleared = csm::kBoardEventFaultLockoutClearedCode,
   EventFirmwareIdentity = csm::kBoardEventFirmwareIdentityCode,
   EventSerialTxBackpressure = csm::kBoardEventSerialTxBackpressureCode,
   EventSerialTxRingClear = csm::kBoardEventSerialTxRingClearCode,
@@ -1097,11 +1090,9 @@ static uint16_t encoder_last_count = 0;
 static int64_t encoder_position = 0;
 static uint32_t encoder_wrap_events = 0;
 static uint32_t encoder_fault_events = 0;
-static bool encoder_fault_prev = false;
-static bool field_power_prev = true;
-static bool estop_prev = false;
-static csm::board::SafetySupervisor safety_supervisor;
-static SafetyState safety_state = SafetyState::MonitorOnly;
+static csm::board::control::HostControlSession host_control_session;
+static uint32_t remote_activation_epoch = 0u;
+static bool remote_source_was_valid = false;
 #if BOARD_ENABLE_REMOTE_CONTROL
 static csm::board::control::RemoteControlRuntime remote_control_runtime;
 static bool remote_control_runtime_ok = false;
@@ -2486,8 +2477,6 @@ using csm::ControlReasonCanNotReady;
 using csm::ControlReasonCanWriteFailed;
 using csm::ControlReasonControlLeaseExpired;
 using csm::ControlReasonDlcOutOfRange;
-using csm::ControlReasonEstopAsserted;
-using csm::ControlReasonFieldPowerLost;
 using csm::ControlReasonIdNotAllowed;
 using csm::ControlReasonHostTimeout;
 using csm::ControlReasonNotArmed;
@@ -2495,7 +2484,6 @@ using csm::ControlReasonOk;
 using csm::ControlReasonQueueFull;
 using csm::ControlReasonRateLimited;
 using csm::ControlReasonTxBusy;
-using csm::ControlReasonSafetyLockout;
 using csm::ControlReasonAuthorityDenied;
 using csm::ControlReasonUnsupportedFrame;
 using csm::ControlReasonUnsupportedCommand;
@@ -2660,12 +2648,11 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::HostControlNShot)) |
       (1u << static_cast<uint8_t>(RecordType::HostHeartbeat)) |
       (1u << static_cast<uint8_t>(RecordType::HostControlSession)) |
-      (1u << static_cast<uint8_t>(RecordType::HostQueryCapability)) |
-      (1u << static_cast<uint8_t>(RecordType::HostClearFaultLockout));
+      (1u << static_cast<uint8_t>(RecordType::HostQueryCapability));
 #else
   config.supported_downlink_records = 0;
 #endif
-  config.safety_feature_flags = 0x0000000Fu;
+  config.safety_feature_flags = 0u;
   // Legacy field now advertises Host software retention only. Physical
   // FDCAN capacity is separately versioned in CAPABILITY v7.
   config.host_tx_queue_size = 0;
@@ -3416,8 +3403,8 @@ static void emit_control_island_health() {
             control_island_health.m7_publish_sequence_seen);
   wr_u32_le(&payload[csm::kControlIslandHealthM7PublishAgeOffset],
             control_island_health.m7_publish_age_local_ms);
-  wr_u32_le(&payload[csm::kControlIslandHealthAuthorityEpochOffset],
-            control_island_health.authority_epoch_seen);
+  wr_u32_le(&payload[csm::kControlIslandHealthSourceEpochOffset],
+            control_island_health.source_epoch_seen);
   wr_u32_le(&payload[csm::kControlIslandHealthActiveSourceOffset],
             control_island_health.active_source_seen);
   wr_u32_le(&payload[csm::kControlIslandHealthIpcIntegrityMissOffset],
@@ -3472,6 +3459,8 @@ static void emit_control_island_health() {
             control_snapshot_publish_failed_total);
   wr_u32_le(&payload[csm::kControlIslandHealthM7PublishMaxGapOffset],
             control_island_health.m7_publish_max_gap_local_ms);
+  wr_u32_le(&payload[csm::kControlIslandHealthActivationEpochOffset],
+            control_island_health.activation_epoch_seen);
   emit_record(RecordType::ControlIslandHealth, payload, sizeof(payload),
               UplinkPriority::Critical);
 }
@@ -3496,9 +3485,6 @@ static void emit_remote_control_state() {
       (status.frontend_alive ? 0x02u : 0u) |
       (status.remote_reserved ? 0x04u : 0u) |
       (status.remote_valid ? 0x08u : 0u) |
-      (status.neutral_now ? 0x10u : 0u) |
-      (status.handoff_qualified ? 0x20u : 0u) |
-      (status.release_qualified ? 0x40u : 0u) |
       (status.host_control_allowed ? 0x80u : 0u);
   payload[csm::kRemoteControlStateLinkQualityOffset] = status.link_quality;
   payload[csm::kRemoteControlStateRssiOffset] = status.rssi_magnitude;
@@ -3551,10 +3537,8 @@ static void emit_remote_control_state() {
   wr_u16_le(&payload[csm::kRemoteControlStateCyclePeriodOffset],
             config.semantic_update_period_ms);
   wr_u16_le(&payload[csm::kRemoteControlStateFrameGapOffset], 0u);
-  wr_u16_le(&payload[csm::kRemoteControlStateNeutralQualificationOffset],
-            config.neutral_qualification_ms);
-  wr_u16_le(&payload[csm::kRemoteControlStateReleaseQualificationOffset],
-            config.release_qualification_ms);
+  wr_u16_le(&payload[csm::kRemoteControlStateReserved116Offset], 0u);
+  wr_u16_le(&payload[csm::kRemoteControlStateReserved118Offset], 0u);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxForwardRpmOffset], config.max_forward_rpm);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxReverseRpmOffset], config.max_reverse_rpm);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxSteeringOffset],
@@ -3627,7 +3611,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[28], encoder_fault_events);
   wr_u32_le(&payload[32], encoder_wrap_events);
   wr_i64_le(&payload[36], snap.position);
-  payload[44] = static_cast<uint8_t>(safety_state);
+  payload[44] = 0u;  // Reserved: retired GPIO safety state.
   payload[45] = inputs;
   // A disabled encoder lane has no timer requirement and is therefore healthy.
   payload[46] = (!BOARD_ENABLE_TIM3_ENCODER || encoder_timer_ok) ? 1 : 0;
@@ -3661,10 +3645,10 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   wr_u32_le(&payload[48], snap.fault_flags);
   payload[52] = 13;  // BOARD_HEALTH payload version.
   payload[53] = static_cast<uint8_t>(sizeof(payload));
-  payload[54] = static_cast<uint8_t>(safety_supervisor.state());
-  payload[55] = safety_supervisor.faultBits();
-  wr_u32_le(&payload[56], safety_supervisor.heartbeatAgeMs(millis()));
-  wr_u32_le(&payload[60], safety_supervisor.leaseRemainingMs(millis()));
+  payload[54] = 0u;  // Reserved: retired GPIO safety state.
+  payload[55] = 0u;  // Reserved: retired GPIO fault bits.
+  wr_u32_le(&payload[56], host_control_session.heartbeatAgeMs(millis()));
+  wr_u32_le(&payload[60], host_control_session.leaseRemainingMs(millis()));
   wr_u32_le(&payload[64], host_frame_crc_failed_total);
   wr_u32_le(&payload[68], host_control_state_request_total);
   wr_u32_le(&payload[72], host_can_tx_accepted_total);
@@ -3693,7 +3677,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[csm::kBoardHealthMcpLastIntLowOffset] = mcp_service.last_int_low ? 1 : 0;
 #endif
   wr_u32_le(&payload[108], queued);
-  wr_u32_le(&payload[112], safety_supervisor.transitionCounter());
+  wr_u32_le(&payload[112], host_control_session.activationEpoch());
   uint32_t backend_flags = 0;
   backend_flags |= can_backend_ok ? (1u << 0) : 0;
 #if BOARD_ENABLE_FEEDER_UART
@@ -4221,11 +4205,6 @@ static void service_voltage_adc_lane() {
 #endif
 }
 
-static void init_safety_pins() {
-  // REV.B assigns hard-safety pins and the external watchdog exclusively to
-  // M4. M7 consumes the coherent hard_input_bits projection from M4 health.
-}
-
 static void poll_control_island_health(uint32_t now_ms) {
 #if BOARD_ENABLE_CONTROL_ISLAND
   const csm::board::control_island::HealthReadResult result =
@@ -4292,8 +4271,7 @@ static void close_host_control_epoch(
     csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
   host_authority_gate.beginClose(reason, 0u);
   host_command_freshness.reset();
-  safety_supervisor.invalidateHostSession(now_ms);
-  safety_state = safety_supervisor.state();
+  host_control_session.invalidate(now_ms);
   control_source_manager.clearHost();
   host_authority_gate.observeHostSlots(0u);
 }
@@ -4304,50 +4282,16 @@ static void service_host_authority_boundary(uint32_t now_ms) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::AuthorityPreempted,
         now_ms);
-  } else if (!safety_supervisor.leaseAlive(now_ms)) {
+  } else if (!host_control_session.leaseAlive(now_ms)) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::LeaseExpired, now_ms);
   }
 }
 
-static csm::board::SafetyInputs read_safety_inputs() {
-  csm::board::SafetyInputs inputs;
-  inputs.control_backend_ready = control_island_runtime_ready(millis());
-  return inputs;
-}
-
-static void update_safety_state() {
+static void update_host_control_session() {
   const uint32_t now_ms = millis();
-  const csm::board::SafetyInputs inputs = read_safety_inputs();
-  const SafetyState before = safety_supervisor.state();
-  safety_supervisor.update(now_ms, inputs);
-  safety_state = safety_supervisor.state();
-  if (inputs.estop_asserted && !estop_prev) {
-    emit_board_event(EventEstopAsserted, 0, 1);
-  }
-  if (!inputs.field_power_ok && field_power_prev) {
-    emit_board_event(EventFieldPowerLost, 0, 1);
-  }
-  if (inputs.encoder_fault && !encoder_fault_prev) {
-    encoder_fault_events++;
-    emit_board_event(EventEncoderFaultAsserted, 0, encoder_fault_events);
-  }
-  if (before != safety_state) {
-    emit_board_event(EventSafetyStateChanged,
-                     (static_cast<uint16_t>(before) << 8) | static_cast<uint8_t>(safety_state),
-                     safety_supervisor.transitionCounter());
-  }
-
-  estop_prev = inputs.estop_asserted;
-  field_power_prev = inputs.field_power_ok;
-  encoder_fault_prev = inputs.encoder_fault;
-  if (safety_state == SafetyState::Estop ||
-      safety_state == SafetyState::FaultLockout) {
-    close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::HardSafety, now_ms);
-  } else {
-    service_host_authority_boundary(now_ms);
-  }
+  host_control_session.update(now_ms);
+  service_host_authority_boundary(now_ms);
 }
 
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -4357,13 +4301,7 @@ static void service_remote_control() {
   const uint32_t now_ms = millis();
   poll_control_island_health(now_ms);
   service_host_authority_boundary(now_ms);
-  const csm::board::SafetyInputs safety_inputs = read_safety_inputs();
   csm::board::control::RemoteControlRuntimeInputs inputs;
-  inputs.estop_asserted = safety_inputs.estop_asserted;
-  inputs.fault_lockout = safety_state == SafetyState::FaultLockout;
-  inputs.hard_safety_allows = !inputs.estop_asserted &&
-      safety_inputs.field_power_ok && !safety_inputs.encoder_fault &&
-      !inputs.fault_lockout;
   inputs.host_output_reserved = !host_authority_gate.rcAllowed();
 #if BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
   // The provider owns freshness and positive inactive evidence. Until the
@@ -4390,6 +4328,11 @@ static void service_remote_control() {
 
   const csm::board::control::RemoteControlRuntimeOutput output =
       remote_control_runtime.service(now_ms, inputs);
+  if (output.source_valid && !remote_source_was_valid) {
+    ++remote_activation_epoch;
+    if (remote_activation_epoch == 0u) remote_activation_epoch = 1u;
+  }
+  remote_source_was_valid = output.source_valid;
   control_source_manager.updateRemote(
       output.image_generation, output.lease_sequence, output.lanes,
       output.source_valid);
@@ -4406,12 +4349,12 @@ static void service_remote_control() {
 
   uint32_t permit_mask = 0u;
   if (selected != ControlSource::None && control_island_runtime_ready(now_ms)) {
-    if (selected == ControlSource::Remote && inputs.hard_safety_allows &&
-        !inputs.local_tx_inhibit_latched) {
-      permit_mask = csm::board::control_island::kAllLanePermitMask;
+    if (selected == ControlSource::Remote && !inputs.local_tx_inhibit_latched) {
+      permit_mask = (1u << csm::board::control_island::kLane005) |
+                    (1u << csm::board::control_island::kLane007);
     } else if (selected == ControlSource::Host) {
       uint8_t reason = ControlReasonOk;
-      if (safety_supervisor.canAcceptTx(now_ms, true, &reason)) {
+      if (host_control_session.canAccept(now_ms, true, &reason)) {
         permit_mask = csm::board::control_island::kAllLanePermitMask;
       }
     }
@@ -4419,7 +4362,10 @@ static void service_remote_control() {
   if (static_cast<uint32_t>(now_ms - last_control_snapshot_publish_ms) >= 20u) {
     const csm::board::control_island::FinalControlSnapshotPayload snapshot =
         control_source_manager.snapshot(
-            permit_mask, safety_supervisor.transitionCounter());
+            permit_mask,
+            selected == ControlSource::Host
+                ? host_control_session.activationEpoch()
+                : remote_activation_epoch);
     if (csm::board::control_island::publishFinalControlSnapshot(snapshot)) {
       ++control_snapshot_publish_total;
     } else {
@@ -4434,8 +4380,7 @@ static void service_remote_control() {
       (static_cast<uint16_t>(static_cast<uint8_t>(status.authority_state)) << 4u) |
       (status.frontend_alive ? (1u << 8) : 0u) |
       (status.remote_valid ? (1u << 9) : 0u) |
-      (status.handoff_qualified ? (1u << 10) : 0u) |
-      (status.release_qualified ? (1u << 11) : 0u);
+      (status.source_image_valid ? (1u << 10) : 0u);
   if (state_signature != last_remote_state_signature) {
     last_remote_state_signature = state_signature;
     ++remote_state_transition_total;
@@ -4448,10 +4393,6 @@ static void service_remote_control() {
   }
 }
 #endif
-
-static void toggle_safety_watchdog_if_needed() {
-  // M4 is the sole hard-safety/watchdog owner.
-}
 
 #if BOARD_ENABLE_MCP2515
 static constexpr uint8_t kMcpRegCanctrl = 0x0F;
@@ -5238,7 +5179,7 @@ static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t
       host_command_freshness.acceptHeartbeat(
           command_id, host_mono_ms, now_ms);
   if (freshness == csm::board::control::HostFreshnessResult::Accepted) {
-    safety_supervisor.heartbeat(now_ms);
+    host_control_session.heartbeat(now_ms);
   } else if (freshness !=
              csm::board::control::HostFreshnessResult::AnchorEstablished) {
     close_host_control_epoch(
@@ -5288,10 +5229,6 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
       payload[csm::kHostControlSessionSchemaOffset];
 
   const uint32_t now_ms = millis();
-  const csm::board::SafetyInputs inputs = read_safety_inputs();
-  safety_supervisor.update(now_ms, inputs);
-  safety_state = safety_supervisor.state();
-
   uint8_t reason = ControlReasonOk;
   uint8_t status = ControlAckAccepted;
   if (action != csm::HostControlDisarm &&
@@ -5334,7 +5271,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
     case csm::HostControlDisarm:
       close_host_control_epoch(
           csm::board::control::HostControlCloseReason::HostDisarm, now_ms);
-      safety_supervisor.disarm(now_ms);
+      host_control_session.disarm(now_ms);
       break;
     case csm::HostControlArm:
       if (!host_control_authority_allowed()) {
@@ -5346,12 +5283,12 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         const bool backend_ready =
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
-        reason = safety_supervisor.arm(now_ms, lease_ms, backend_ready);
+        reason = host_control_session.arm(now_ms, lease_ms, backend_ready);
         if (reason == ControlReasonOk &&
             !host_authority_gate.activate(
-                safety_supervisor.leaseAlive(now_ms),
+                host_control_session.leaseAlive(now_ms),
                 host_control_authority_allowed(), 0u)) {
-          safety_supervisor.disarm(now_ms);
+          host_control_session.disarm(now_ms);
           reason = ControlReasonTxBusy;
         } else if (reason == ControlReasonOk) {
           ++host_control_lease_sequence;
@@ -5370,7 +5307,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
             now_ms);
         reason = ControlReasonAuthorityDenied;
       } else {
-        reason = safety_supervisor.renewLease(now_ms, lease_ms);
+        reason = host_control_session.renew(now_ms, lease_ms);
         if (reason == ControlReasonOk) {
           ++host_control_lease_sequence;
           if (host_control_lease_sequence == 0u) {
@@ -5393,7 +5330,6 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
     host_can_tx_rejected_total++;
   }
 
-  safety_state = safety_supervisor.state();
   emit_control_ack(command_id, status, reason, requested_bus, 0, 0, host_control_session_total);
   emit_board_event(EventHostControlSession,
                    (static_cast<uint16_t>(action) << 8) | reason,
@@ -5415,36 +5351,6 @@ static void handle_host_query_capability(uint16_t seq, const uint8_t* payload, u
   emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0, 0, 0);
 }
 
-static void handle_host_clear_fault_lockout(uint16_t seq, const uint8_t* payload, uint16_t len) {
-  uint32_t command_id = seq;
-  if (len >= 4) {
-    command_id = rd_u32_le(&payload[0]);
-  }
-  if (len != csm::kHostClearFaultLockoutPayloadLen) {
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0, 0);
-    return;
-  }
-
-  const csm::board::SafetyInputs inputs = read_safety_inputs();
-  uint8_t reason = ControlReasonOk;
-  if (inputs.estop_asserted) {
-    reason = ControlReasonEstopAsserted;
-  } else if (!inputs.field_power_ok) {
-    reason = ControlReasonFieldPowerLost;
-  } else if (inputs.encoder_fault) {
-    reason = csm::ControlReasonEncoderFault;
-  }
-
-  if (reason == ControlReasonOk) {
-    safety_supervisor.clearFaultLockout(millis());
-    safety_state = safety_supervisor.state();
-    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0, 0, 0);
-    emit_board_event(EventFaultLockoutCleared, 0, safety_supervisor.transitionCounter());
-  } else {
-    emit_control_ack(command_id, ControlAckRejected, reason, 0xFF, 0, 0, 0);
-  }
-}
-
 static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t seq,
                                 const uint8_t* payload, uint16_t len) {
   if (version != kProtocolVersion) {
@@ -5464,8 +5370,6 @@ static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t s
     handle_host_control_session(seq, payload, len);
   } else if (record_type == static_cast<uint8_t>(RecordType::HostQueryCapability)) {
     handle_host_query_capability(seq, payload, len);
-  } else if (record_type == static_cast<uint8_t>(RecordType::HostClearFaultLockout)) {
-    handle_host_clear_fault_lockout(seq, payload, len);
   } else {
     emit_control_ack(seq, ControlAckRejected, ControlReasonUnsupportedCommand, 0xFF, 0, 0,
                      host_control_state_request_total);
@@ -5704,7 +5608,6 @@ void setup() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootResetCaptured);
 #endif
-  init_safety_pins();
   init_status_led();
   init_runtime_watchdog();
   record_boot_progress(
@@ -5783,12 +5686,11 @@ void setup() {
   }
 #endif
 
-  safety_supervisor.begin(millis());
+  host_control_session.begin(millis());
   host_authority_gate.reset();
   csm::board::control_island::initializeControlIpcForM7(
       static_cast<uint32_t>(boot_session_id));
   control_source_manager.begin(static_cast<uint32_t>(boot_session_id));
-  safety_state = safety_supervisor.state();
   csm::board::control::HostCommandFreshnessConfig freshness_config;
   freshness_config.heartbeat_max_extra_lag_ms =
       BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
@@ -5865,8 +5767,6 @@ void setup() {
   remote_config.policy_id = 0x5243u;
   remote_config.semantic_update_period_ms = 5;
   remote_config.m4_heartbeat_timeout_ms = 100;
-  remote_config.neutral_qualification_ms = 500;
-  remote_config.release_qualification_ms = 1000;
   remote_config.neutral_deadband_permille = 50;
   remote_config.drive_deadband_permille =
       csm::board::control::kRemoteDriveDeadbandPermille;
@@ -5950,7 +5850,7 @@ void loop() {
   // The first bounded control poll precedes feeder, host, publisher, and
   // Wi-Fi work. Later bounded polls reduce release latency without changing
   // the runtime's absolute timeline or producing catch-up bursts.
-  update_safety_state();
+  update_host_control_session();
   service_remote_control();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
@@ -5958,7 +5858,7 @@ void loop() {
 #endif
   poll_uplink_connections(millis());
   service_uplink_session_state();
-  update_safety_state();
+  update_host_control_session();
   record_runtime_breadcrumb(RuntimeStageHostDownlink);
   service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
   record_runtime_breadcrumb(RuntimeStageIdle);
@@ -5971,8 +5871,7 @@ void loop() {
 #endif
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
-    update_safety_state();
-    toggle_safety_watchdog_if_needed();
+    update_host_control_session();
     service_status_led();
     service_capability_advertisement();
     service_uplink(1024);
@@ -5995,8 +5894,7 @@ void loop() {
       }
     }
     service_builtin_can_rx_host_absent_drain(128);
-    update_safety_state();
-    toggle_safety_watchdog_if_needed();
+    update_host_control_session();
     service_status_led();
     last_health_ms = millis();
     service_boot_recovery();
@@ -6014,8 +5912,7 @@ void loop() {
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
 #endif
-  update_safety_state();
-  toggle_safety_watchdog_if_needed();
+  update_host_control_session();
 #if BOARD_ENABLE_REMOTE_CONTROL
   service_remote_control();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS

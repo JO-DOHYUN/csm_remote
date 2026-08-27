@@ -16,7 +16,6 @@ enum class HostControlCloseReason : uint8_t {
   TransportEpochClosed = 2,
   AuthorityPreempted = 3,
   LeaseExpired = 4,
-  HardSafety = 5,
   FreshnessFault = 6,
 };
 

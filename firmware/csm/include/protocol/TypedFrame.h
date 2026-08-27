@@ -29,7 +29,6 @@ enum class RecordType : uint8_t {
   HostControlSession = 12,
   HostSetControlPolicy = 13,
   HostQueryCapability = 14,
-  HostClearFaultLockout = 15,
   CanRxSegment = 16,
   StreamSession = 17,
   RemoteControlState = 18,
