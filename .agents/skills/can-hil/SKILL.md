@@ -1,5 +1,6 @@
 ---
 name: can-hil
+kind: procedure
 description: Use for authorized physical CAN bench, external analyzer timing, fault injection, RC/Host coexistence, or long soak.
 ---
 
@@ -12,7 +13,8 @@ Prove physical behavior that source/build tests cannot establish.
 Explicit hardware authorization, wiring/bitrate/channel, artifact identity, fixed criteria.
 
 ## Authority to Read
-CURRENT, Product Constitution, active manifest, verification policy, canonical wire, exact HIL tool.
+Git/artifact identity, Product Constitution, active manifest, verification policy, canonical wire,
+exact HIL tool and fixed criteria.
 
 ## Procedure
 1. Verify target hardware, transceiver power, wiring, termination, analyzer and safe motion state.

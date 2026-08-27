@@ -1,0 +1,15 @@
+authority: EVIDENCE
+owner: verification
+status: open
+read_when: judging qualification or release evidence
+product_phase: exploratory_qualification
+release_state: blocked
+open_measurements:
+  - external_analyzer_timing
+  - cancellation_and_preemption
+  - bus_error_and_reset
+  - exact_n_ehb
+  - long_soak
+  - feeder_pairing
+promotion_rule: measure_then_review_then_freeze_then_qualify
+runtime_permission: false

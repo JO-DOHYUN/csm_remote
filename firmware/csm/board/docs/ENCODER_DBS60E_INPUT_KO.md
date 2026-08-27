@@ -1,7 +1,7 @@
 # ENCODER_DBS60E_INPUT_KO
 
 ## 대상 엔코더
-파일: `dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
+Reference: `../../../../reference/hardware/dataSheet_DBS60E-THEJD2048_1116617_ko.pdf`
 
 - 모델: SICK `DBS60E-THEJD2048`, 부품 번호 `1116617`
 - 타입: incremental encoder

@@ -1,0 +1,14 @@
+authority: GENERATED
+owner: can-db-generator
+status: historical
+production_authority: false
+generator: firmware/csm/pc_tools/vms_rules_from_excel_profiled_signals.py
+profile: firmware/csm/pc_tools/profile_hamt_like_r13.json
+generated_at: 2026-07-09T09:55:20+09:00
+input:
+  path: reference/vehicle-db/HYM_HAMT2.0_CAN DB_R13_260206.xlsx
+  sha256: 21272AE4688F78EAAED4C0F69ADB2079CAA8925F9FBC39A5D5C26E5D4F8EBB0D
+outputs:
+  vms_rules_DRIVING_R13.json: D20CCFC56C004BEB849B28C8DA84CF578087D4B862B06F2FE5DF2D0E1E58996D
+  vms_rules_MERGED_R13.json: 60F16F84B9640BBD2916B86C84778BFF2A2503D2E34AC9A401200E526C3D4F8B
+  vms_rules_SYSTEM_R13.json: C8278A674526E27DFD556F7E4696B4F76327C221469B4A90C312BA22364B0F9B

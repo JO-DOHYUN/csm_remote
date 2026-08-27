@@ -17,6 +17,7 @@ __pycache__/
 
 # PlatformIO / embedded build output
 .pio/
+.pio-core/
 .pioenvs/
 .piolibdeps/
 firmware/csm/artifacts/

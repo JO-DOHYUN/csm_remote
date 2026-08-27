@@ -2,7 +2,7 @@
 
 Classification: `HISTORY / NON-AUTHORITATIVE FOR CURRENT IMPLEMENTATION`
 
-현재 유효 decision route는 `ACTIVE_INDEX.md`가 소유한다. 이 ledger의 과거
+Targeted history route는 `HISTORY_NAVIGATOR.md`가 제공한다. 이 ledger의 과거
 `Active` 표시는 당시 상태를 보존하며 현재 L1/L2를 직접 소유하지 않는다.
 
 ## D-001 단일 하네스 권위
@@ -797,7 +797,7 @@ Classification: `HISTORY / NON-AUTHORITATIVE FOR CURRENT IMPLEMENTATION`
 ## D-039 Adopt Harness V2 authority layers and minimal default context
 
 - Date: 2026-08-21
-- Status: Active harness decision.
+- Status: Superseded by D-040.
 - Baselines: CSM `5c9f6f71ebb06320f8835c4115ddde03314a9762`, Android
   `fea18d9d5660d96cfa67e93e7e900ef9cceb62a6`.
 - Decision: one cross-repository Product Constitution owns L1 and one active
@@ -808,3 +808,19 @@ Classification: `HISTORY / NON-AUTHORITATIVE FOR CURRENT IMPLEMENTATION`
   a permanent product-invariant violation.
 - Runtime: harness/docs/tools only; control, wire, transport and physical behavior
   are unchanged.
+
+## D-040 Supersede Harness V2 with Git-first Harness V3
+
+- Date: 2026-08-27
+- Status: Historical rationale; current route is owned by AGENTS/skills/guards.
+- Decision: remove CURRENT from default context; Git HEAD/status/diff owns live identity.
+  Separate architecture, qualification status, verified baselines, experiments,
+  history and temporary exec-plans by lifecycle.
+- Guard boundary: H0 owns routes/metadata/context only; L1 owns architecture-independent
+  invariants; L2 owns implementation conformance; L3 owns experiment promotion leakage;
+  cross-repository verification requires explicit roots.
+- Repository boundary: references and generated outputs leave the firmware source root;
+  generated outputs retain provenance and do not become product authority.
+- Supersedes: D-039 Harness V2 routing. Rollback requires restoring V2 only as a
+  historical snapshot, never as current identity.
+- Runtime: repository knowledge, docs and tools only; source/wire/control behavior unchanged.

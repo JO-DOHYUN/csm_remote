@@ -4,14 +4,14 @@ Portenta H7 기반 CSM firmware 원본 저장소다.
 
 - 사람 시작점: `START_HERE_KO.md`
 - Codex route: `AGENTS.md`
-- 현재 상태: `CURRENT.md`
+- authority map: `docs/index.md`
 - active architecture: `docs/architecture/ACTIVE_ARCHITECTURE.yaml`
 - PlatformIO project: `firmware/csm`
 - canonical wire: `firmware/csm/shared/docs/TRANSPORT_AND_RECORDS_KO.md`
 
 ```powershell
 python tools/verify_harness.py
-python firmware/csm/tools/control_execution_guard.py
+python firmware/csm/tools/product_invariant_guard.py
 python firmware/csm/tools/architecture_conformance_guard.py
 python firmware/csm/tools/experiment_guard.py
 ```

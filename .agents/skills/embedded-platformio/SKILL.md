@@ -1,5 +1,6 @@
 ---
 name: embedded-platformio
+kind: procedure
 description: Use for CSM PlatformIO/Mbed/ARM build configuration, exact M4/M7 artifact builds, compile database, linker, or toolchain diagnostics.
 ---
 
@@ -12,7 +13,7 @@ Operate the existing deterministic embedded toolchain without global installatio
 Exact environment, target core, baseline, requested artifact or diagnostic.
 
 ## Authority to Read
-CURRENT, active manifest, `docs/operations/DEVELOPMENT_SETUP_KO.md`, platformio.ini,
+Git identity, active manifest, `docs/operations/DEVELOPMENT_SETUP_KO.md`, platformio.ini,
 and affected linker/build scripts.
 
 ## Procedure

@@ -1,0 +1,9 @@
+authority: L3
+owner: experiments
+status: active
+read_when: running or reviewing an experiment
+production_authority: false
+experiments:
+  - id: host-threshold-qualification
+    record: host_threshold_qualification.yaml
+    state: exploratory

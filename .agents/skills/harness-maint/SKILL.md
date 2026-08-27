@@ -1,6 +1,7 @@
 ---
 name: harness-maint
-description: Use only for AGENTS, CURRENT, authority routing, skills, guards, decision index, and stale harness/build-route cleanup.
+kind: primary
+description: Use for AGENTS, Git-first authority routing, skills, guards, exec-plan lifecycle, and stale harness/build-route cleanup.
 ---
 
 # Harness Maintenance
@@ -9,13 +10,14 @@ description: Use only for AGENTS, CURRENT, authority routing, skills, guards, de
 Keep one deterministic minimal-context route without changing runtime semantics.
 
 ## Inputs
-Requested harness outcome, both repository baselines, dirty-worktree inventory.
+Requested harness outcome, Git HEAD/status/diff and dirty-worktree inventory.
 
 ## Authority to Read
-CURRENT, Product Constitution, active manifest, `INDEX.md`, and only affected harness files.
+Approved exec-plan when present, Product Constitution, active manifest, `docs/index.md`,
+and only affected harness files.
 
 ## Procedure
-1. PREFLIGHT baselines and preserve unrelated dirty state.
+1. PREFLIGHT Git state and preserve unrelated dirty state.
 2. Classify facts as L0/L1/L2/L3/HISTORY.
 3. Establish canonical owner before deleting old routes.
 4. Use references, source, tests, builds and history to prove residue obsolete.
@@ -26,7 +28,7 @@ CURRENT, Product Constitution, active manifest, `INDEX.md`, and only affected ha
 Do not alter runtime or infer current facts. Evidence-insufficient cleanup remains `UNRESOLVED`.
 
 ## Required Verification
-`python tools/verify_harness.py`, all three control guards, link/stale search, diff audit.
+`python tools/verify_harness.py`, L1/L2/L3 guards, route scenarios, link/stale search and diff audit.
 
 ## Output Contract
 Authority migration, deleted duplicates, preserved runtime, checks and unresolved items.

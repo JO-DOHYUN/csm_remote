@@ -1,20 +1,20 @@
 실행 순서
 
-1. 아래 3개 파일을 같은 폴더에 둔다
-   - vms_rules_from_excel_profiled_signals.py
-   - profile_hamt_like_r13.json
-   - HYM_HAMT2.0_CAN DB_R13_260206.xlsx
+1. 입력과 생성물 위치
+   - generator/profile: firmware/csm/pc_tools/
+   - input: reference/vehicle-db/HYM_HAMT2.0_CAN DB_R13_260206.xlsx
+   - output: generated/can-db/
 
 2. 가장 쉬운 방법
    - run_vms_rules_build_example.bat 를 더블클릭
 
 3. 직접 명령어로 실행하고 싶으면
-   py vms_rules_from_excel_profiled_signals.py --excel "HYM_HAMT2.0_CAN DB_R13_260206.xlsx" --profile "profile_hamt_like_r13.json" --outdir "db_out" --only ALL --system-bus 0 --driving-bus 1 --prefix vms_rules --suffix R13
+   py firmware/csm/pc_tools/vms_rules_from_excel_profiled_signals.py --excel "reference/vehicle-db/HYM_HAMT2.0_CAN DB_R13_260206.xlsx" --profile "firmware/csm/pc_tools/profile_hamt_like_r13.json" --outdir "generated/can-db" --only ALL --system-bus 0 --driving-bus 1 --prefix vms_rules --suffix R13
 
 4. 결과물
-   db_out\vms_rules_SYSTEM_R13.json
-   db_out\vms_rules_DRIVING_R13.json
-   db_out\vms_rules_MERGED_R13.json
+   generated\can-db\vms_rules_SYSTEM_R13.json
+   generated\can-db\vms_rules_DRIVING_R13.json
+   generated\can-db\vms_rules_MERGED_R13.json
 
 설명
 

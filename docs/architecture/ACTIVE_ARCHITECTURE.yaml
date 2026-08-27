@@ -4,10 +4,6 @@ architecture_id: csm-hno1-m4-control-island-rev-b
 status: active
 binding_in_mode: IMPLEMENT
 reviewable_in_mode: ARCH_CHANGE
-runtime_semantic_baselines:
-  csm: 5c9f6f71ebb06320f8835c4115ddde03314a9762
-  android: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
-  feeder: unresolved
 control:
   physical_can_owner: csm_m4_control_island
   host_semantic_owner: android_vsm

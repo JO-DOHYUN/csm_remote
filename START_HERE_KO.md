@@ -1,23 +1,11 @@
 # CSM Remote 시작점
 
-CSM Remote는 차량 제어 입력을 단일 권한·hard-safety 경계와 단일 물리 CAN 실행
-경계로 전달하고, 차량과 장치의 실제 evidence를 canonical 관측 stream으로 제공한다.
+CSM Remote는 차량 제어 입력을 단일 권한과 단일 물리 실행 경계로 전달하고,
+차량과 장치의 canonical evidence를 USB/Wi-Fi observer에 제공한다.
 
-```text
-RC / autonomy / service-host inputs
-  -> single authority + hard-safety boundary
-  -> single physical CAN execution boundary
-  -> vehicle
+Production 관측과 Service/HIL 제어는 분리된다. 연결, admission, terminal outcome,
+physical execution은 서로 다른 사실이며 실제 hardware evidence 없이 물리 성공을
+주장하지 않는다.
 
-vehicle and execution evidence
-  -> canonical observation path
-  -> USB / Wi-Fi / UI observers
-```
-
-Production 관측과 Service/HIL 제어는 명시적으로 분리된다. 관측 부하나 한 sink의
-실패는 safety/control 또는 다른 sink를 막지 않으며, 실제 실행 성공은 HW evidence
-없이는 주장하지 않는다.
-
-작업은 `AGENTS.md`의 순서대로 `CURRENT.md`, matching skill, 영향받는 권위와
-source만 읽는다. 현재 구현 배치는 `docs/architecture/ACTIVE_ARCHITECTURE.yaml`이
-가리키는 L2 문서에서 확인한다.
+Codex 작업 route는 `AGENTS.md`, 제품 구조는 해당 L1/L2, 현재 code identity와
+작업 delta는 Git HEAD/status/diff가 소유한다.

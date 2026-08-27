@@ -584,7 +584,11 @@ def make_out_path(outdir: Path, prefix: str, kind: str, suffix: str) -> Path:
 def main():
     ap = argparse.ArgumentParser(description="CAN DB Excel -> JSON rule generator (SYSTEM / DRIVING / MERGED)")
     ap.add_argument("--excel", required=True, help="CAN DB 엑셀 경로")
-    ap.add_argument("--outdir", default="./db_out", help="출력 폴더")
+    ap.add_argument(
+        "--outdir",
+        default=str(Path(__file__).resolve().parents[3] / "generated" / "can-db"),
+        help="generated output directory",
+    )
     ap.add_argument("--profile", default=None, help="profile json 경로. 생략 시 내장 프로파일 사용")
     ap.add_argument("--only", choices=["SYSTEM", "DRIVING", "MERGED", "ALL"], default="ALL")
 

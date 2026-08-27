@@ -1,5 +1,9 @@
-# CURRENT
+# Harness V2 CURRENT Snapshot — CSM
 
+Authority: `HISTORY SNAPSHOT / NON-AUTHORITATIVE`
+
+Harness V3 migration 때 root `CURRENT.md`에서 보존한 마지막 V2 status cache다.
+현재 identity, architecture, release status를 소유하지 않는다.
 
 ## Runtime Semantic Baselines
 
@@ -34,7 +38,6 @@ HIL and release PASS are blocked.
 
 - External-analyzer timing, cancel/preemption, bus-error, exact-N EHB and long-soak evidence is open.
 - Feeder baseline and paired deployment identity are unresolved in this migration.
-- Existing local `platformio.ini` change is user-owned and excluded from this harness migration.
 
 ## Active Experiments
 

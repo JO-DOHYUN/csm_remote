@@ -122,7 +122,11 @@ def build_rules(excel: Path, sheet: str,
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--excel", required=True, help="CAN DB 엑셀 경로")
-    ap.add_argument("--outdir", default="./db_out", help="출력 폴더")
+    ap.add_argument(
+        "--outdir",
+        default=str(Path(__file__).resolve().parents[3] / "generated" / "can-db"),
+        help="generated output directory",
+    )
     ap.add_argument("--only", choices=["SYSTEM", "DRIVING", "BOTH"], default="BOTH")
 
     ap.add_argument("--bus", type=int, default=None,

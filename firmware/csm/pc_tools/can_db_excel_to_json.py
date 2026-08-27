@@ -373,8 +373,8 @@ def load_wireless_fault_map(excel_path: Path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--excel", required=True, help="C:\WORKS\HAMT2.0\HYM_HAMT2.0_CAN DB_R13_260206.xlsx")
-    ap.add_argument("--outdir", default="out_db", help="C:\WORKS\HAMT2.0")
+    ap.add_argument("--excel", required=True, help="path to the source CAN database workbook")
+    ap.add_argument("--outdir", default="out_db", help="generated output directory")
     ap.add_argument("--drop-not-defined", action="store_true", help='Signal명이 "Not defined"면 JSON에서 제외')
     args = ap.parse_args()
 

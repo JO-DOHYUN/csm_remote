@@ -24,6 +24,9 @@ shared = (
 executor = (
     project / "src/board/control_island/M4StaticCyclicExecutor.cpp"
 ).read_text(encoding="utf-8")
+fdcan = (
+    project / "src/board/control_island/M4Fdcan1Owner.cpp"
+).read_text(encoding="utf-8")
 m7_linker = (project / "linker/portenta_h7_m7_product.ld").read_text(
     encoding="utf-8"
 )
@@ -122,6 +125,85 @@ for obsolete in (
 ):
     if obsolete in main:
         fail(f"retired GPIO safety path remains: {obsolete}")
+
+for obsolete in (
+    "BuiltinCanTxOwner",
+    "BuiltinFdcanDiagnostics",
+    "ControlReleaseSchedule",
+    "handle_host_can_tx_request",
+    "builtin_can_ref().write(",
+):
+    if obsolete in main:
+        fail(f"obsolete M7 execution path remains: {obsolete}")
+
+for path in (
+    "include/board/can/BuiltinCanTxOwner.h",
+    "src/board/can/BuiltinCanTxOwner.cpp",
+    "include/board/can/BuiltinFdcanDiagnostics.h",
+    "src/board/can/BuiltinFdcanDiagnostics.cpp",
+    "include/board/control/ControlReleaseSchedule.h",
+    "src/board/control/ControlReleaseSchedule.cpp",
+):
+    if (project / path).exists():
+        fail(f"obsolete owner file remains: {path}")
+
+for required in (
+    "HAL_FDCAN_AddMessageToTxBuffer",
+    "HAL_FDCAN_EnableTxBufferRequest",
+    "HAL_FDCAN_AbortTxRequest",
+    "HAL_FDCAN_ConfigInterruptLines",
+    "HAL_FDCAN_ActivateNotification",
+    "TXBRP",
+    "TXBTO",
+    "TXBCF",
+    "TIM4",
+):
+    if required not in fdcan:
+        fail(f"M4 physical owner missing {required}")
+for ignored in (
+    "(void)HAL_FDCAN_ConfigInterruptLines",
+    "(void)HAL_FDCAN_ActivateNotification",
+):
+    if ignored in fdcan:
+        fail(f"FDCAN init failure is ignored: {ignored}")
+
+for required in (
+    "if (next_slot_ == 0u)",
+    "releaseLane(kLane005)",
+    "releaseLane(kLane007)",
+    "releaseLane(kLane364)",
+    "elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)",
+    "transaction_completed",
+    "TransactionState::Complete",
+    "cancelActivePending()",
+    "consumeTerminalEvents",
+):
+    if required not in executor:
+        fail(f"M4 executor missing {required}")
+if executor.count("driver_->cancel(lane)") != 1:
+    fail("cancellation must remain one bounded request until terminal closure")
+for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):
+    if obsolete in executor:
+        fail(f"obsolete executor race path remains: {obsolete}")
+if "while (" in executor or "for (;;" in executor:
+    fail("M4 slot execution may not contain an unbounded loop")
+
+for required in (
+    "ControlSnapshotSlot slot",
+    "slot.crc32 = slotCrc(slot)",
+    "RawCanEntry",
+    "fill >= kRawCanRingCapacity",
+):
+    if required not in shared:
+        fail(f"shared-memory evidence boundary missing {required}")
+
+for required in (
+    "BOARD_ENABLE_HOST_CAN_TX=0",
+    "BOARD_ENABLE_HOST_CAN_TX_BUILTIN=0",
+    "BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED=0",
+):
+    if required not in platformio:
+        fail(f"build profile missing {required}")
 
 for required in (
     "stageSnapshot", "latchTerminalEvent", "latchTrackingFault",

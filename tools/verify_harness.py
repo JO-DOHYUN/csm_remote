@@ -1,85 +1,36 @@
 #!/usr/bin/env python3
-"""Deterministic Harness V2 route and authority verifier."""
+"""Harness V3 H0 verifier: routes, metadata, context budget and repository hygiene."""
 
 from pathlib import Path
+import hashlib
 import re
 import subprocess
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT = ROOT / "firmware" / "csm"
-
+PRIMARY = {"implement", "architecture-change", "experiment", "harness-maint"}
+PROCEDURES = {"verification", "embedded-platformio", "can-hil"}
 REQUIRED = (
     "AGENTS.md",
     "START_HERE_KO.md",
-    "CURRENT.md",
-    "INDEX.md",
-    "docs/product/PRODUCT_CONSTITUTION_KO.md",
-    "docs/product/PRODUCT_DEFINITION_KO.md",
-    "docs/product/OPERATING_SCENARIOS_KO.md",
-    "docs/architecture/ACTIVE_ARCHITECTURE.yaml",
-    "docs/architecture/FIRMWARE_ARCHITECTURE_KO.md",
-    "docs/architecture/UPLINK_TRANSPORT_ARCHITECTURE_KO.md",
-    "docs/experiments/host_threshold_qualification.yaml",
-    "docs/quality/VERIFICATION_POLICY_KO.md",
-    "docs/operations/DEVELOPMENT_SETUP_KO.md",
-    "history/decisions/ACTIVE_INDEX.md",
-    "history/decisions/DECISION_LEDGER_KO.md",
-    "firmware/csm/platformio.ini",
-    "firmware/csm/tools/control_execution_guard.py",
-    "firmware/csm/tools/architecture_conformance_guard.py",
-    "firmware/csm/tools/experiment_guard.py",
-    "firmware/csm/shared/docs/TRANSPORT_AND_RECORDS_KO.md",
+    "README.md",
+    "docs/index.md",
+    "docs/harness/HARNESS_V3_ARCHITECTURE_KO.md",
+    "docs/verification/VERIFICATION_POLICY_KO.md",
+    "docs/verification/qualification-status.yaml",
+    "docs/experiments/index.yaml",
+    "docs/integration/verified-baselines/harness-v2-20260821.yaml",
+    "history/decisions/HISTORY_NAVIGATOR.md",
+    "reference/README.md",
+    "generated/README.md",
+    "generated/can-db/provenance.yaml",
+    "tools/test_harness_scenarios.py",
+    "tools/fixtures/harness_v3_scenarios.json",
 )
-
-EXPECTED_SKILLS = {
-    "implement",
-    "architecture-change",
-    "experiment",
-    "verification",
-    "harness-maint",
-    "embedded-platformio",
-    "can-hil",
-}
-
-EXPECTED_ENVS = {
-    "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi",
-    "portenta_h7_m4_remote_frontend",
-}
-
-MANIFEST_REQUIRED = {
-    "authority_level": "L2",
-    "architecture_id": "csm-hno1-m4-control-island-rev-b",
-    "physical_can_owner": "csm_m4_control_island",
-    "host_semantic_owner": "android_vsm",
-    "remote_semantic_owner": "csm_m7",
-    "global_source_authority_owner": "csm_m7",
-    "nominal_request_clock_owner": "csm_m4_tim4",
-    "fdcan1_owner": "csm_m4_control_island",
-    "host_execution_model": "coherent_latest_state",
-    "latest_state_depth": "1",
-    "host_software_execution_backlog": "false",
-    "hidden_retry": "false",
-    "hidden_replay": "false",
-    "source_mixing": "forbidden",
-    "authority_handoff": "quiescent_cancel_terminal_then_activate",
-    "strict_n_shot_owner": "csm_m4_generic_success_budget",
-    "control_slots": "2",
-    "integrity": "sequence_crc32_boot_identity",
-    "raw_can_ring_capacity": "512",
-    "production_vsm_control": "false",
-    "service_hil_control": "true",
-    "admission_equals_physical_success": "false",
-    "physical_success_requires_hardware_evidence": "true",
-    "threshold_state": "exploratory",
-    "production_authority": "false",
-}
 
 
 def fail(message: str) -> None:
-    print(f"FAIL: {message}")
-    raise SystemExit(1)
+    raise SystemExit(f"FAIL: {message}")
 
 
 def read(relative: str) -> str:
@@ -88,157 +39,112 @@ def read(relative: str) -> str:
 
 for relative in REQUIRED:
     if not (ROOT / relative).is_file():
-        fail(f"missing required file: {relative}")
-
-for forbidden in (
-    "BRIEF.md",
-    "docs/roadmap",
-    "firmware/csm/docs/decisions",
-    "firmware/csm/docs/quality",
-    "firmware/csm/.github",
-):
-    if (ROOT / forbidden).exists():
-        fail(f"parallel/stale active route remains: {forbidden}")
-
-agents = read("AGENTS.md")
-current = read("CURRENT.md")
-if len(agents.splitlines()) > 150:
-    fail("AGENTS.md exceeds the 150-line stable-map target")
-if len(current.splitlines()) > 90:
-    fail("CURRENT.md exceeds the short current-state boundary")
-
-default_route = "\n".join(
-    read(path)
-    for path in ("AGENTS.md", "START_HERE_KO.md", "CURRENT.md", "README.md")
-)
-for stale in (
-    "BRIEF.md",
-    "product-change-review",
-    "remote_phase1_guard",
-    "portenta_h7_m7_mid_mcp2515_j4_dual_csm",
-    "portenta_h7_m7_mid_mcp2515_j4_remote_product_wifi",
-):
-    if stale in default_route:
-        fail(f"stale default route remains: {stale}")
-if "DECISION_LEDGER_KO.md" in default_route:
-    fail("giant decision ledger leaked into default context")
-
-skill_root = ROOT / ".agents" / "skills"
-skill_dirs = {path.name for path in skill_root.iterdir() if path.is_dir()}
-if skill_dirs != EXPECTED_SKILLS:
-    fail(f"skill set mismatch: {sorted(skill_dirs)}")
-names: dict[str, Path] = {}
-for path in sorted(skill_root.glob("*/SKILL.md")):
-    match = re.search(r"(?m)^name:\s*(\S+)\s*$", path.read_text(encoding="utf-8"))
-    if not match:
-        fail(f"skill missing frontmatter name: {path.relative_to(ROOT)}")
-    name = match.group(1)
-    if name in names:
-        fail(f"duplicate skill name {name}: {names[name]} and {path}")
-    names[name] = path
-if set(names) != EXPECTED_SKILLS:
-    fail(f"skill frontmatter mismatch: {sorted(names)}")
-
-manifest_text = read("docs/architecture/ACTIVE_ARCHITECTURE.yaml")
-manifest: dict[str, str] = {}
-for line in manifest_text.splitlines():
-    match = re.match(r"^\s*([a-z0-9_]+):\s*(\S.*?)\s*$", line)
-    if match:
-        manifest[match.group(1)] = match.group(2)
-for key, expected in MANIFEST_REQUIRED.items():
-    if manifest.get(key) != expected:
-        fail(f"manifest {key}={manifest.get(key)!r}, expected {expected!r}")
-for sha in (
-    "5c9f6f71ebb06320f8835c4115ddde03314a9762",
-    "fea18d9d5660d96cfa67e93e7e900ef9cceb62a6",
-):
-    if sha not in manifest_text or sha not in current:
-        fail(f"baseline is inconsistent between manifest and CURRENT: {sha}")
-
-if "L2 ACTIVE ARCHITECTURE" not in read(
-    "docs/architecture/FIRMWARE_ARCHITECTURE_KO.md"
-):
-    fail("firmware architecture is not classified as L2")
-if "L2 DOMAIN ARCHITECTURE" not in read(
-    "docs/architecture/UPLINK_TRANSPORT_ARCHITECTURE_KO.md"
-):
-    fail("uplink architecture is not classified as L2")
-
-constitution = read("docs/product/PRODUCT_CONSTITUTION_KO.md")
-if len(re.findall(r"(?m)^\d+\.", constitution)) != 15:
-    fail("Product Constitution must contain exactly 15 numbered invariants")
-product_scope = read("docs/product/PRODUCT_DEFINITION_KO.md") + read(
-    "docs/product/OPERATING_SCENARIOS_KO.md"
-)
-for leaked in ("M4", "M7", "TIM4", "3-slot", "5000 us", "BuiltinCanTxOwner"):
-    if leaked in product_scope:
-        fail(f"current implementation leaked into product/scenario authority: {leaked}")
-
-if "HISTORY / NON-AUTHORITATIVE" not in read(
-    "history/decisions/DECISION_LEDGER_KO.md"
-):
-    fail("decision ledger is not classified as HISTORY")
-snapshot = ROOT / "history" / "snapshots" / "BRIEF_20260819_KO.md"
-if not snapshot.is_file() or "HISTORY SNAPSHOT" not in snapshot.read_text(encoding="utf-8"):
-    fail("former BRIEF was not preserved as non-authoritative HISTORY")
-
-platformio = read("firmware/csm/platformio.ini")
-envs = set(re.findall(r"(?m)^\[env:([^\]]+)\]$", platformio))
-if envs != EXPECTED_ENVS:
-    fail(f"active PlatformIO environments mismatch: {sorted(envs)}")
-
-compile_db = PROJECT / "compile_commands.json"
-if compile_db.exists():
-    db = compile_db.read_text(encoding="utf-8", errors="ignore")
-    active = "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi"
-    if active not in db:
-        fail("compile_commands.json is stale or not generated from active Service/HIL env")
-    for stale in ("remote_product_mdps_bench", "dual_csm_passive"):
-        if stale in db:
-            fail(f"compile_commands.json contains stale environment: {stale}")
-
-tick = chr(96)
-route_pattern = re.compile(
-    re.escape(tick) + r"((?:docs|history|firmware|tools|\.agents)/[^" + tick + r"]+)" + re.escape(tick)
-)
-for relative in (
-    "AGENTS.md",
-    "START_HERE_KO.md",
+        fail(f"missing required H0 file: {relative}")
+for obsolete in (
     "CURRENT.md",
     "INDEX.md",
-    "README.md",
+    "history/decisions/ACTIVE_INDEX.md",
+    "docs/quality/VERIFICATION_POLICY_KO.md",
+    "firmware/csm/tools/control_execution_guard.py",
+    "firmware/csm/db_out",
+):
+    if (ROOT / obsolete).exists():
+        fail(f"obsolete V2 route remains: {obsolete}")
+
+agents = read("AGENTS.md")
+if len(agents.splitlines()) > 100:
+    fail("AGENTS.md exceeds the 100-line stable-map budget")
+
+default_text = "\n".join(read(path) for path in ("AGENTS.md", "START_HERE_KO.md", "README.md"))
+if "CURRENT.md" in default_text:
+    fail("CURRENT leaked into default route")
+if re.search(r"\b[0-9a-f]{40}\b", default_text, re.IGNORECASE):
+    fail("commit SHA leaked into default route")
+if re.search(r"(?i)\b[a-z]:\\", default_text):
+    fail("absolute machine path leaked into default route")
+if "targeted" not in agents or "Git state" not in agents:
+    fail("context reconstruction/history isolation rule is missing")
+
+nested_agents = [path for path in ROOT.rglob("AGENTS.md") if path != ROOT / "AGENTS.md"]
+if nested_agents:
+    fail(f"nested AGENTS files exceed the zero-file budget: {nested_agents}")
+
+skill_root = ROOT / ".agents" / "skills"
+seen: dict[str, str] = {}
+for path in sorted(skill_root.glob("*/SKILL.md")):
+    text = path.read_text(encoding="utf-8")
+    name = re.search(r"(?m)^name:\s*(\S+)\s*$", text)
+    kind = re.search(r"(?m)^kind:\s*(primary|procedure)\s*$", text)
+    if not name or not kind:
+        fail(f"skill metadata missing: {path.relative_to(ROOT)}")
+    if name.group(1) != path.parent.name or name.group(1) in seen:
+        fail(f"duplicate/mismatched skill: {path.relative_to(ROOT)}")
+    seen[name.group(1)] = kind.group(1)
+    if re.search(r"\bCURRENT(?:\.md)?\b", text):
+        fail(f"skill depends on CURRENT: {path.relative_to(ROOT)}")
+if {name for name, kind in seen.items() if kind == "primary"} != PRIMARY:
+    fail("primary skill set mismatch")
+if {name for name, kind in seen.items() if kind == "procedure"} != PROCEDURES:
+    fail("verification procedure set mismatch")
+
+for relative in (
+    "docs/index.md",
+    "docs/harness/HARNESS_V3_ARCHITECTURE_KO.md",
+    "docs/verification/VERIFICATION_POLICY_KO.md",
 ):
     text = read(relative)
-    for match in route_pattern.finditer(text):
-        route = match.group(1).split(" (", 1)[0]
-        if "*" in route or route.endswith("/"):
-            continue
-        if not (ROOT / route).exists():
-            fail(f"broken active route in {relative}: {route}")
+    for key in ("authority:", "owner:", "status:", "read_when:"):
+        if key not in text:
+            fail(f"{relative} missing metadata {key}")
 
-checks = (
-    ([sys.executable, "firmware/csm/tools/control_execution_guard.py"], ROOT),
-    ([sys.executable, "firmware/csm/tools/architecture_conformance_guard.py"], ROOT),
-    ([sys.executable, "firmware/csm/tools/experiment_guard.py"], ROOT),
-    ([sys.executable, "tools/wifi_architecture_guard.py"], PROJECT),
-    (["git", "diff", "--check"], ROOT),
+for plan in (ROOT / "docs" / "exec-plans").rglob("*.yaml"):
+    text = plan.read_text(encoding="utf-8")
+    for key in ("id:", "status:", "decision_state:", "goal:", "scope:", "frozen:", "required:", "forbidden:", "proof:", "cross_repo:"):
+        if key not in text:
+            fail(f"exec-plan schema missing {key}: {plan.relative_to(ROOT)}")
+    if "active" in plan.parts and "status: ACTIVE" not in text:
+        fail(f"active plan status mismatch: {plan.relative_to(ROOT)}")
+    if "completed" in plan.parts and "status: COMPLETED" not in text:
+        fail(f"completed plan status mismatch: {plan.relative_to(ROOT)}")
+
+for path in (ROOT / "firmware" / "csm").glob("*"):
+    if path.suffix.lower() in {".xlsx", ".pdf", ".png"}:
+        fail(f"reference asset remains in build source root: {path.relative_to(ROOT)}")
+for path in (ROOT / "firmware" / "csm" / "pc_tools").glob("*.xlsx"):
+    fail(f"duplicate reference asset remains in tool source: {path.relative_to(ROOT)}")
+
+provenance = read("generated/can-db/provenance.yaml")
+for output in sorted((ROOT / "generated" / "can-db").glob("*.json")):
+    digest = hashlib.sha256(output.read_bytes()).hexdigest().upper()
+    if f"{output.name}: {digest}" not in provenance:
+        fail(f"generated output provenance mismatch: {output.name}")
+
+route_files = [
+    ROOT / "AGENTS.md",
+    ROOT / "START_HERE_KO.md",
+    ROOT / "README.md",
+    ROOT / "docs" / "index.md",
+    ROOT / "docs" / "harness" / "HARNESS_V3_ARCHITECTURE_KO.md",
+]
+route_files.extend(sorted(skill_root.glob("*/SKILL.md")))
+route_pattern = re.compile(
+    r"`((?:\.\./)?(?:docs|history|firmware|tools|\.agents|reference|generated|"
+    r"product|architecture|verification|experiments|integration|exec-plans|operations)/[^`]+)`"
 )
-for command, cwd in checks:
-    result = subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
-    if result.returncode:
-        fail(
-            f"check failed: {' '.join(command)}\n"
-            f"{(result.stdout + result.stderr).strip()}"
-        )
+for source in route_files:
+    for route in route_pattern.findall(source.read_text(encoding="utf-8")):
+        route = route.split("#", 1)[0].rstrip("/")
+        if "*" in route or " " in route:
+            continue
+        if route.startswith(("docs/", "history/", "firmware/", "tools/", ".agents/", "reference/", "generated/")):
+            candidate = ROOT / route
+        else:
+            candidate = source.parent / route
+        if not candidate.exists():
+            fail(f"broken route in {source.relative_to(ROOT)}: {route}")
 
-top = subprocess.run(
-    ["git", "rev-parse", "--show-toplevel"],
-    cwd=ROOT,
-    check=True,
-    capture_output=True,
-    text=True,
-).stdout.strip()
-if Path(top).resolve() != ROOT:
-    fail("workspace root is not the Git repository root")
+result = subprocess.run(["git", "diff", "HEAD", "--check"], cwd=ROOT, capture_output=True, text=True)
+if result.returncode:
+    fail(f"git diff --check failed:\n{result.stdout}{result.stderr}")
 
-print("PASS: CSM Harness V2 authority, routes, skills, manifest and guards")
+print("PASS: CSM Harness V3 H0 routes, metadata and context boundaries")

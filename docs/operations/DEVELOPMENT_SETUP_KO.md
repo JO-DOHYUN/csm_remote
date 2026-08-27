@@ -16,7 +16,7 @@ $pio = Join-Path $env:USERPROFILE '.platformio\penv\Scripts\platformio.exe'
 
 ```powershell
 python tools/verify_harness.py
-python firmware/csm/tools/control_execution_guard.py
+python firmware/csm/tools/product_invariant_guard.py
 python firmware/csm/tools/architecture_conformance_guard.py
 python firmware/csm/tools/experiment_guard.py
 python firmware/csm/tools/wifi_architecture_guard.py

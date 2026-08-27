@@ -1,0 +1,9 @@
+[
+  {"id":"local_bug","task_kind":"local","decision_state":"none","broad":false,"cross_repo":false,"context_compacted":false,"expected_primary":"implement","expected_procedure":"verification","expected_plan":false,"expected_compare":false,"expected_integration":false},
+  {"id":"approved_architecture","task_kind":"architecture","decision_state":"approved","broad":true,"cross_repo":false,"context_compacted":false,"expected_primary":"architecture-change","expected_procedure":"verification","expected_plan":true,"expected_compare":false,"expected_integration":false},
+  {"id":"cross_repo_wire","task_kind":"architecture","decision_state":"approved","broad":true,"cross_repo":true,"context_compacted":false,"expected_primary":"architecture-change","expected_procedure":"verification","expected_plan":true,"expected_compare":false,"expected_integration":true},
+  {"id":"experiment","task_kind":"experiment","decision_state":"none","broad":false,"cross_repo":false,"context_compacted":false,"expected_primary":"experiment","expected_procedure":"verification","expected_plan":false,"expected_compare":false,"expected_integration":false},
+  {"id":"build_only","task_kind":"build","decision_state":"none","broad":false,"cross_repo":false,"context_compacted":false,"expected_primary":"implement","expected_procedure":"embedded-platformio","expected_plan":false,"expected_compare":false,"expected_integration":false},
+  {"id":"hil_request","task_kind":"hil","decision_state":"none","broad":false,"cross_repo":false,"context_compacted":false,"expected_primary":"implement","expected_procedure":"can-hil","expected_plan":false,"expected_compare":false,"expected_integration":false},
+  {"id":"compacted_recovery","task_kind":"local","decision_state":"none","broad":false,"cross_repo":false,"context_compacted":true,"expected_primary":"implement","expected_procedure":"verification","expected_plan":false,"expected_compare":false,"expected_integration":false}
+]

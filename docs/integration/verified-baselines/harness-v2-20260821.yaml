@@ -1,0 +1,14 @@
+authority: EVIDENCE
+owner: cross-repository-verification
+status: historical_verified
+read_when: auditing Harness V2 migration evidence only
+id: harness-v2-20260821
+csm_sha: 5c9f6f71ebb06320f8835c4115ddde03314a9762
+android_sha: fea18d9d5660d96cfa67e93e7e900ef9cceb62a6
+feeder_sha: unresolved
+criteria:
+  - harness_v2_route
+  - runtime_semantic_baseline
+result: PASS
+source_history: history/decisions/DECISION_LEDGER_KO.md#D-039
+current_authority: false

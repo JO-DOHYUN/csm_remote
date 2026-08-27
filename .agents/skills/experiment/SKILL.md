@@ -1,5 +1,6 @@
 ---
 name: experiment
+kind: primary
 description: Use for bounded instrumentation, exploratory timing/capacity measurement, or hypothesis testing that must not become production policy.
 ---
 
@@ -9,7 +10,7 @@ description: Use for bounded instrumentation, exploratory timing/capacity measur
 Produce evidence without silently changing product policy.
 
 ## Inputs
-Baseline SHA, hypothesis, temporary change, measurement and safety scope.
+Git identity, hypothesis, temporary change, measurement and safety scope.
 
 ## Authority to Read
 Product Constitution, active manifest, affected source, verification policy.

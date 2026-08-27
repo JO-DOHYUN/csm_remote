@@ -1,0 +1,38 @@
+id: harness-v3-project-refactor-20260827
+status: COMPLETED
+decision_state: approved
+tracking_only: true
+goal: migrate CSM and Android repository knowledge architecture from Harness V2 to V3
+scope: [csm_harness, android_harness, repository_knowledge_structure]
+frozen:
+  - runtime_semantics
+  - product_semantics
+  - canonical_wire
+required:
+  - git_preflight_as_live_truth
+  - current_route_removal
+  - guard_responsibility_separation
+  - knowledge_lifecycle_split
+  - deterministic_route_scenarios
+  - runtime_semantic_diff_zero
+forbidden:
+  - architecture_re_litigation
+  - runtime_compatibility_shim
+  - upload
+  - device
+  - hil
+proof:
+  - h0_harness
+  - l1_product_invariant
+  - l2_architecture
+  - l3_experiment
+  - explicit_cross_repo_integration
+  - scenario_simulation
+cross_repo:
+  repositories: [JO-DOHYUN/csm_remote, JO-DOHYUN/vsm_android_app]
+  current_identity: git_head_status_diff
+completion:
+  completed_at: 2026-08-27
+  result: PASS
+  runtime_semantic_diff: zero
+  upload_device_hil: NOT_RUN
