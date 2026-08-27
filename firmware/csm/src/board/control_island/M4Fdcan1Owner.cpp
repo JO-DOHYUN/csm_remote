@@ -45,6 +45,7 @@ bool M4Fdcan1Owner::begin(uint32_t m4_boot_id,
   clock_contract_ok_ = false;
   protocol_fault_latched_ = false;
   error_status_latch_ = 0u;
+  accepted_buffer_mask_ = 0u;
   executor_ = executor;
   trace_ = trace;
   m4_boot_id_ = m4_boot_id;
@@ -93,7 +94,7 @@ bool M4Fdcan1Owner::configureDirectHal() {
   handle_->Instance = FDCAN1;
   handle_->Init.FrameFormat = FDCAN_FRAME_CLASSIC;
   handle_->Init.Mode = FDCAN_MODE_NORMAL;
-  handle_->Init.AutoRetransmission = ENABLE;
+  handle_->Init.AutoRetransmission = DISABLE;
   handle_->Init.TransmitPause = DISABLE;
   handle_->Init.ProtocolException = ENABLE;
   handle_->Init.NominalPrescaler = discovered_timing.NominalPrescaler;
@@ -156,6 +157,10 @@ bool M4Fdcan1Owner::configureDirectHal() {
   nominal_bitrate_ = handle_->Init.NominalPrescaler == 0u || quanta == 0u
       ? 0u : fdcan_kernel_clock_hz_ / handle_->Init.NominalPrescaler / quanta;
   clock_contract_ok_ = nominal_bitrate_ == BOARD_HNO1_CAN1_BITRATE;
+  if (!clock_contract_ok_) {
+    stage(BringupStage::HalStarted, BringupFailure::ClockContract,
+          nominal_bitrate_);
+  }
   return clock_contract_ok_;
 }
 
@@ -229,13 +234,13 @@ void M4Fdcan1Owner::serviceRxInterrupt(uint32_t interrupt_flags) {
 }
 
 void M4Fdcan1Owner::noteTxComplete(uint32_t buffer_indexes) {
+  (void)buffer_indexes;
   if (tx_complete_callback_total_ != UINT32_MAX) ++tx_complete_callback_total_;
-  terminal(buffer_indexes, false);
 }
 
 void M4Fdcan1Owner::noteTxAbort(uint32_t buffer_indexes) {
+  (void)buffer_indexes;
   if (tx_abort_callback_total_ != UINT32_MAX) ++tx_abort_callback_total_;
-  terminal(buffer_indexes, true);
 }
 
 void M4Fdcan1Owner::noteError(uint32_t status) {
@@ -247,6 +252,23 @@ void M4Fdcan1Owner::noteError(uint32_t status) {
 void M4Fdcan1Owner::consumeLatchedEvents() {
   error_status_latch_ = 0u;
   updateProtocolState();
+  const FdcanRawSnapshot raw = rawSnapshot();
+  const TxBufferReconciliation reconciliation = reconcileAcceptedTxBuffers(
+      accepted_buffer_mask_, raw.txbrp, raw.txbto, raw.txbcf);
+  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+    const uint32_t mask = bufferMask(lane);
+    if (((reconciliation.transmitted | reconciliation.cancelled) & mask) !=
+        0u) {
+      executor_->latchTerminalEvent(
+          lane, (reconciliation.transmitted & mask) != 0u,
+          (reconciliation.cancelled & mask) != 0u);
+    }
+    if ((reconciliation.failed & mask) != 0u) {
+      executor_->latchTrackingFault(lane);
+    }
+  }
+  accepted_buffer_mask_ = reconciliation.pending;
+
   if (protocol_.BusOff != 0u && !protocol_fault_latched_) {
     // Bus-off is a terminal transport fault. Latch until reset and abort every
     // outstanding dedicated buffer so no stale request can transmit later.
@@ -298,6 +320,7 @@ TxRequestResult M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
     return TxRequestResult::AddFailed;
   }
   if (HAL_FDCAN_EnableTxBufferRequest(handle_, buffer) == HAL_OK) {
+    accepted_buffer_mask_ |= buffer;
     return TxRequestResult::Accepted;
   }
   if (enable_failure_total_ != UINT32_MAX) ++enable_failure_total_;
@@ -345,17 +368,6 @@ void M4Fdcan1Owner::updateProtocolState() {
   (void)HAL_FDCAN_GetErrorCounters(handle_, &errors_);
 }
 
-void M4Fdcan1Owner::terminal(uint32_t buffer_indexes, bool abort_callback) {
-  const FdcanRawSnapshot raw = rawSnapshot();
-  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
-    const uint32_t mask = bufferMask(lane);
-    if ((buffer_indexes & mask) == 0u) continue;
-    const bool transmitted = (raw.txbto & mask) != 0u;
-    const bool cancelled = abort_callback || (raw.txbcf & mask) != 0u;
-    executor_->latchTerminalEvent(lane, transmitted, cancelled);
-  }
-}
-
 uint32_t M4Fdcan1Owner::bufferMask(uint8_t lane) {
   static constexpr uint32_t kBuffers[kLaneCount] = {
       FDCAN_TX_BUFFER0, FDCAN_TX_BUFFER1, FDCAN_TX_BUFFER2};
@@ -385,10 +397,9 @@ void M4Fdcan1Owner::augmentHealth(ControlHealthPayload* health) const {
 void M4Fdcan1Owner::stage(BringupStage stage_value,
                            BringupFailure failure, uint32_t detail) {
   if (trace_ == nullptr) return;
-  trace_->stage = static_cast<uint16_t>(stage_value);
-  trace_->failure = static_cast<uint16_t>(failure);
-  trace_->failure_detail = detail;
-  (void)publishBringupTrace(*trace_);
+  if (advanceBringupTrace(trace_, stage_value, failure, detail)) {
+    (void)publishBringupTrace(*trace_);
+  }
 }
 
 bool M4ControlTimebase::begin(M4StaticCyclicExecutor* executor) {

@@ -27,6 +27,7 @@ executor = (
 fdcan = (
     project / "src/board/control_island/M4Fdcan1Owner.cpp"
 ).read_text(encoding="utf-8")
+m4_frontend = (project / "src/m4_remote_frontend.cpp").read_text(encoding="utf-8")
 remote_runtime = (
     project / "src/board/control/RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
@@ -197,15 +198,34 @@ for required in (
     "nominal_bitrate_ == BOARD_HNO1_CAN1_BITRATE",
     "fdcan_irq_total_",
     "tx_complete_callback_total_",
+    "handle_->Init.AutoRetransmission = DISABLE",
+    "reconcileAcceptedTxBuffers",
+    "accepted_buffer_mask_",
+    "BringupFailure::ClockContract",
 ):
     if required not in fdcan:
         fail(f"M4 physical owner missing {required}")
+if "handle_->Init.AutoRetransmission = ENABLE" in fdcan:
+    fail("FDCAN hidden hardware retransmission is enabled")
 for ignored in (
     "(void)HAL_FDCAN_ConfigInterruptLines",
     "(void)HAL_FDCAN_ActivateNotification",
 ):
     if ignored in fdcan:
         fail(f"FDCAN init failure is ignored: {ignored}")
+
+for required in (
+    "advanceBringupTrace",
+    "next_stage > trace->stage",
+    "trace->failure == static_cast<uint16_t>(BringupFailure::None)",
+):
+    if required not in shared:
+        fail(f"monotonic bring-up trace missing {required}")
+if "bringup_trace.stage =" in m4_frontend:
+    fail("M4 frontend bypasses monotonic bring-up trace owner")
+if "recordBringup(BringupStage::ForegroundLoopEntered)" not in m4_frontend or \
+        "recordBringup(BringupStage::FirstTim4Tick)" not in m4_frontend:
+    fail("M4 foreground/TIM4 milestones bypass bring-up trace owner")
 
 for required in (
     "if (next_slot_ == 0u)",

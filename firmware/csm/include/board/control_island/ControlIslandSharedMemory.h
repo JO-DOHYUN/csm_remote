@@ -40,6 +40,9 @@ ControlReadResult readFinalControlSnapshot(uint32_t last_sequence);
 
 bool publishControlHealth(ControlHealthPayload payload);
 HealthReadResult readControlHealth(uint32_t last_sequence);
+bool advanceBringupTrace(BringupTracePayload* trace, BringupStage stage,
+                         BringupFailure failure = BringupFailure::None,
+                         uint32_t failure_detail = 0u);
 bool publishBringupTrace(const BringupTracePayload& payload);
 BringupReadResult readBringupTrace(uint32_t last_sequence);
 

@@ -350,6 +350,61 @@ void testTrackingFaultGloballyClosesActive() {
   assert((health.flags & kHealthFlagTrackingFault) != 0u);
 }
 
+void testDedicatedBufferTerminalReconciliation() {
+  const TxBufferReconciliation pending =
+      reconcileAcceptedTxBuffers(0x07u, 0x01u, 0x02u, 0x04u);
+  assert(pending.pending == 0x01u);
+  assert(pending.transmitted == 0x02u);
+  assert(pending.cancelled == 0x04u);
+  assert(pending.failed == 0u);
+
+  const TxBufferReconciliation callback_missed =
+      reconcileAcceptedTxBuffers(0x01u, 0u, 0x01u, 0u);
+  assert(callback_missed.transmitted == 0x01u);
+  assert(callback_missed.pending == 0u);
+
+  const TxBufferReconciliation non_retransmitted_error =
+      reconcileAcceptedTxBuffers(0x02u, 0u, 0u, 0u);
+  assert(non_retransmitted_error.failed == 0x02u);
+  assert(non_retransmitted_error.transmitted == 0u);
+  assert(non_retransmitted_error.cancelled == 0u);
+  assert(non_retransmitted_error.pending == 0u);
+}
+
+void testBringupTraceMonotonicFailureRetention() {
+  BringupTracePayload trace;
+  trace.source_id = 0x1122334455667788ull;
+  trace.runtime_contract_id = 0x8877665544332211ull;
+  trace.build_id = 0xAABBCCDDu;
+  assert(advanceBringupTrace(&trace, BringupStage::ForegroundLoopEntered));
+  assert(!advanceBringupTrace(&trace, BringupStage::FirstTim4Tick));
+  assert(trace.stage ==
+         static_cast<uint16_t>(BringupStage::ForegroundLoopEntered));
+
+  assert(advanceBringupTrace(&trace, BringupStage::HalStarted,
+                             BringupFailure::ClockContract, 480000u));
+  assert(trace.failure ==
+         static_cast<uint16_t>(BringupFailure::ClockContract));
+  assert(trace.failure_detail == 480000u);
+  assert(!advanceBringupTrace(&trace, BringupStage::FdcanOperational));
+  assert(trace.failure ==
+         static_cast<uint16_t>(BringupFailure::ClockContract));
+  assert(trace.source_id == 0x1122334455667788ull);
+  assert(trace.runtime_contract_id == 0x8877665544332211ull);
+  assert(trace.build_id == 0xAABBCCDDu);
+
+  BringupTracePayload failed_then_advanced;
+  assert(advanceBringupTrace(&failed_then_advanced, BringupStage::HalStarted,
+                             BringupFailure::ClockContract, 499999u));
+  assert(advanceBringupTrace(&failed_then_advanced,
+                             BringupStage::FdcanOperational));
+  assert(failed_then_advanced.stage ==
+         static_cast<uint16_t>(BringupStage::FdcanOperational));
+  assert(failed_then_advanced.failure ==
+         static_cast<uint16_t>(BringupFailure::ClockContract));
+  assert(failed_then_advanced.failure_detail == 499999u);
+}
+
 void testHostSessionAndSenderTimeBounds() {
   csm::board::control::HostCommandFreshness freshness;
   assert(!freshness.begin({}));
@@ -390,6 +445,8 @@ int main() {
   testSameSourceRearmAndStale();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
+  testDedicatedBufferTerminalReconciliation();
+  testBringupTraceMonotonicFailureRetention();
   testStaticDueAndExplicitRequestAccounting();
   testOnlyAcceptedCreatesPending();
   return 0;

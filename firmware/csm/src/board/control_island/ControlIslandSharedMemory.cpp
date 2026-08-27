@@ -264,6 +264,24 @@ HealthReadResult readControlHealth(uint32_t last_sequence) {
   return result;
 }
 
+bool advanceBringupTrace(BringupTracePayload* trace, BringupStage stage,
+                         BringupFailure failure, uint32_t failure_detail) {
+  if (trace == nullptr) return false;
+  bool changed = false;
+  const uint16_t next_stage = static_cast<uint16_t>(stage);
+  if (next_stage > trace->stage) {
+    trace->stage = next_stage;
+    changed = true;
+  }
+  if (failure != BringupFailure::None &&
+      trace->failure == static_cast<uint16_t>(BringupFailure::None)) {
+    trace->failure = static_cast<uint16_t>(failure);
+    trace->failure_detail = failure_detail;
+    changed = true;
+  }
+  return changed;
+}
+
 bool publishBringupTrace(const BringupTracePayload& payload) {
   ControlIpcRegion* region = controlIpcRegion();
   if (!validHeader(*region)) return false;

@@ -42,7 +42,6 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   bool configureDirectHal();
   bool configureInterrupts();
   void updateProtocolState();
-  void terminal(uint32_t buffer_indexes, bool abort_callback);
   static uint32_t bufferMask(uint8_t lane);
   void stage(BringupStage stage, BringupFailure failure = BringupFailure::None,
              uint32_t detail = 0u);
@@ -64,6 +63,7 @@ class M4Fdcan1Owner final : public M4LaneDriver {
   volatile uint32_t tx_abort_callback_total_ = 0;
   volatile uint32_t error_callback_total_ = 0;
   volatile uint32_t last_error_callback_status_ = 0;
+  uint32_t accepted_buffer_mask_ = 0;
   uint32_t add_failure_total_ = 0;
   uint32_t enable_failure_total_ = 0;
   uint32_t abort_failure_total_ = 0;

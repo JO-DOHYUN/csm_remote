@@ -290,6 +290,14 @@ void publishControlIslandHealth(uint32_t now_ms) {
   (void)publishControlHealth(health);
 }
 
+void recordBringup(BringupStage stage,
+                   BringupFailure failure = BringupFailure::None,
+                   uint32_t detail = 0u) {
+  if (advanceBringupTrace(&bringup_trace, stage, failure, detail)) {
+    (void)publishBringupTrace(bringup_trace);
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -297,8 +305,7 @@ void setup() {
   bringup_trace.runtime_contract_id =
       static_cast<uint64_t>(CSM_FW_RUNTIME_CONTRACT_ID64);
   bringup_trace.build_id = static_cast<uint32_t>(CSM_FW_BUILD_ID);
-  bringup_trace.stage = static_cast<uint16_t>(BringupStage::M4Entered);
-  (void)publishBringupTrace(bringup_trace);
+  recordBringup(BringupStage::M4Entered);
   RcNormalizerConfig config;
   config.configured = true;
   config.required_channel_mask = kRemoteRequiredRcChannelMask;
@@ -311,27 +318,20 @@ void setup() {
   diagnostics.uart_baud = BOARD_M4_REMOTE_BAUD;
   control_m4_boot_id = initializeControlIpcForM4();
   bringup_trace.m4_boot_id = control_m4_boot_id;
-  bringup_trace.stage = static_cast<uint16_t>(BringupStage::ControlIpcValidated);
-  if (control_m4_boot_id == 0u) {
-    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::ControlIpc);
-  }
-  (void)publishBringupTrace(bringup_trace);
+  recordBringup(BringupStage::ControlIpcValidated,
+                control_m4_boot_id == 0u ? BringupFailure::ControlIpc
+                                         : BringupFailure::None);
   m4_boot_id = initializeRemoteSharedMemoryForM4();
-  bringup_trace.stage = static_cast<uint16_t>(BringupStage::RemoteIpcValidated);
-  if (m4_boot_id == 0u) {
-    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::RemoteIpc);
-  }
-  (void)publishBringupTrace(bringup_trace);
+  recordBringup(BringupStage::RemoteIpcValidated,
+                m4_boot_id == 0u ? BringupFailure::RemoteIpc
+                                  : BringupFailure::None);
   control_executor.begin(control_m4_boot_id,
                          BOARD_M4_M7_PUBLISH_TIMEOUT_US, &fdcan1_owner);
-  bringup_trace.stage = static_cast<uint16_t>(BringupStage::ExecutorInitialized);
-  (void)publishBringupTrace(bringup_trace);
+  recordBringup(BringupStage::ExecutorInitialized);
   control_timebase_initialized = control_timebase.begin(&control_executor);
-  bringup_trace.stage = static_cast<uint16_t>(BringupStage::Tim4Configured);
-  if (!control_timebase_initialized) {
-    bringup_trace.failure = static_cast<uint16_t>(BringupFailure::Tim4);
-  }
-  (void)publishBringupTrace(bringup_trace);
+  recordBringup(BringupStage::Tim4Configured,
+                control_timebase_initialized ? BringupFailure::None
+                                             : BringupFailure::Tim4);
   fdcan1_owner_initialized =
       fdcan1_owner.begin(control_m4_boot_id, &control_executor, &bringup_trace);
   Serial3.begin(BOARD_M4_REMOTE_BAUD, SERIAL_8N1);
@@ -342,13 +342,11 @@ void setup() {
 void loop() {
   if (!foreground_loop_entered) {
     foreground_loop_entered = true;
-    bringup_trace.stage = static_cast<uint16_t>(BringupStage::ForegroundLoopEntered);
-    (void)publishBringupTrace(bringup_trace);
+    recordBringup(BringupStage::ForegroundLoopEntered);
   }
   if (!first_tick_reported && control_timebase.hasTicked()) {
     first_tick_reported = true;
-    bringup_trace.stage = static_cast<uint16_t>(BringupStage::FirstTim4Tick);
-    (void)publishBringupTrace(bringup_trace);
+    recordBringup(BringupStage::FirstTim4Tick);
   }
   const uint32_t now_ms = millis();
   while (Serial3.available() > 0) {

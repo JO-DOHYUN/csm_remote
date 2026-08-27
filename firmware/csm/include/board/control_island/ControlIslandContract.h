@@ -81,6 +81,7 @@ enum class BringupFailure : uint16_t {
   HalStart = 10,
   InterruptLine = 11,
   Notification = 12,
+  ClockContract = 13,
 };
 
 enum class TransactionState : uint8_t {
@@ -168,6 +169,24 @@ struct FdcanRawSnapshot {
   uint32_t hal_state = 0;
   uint32_t hal_error = 0;
 };
+
+struct TxBufferReconciliation {
+  uint32_t pending = 0;
+  uint32_t transmitted = 0;
+  uint32_t cancelled = 0;
+  uint32_t failed = 0;
+};
+
+constexpr TxBufferReconciliation reconcileAcceptedTxBuffers(
+    uint32_t accepted, uint32_t txbrp, uint32_t txbto, uint32_t txbcf) {
+  TxBufferReconciliation result;
+  result.transmitted = accepted & txbto;
+  result.cancelled = accepted & txbcf;
+  const uint32_t terminal = result.transmitted | result.cancelled;
+  result.pending = accepted & txbrp & ~terminal;
+  result.failed = accepted & ~(txbrp | txbto | txbcf);
+  return result;
+}
 
 struct LaneHealth {
   uint32_t schedule_due = 0;
