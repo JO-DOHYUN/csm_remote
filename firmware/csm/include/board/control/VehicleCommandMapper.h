@@ -3,7 +3,6 @@
 #include <stdint.h>
 
 #include "board/authority/AuthorityTypes.h"
-#include "board/control/CanTxGateway.h"
 #include "board/control/OperatorCommand.h"
 
 namespace csm::board::control {
@@ -30,6 +29,17 @@ enum class VehicleCommandMapping : uint8_t {
   VehicleMdps0x007Only = 2,
   // Wire-compatible legacy spelling retained for qualified bench artifacts.
   VehicleBench0x005And0x007 = Vehicle0x005And0x007,
+};
+
+struct CanFrameRequest {
+  authority::ControlSourceId source = authority::ControlSourceId::None;
+  uint32_t command_seq = 0;
+  uint8_t bus = authority::kAuthorityNoBus;
+  uint32_t can_id_flags = 0;
+  uint8_t dlc = 0;
+  uint8_t data[8] = {};
+  uint16_t policy_id = 0;
+  uint16_t rate_bucket = 0;
 };
 
 struct VehicleCommandProfile {

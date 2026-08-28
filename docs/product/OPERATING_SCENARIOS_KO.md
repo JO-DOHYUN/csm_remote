@@ -17,7 +17,7 @@ Authority: `OPERATOR OUTCOMES`
 ## S2 Production 동시 관측
 
 - Preconditions: vehicle evidence와 하나 이상의 observer route.
-- Input/action: RC/autonomy 운용 중 Windows/Android observer 연결·단절.
+- Input/action: RC 또는 Service/HIL Host 운용 중 Windows/Android observer 연결·단절.
 - Expected: observer는 같은 canonical truth를 독립적으로 보고 어느 sink도 control이나
   다른 sink를 막지 않는다.
 - Failure: slow/stalled/lost sink만 bounded 정책에 따라 degraded/closed된다.

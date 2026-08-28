@@ -17,6 +17,8 @@ control:
   hidden_retry: false
   hidden_replay: false
   source_mixing: forbidden
+  source_priority: [remote, host, none]
+  remote_activation_requires: fresh_rc_channels_and_fresh_positive_link_statistics
   authority_handoff: quiescent_cancel_terminal_then_activate
   mutable_executor_state_writer: csm_m4_tim4_only
   foreground_ingress: latest_validated_snapshot_or_event_depth_1

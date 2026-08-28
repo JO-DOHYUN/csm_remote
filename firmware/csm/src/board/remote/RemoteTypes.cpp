@@ -9,6 +9,17 @@ static_assert(!isUsableRemoteLink(RemoteLinkState::Stale),
               "stale remote link must not be usable");
 static_assert(!isUsableRcSampleState(RcSampleState::Failsafe),
               "failsafe RC sample must not be usable");
+static_assert(!hasFreshPositiveLinkStatistics(false, 100u, 0u, 500u),
+              "missing link statistics must not grant RC authority");
+static_assert(!hasFreshPositiveLinkStatistics(true, 0u, 0u, 500u),
+              "zero link quality must not grant RC authority");
+static_assert(!hasFreshPositiveLinkStatistics(
+                  true, kRemoteMetricUnknown, 0u, 500u),
+              "unknown link quality must not grant RC authority");
+static_assert(!hasFreshPositiveLinkStatistics(true, 100u, 501u, 500u),
+              "stale link statistics must not grant RC authority");
+static_assert(hasFreshPositiveLinkStatistics(true, 100u, 500u, 500u),
+              "fresh positive link statistics must remain usable");
 static_assert(remoteLinkStateForRcSampleState(RcSampleState::Lost) ==
                   RemoteLinkState::Searching,
               "lost RC sample must remain a searching link");

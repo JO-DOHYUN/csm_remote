@@ -28,6 +28,9 @@ fdcan = (
     project / "src/board/control_island/M4Fdcan1Owner.cpp"
 ).read_text(encoding="utf-8")
 m4_frontend = (project / "src/m4_remote_frontend.cpp").read_text(encoding="utf-8")
+remote_types = (
+    project / "include/board/remote/RemoteTypes.h"
+).read_text(encoding="utf-8")
 remote_runtime = (
     project / "src/board/control/RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
@@ -47,6 +50,8 @@ for required in (
     "host_semantic_owner: android_vsm",
     "remote_semantic_owner: csm_m7",
     "global_source_authority_owner: csm_m7",
+    "source_priority: [remote, host, none]",
+    "remote_activation_requires: fresh_rc_channels_and_fresh_positive_link_statistics",
     "nominal_request_clock_owner: csm_m4_tim4",
     "latest_state_depth: 1",
     "raw_can_ring_capacity: 512",
@@ -93,6 +98,16 @@ for required in (
 ):
     if required not in main:
         fail(f"M7 integration missing {required}")
+heartbeat_handler = main[
+    main.find("static void handle_host_heartbeat"):
+    main.find("static void handle_host_control_session")
+]
+for required in (
+    "HostFreshnessResult::AnchorEstablished",
+    "emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk",
+):
+    if required not in heartbeat_handler:
+        fail(f"Host heartbeat admission evidence missing {required}")
 for required in (
     "initializeControlIpcForM7",
     "initializeRemoteSharedMemoryForM7",
@@ -158,6 +173,8 @@ for obsolete in ("hardInhibitActive", "safeWireQualified", "hardSafetyQualified"
 for obsolete in (
     "SafetySupervisor", "SafetyState", "SafetyInputs", "HostClearFaultLockout",
     "estop_asserted", "fault_lockout", "safety_supervisor_allows",
+    "BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE",
+    "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH",
 ):
     if obsolete in main:
         fail(f"retired GPIO safety path remains: {obsolete}")
@@ -179,9 +196,20 @@ for path in (
     "src/board/can/BuiltinFdcanDiagnostics.cpp",
     "include/board/control/ControlReleaseSchedule.h",
     "src/board/control/ControlReleaseSchedule.cpp",
+    "include/board/authority/AuthorityManager.h",
+    "src/board/authority/AuthorityManager.cpp",
+    "include/board/authority/AutonomyAuthorityMonitor.h",
+    "src/board/authority/AutonomyAuthorityMonitor.cpp",
+    "include/board/control/RemoteControlOrchestrator.h",
+    "src/board/control/RemoteControlOrchestrator.cpp",
+    "include/board/control/CanTxGateway.h",
+    "src/board/control/CanTxGateway.cpp",
 ):
     if (project / path).exists():
         fail(f"obsolete owner file remains: {path}")
+
+if "BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH" in platformio:
+    fail("obsolete virtual autonomy permission remains in active build")
 
 for required in (
     "HAL_FDCAN_AddMessageToTxBuffer",
@@ -226,6 +254,10 @@ if "bringup_trace.stage =" in m4_frontend:
 if "recordBringup(BringupStage::ForegroundLoopEntered)" not in m4_frontend or \
         "recordBringup(BringupStage::FirstTim4Tick)" not in m4_frontend:
     fail("M4 foreground/TIM4 milestones bypass bring-up trace owner")
+
+if "hasFreshPositiveLinkStatistics" not in remote_types or \
+        "hasFreshPositiveLinkStatistics(" not in m4_frontend:
+    fail("RC authority can be admitted without fresh positive link evidence")
 
 for required in (
     "if (next_slot_ == 0u)",

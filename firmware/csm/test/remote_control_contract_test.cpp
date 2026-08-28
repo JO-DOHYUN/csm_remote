@@ -7,6 +7,7 @@
 #include "board/control_island/M4StaticCyclicExecutor.h"
 #include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlSession.h"
+#include "board/remote/RemoteTypes.h"
 #include "protocol/ControlProtocol.h"
 #include "protocol/TypedRecords.h"
 
@@ -187,6 +188,16 @@ void testSourceManagerOwnershipAndEpochs() {
   assert(rc.source_epoch != host_epoch && rc.permit_mask == 0x03u);
   assert(rc.lanes[kLane005].valid && rc.lanes[kLane007].valid);
   assert(!rc.lanes[kLane364].valid);
+}
+
+void testRemoteAuthorityRequiresFreshPositiveLinkEvidence() {
+  using csm::board::remote::hasFreshPositiveLinkStatistics;
+  using csm::board::remote::kRemoteMetricUnknown;
+  assert(!hasFreshPositiveLinkStatistics(false, 100u, 0u, 500u));
+  assert(!hasFreshPositiveLinkStatistics(true, 0u, 0u, 500u));
+  assert(!hasFreshPositiveLinkStatistics(true, kRemoteMetricUnknown, 0u, 500u));
+  assert(!hasFreshPositiveLinkStatistics(true, 100u, 501u, 500u));
+  assert(hasFreshPositiveLinkStatistics(true, 1u, 500u, 500u));
 }
 
 void testSharedMemoryIntegrityAndBoundedRing() {
@@ -418,6 +429,9 @@ void testHostSessionAndSenderTimeBounds() {
          HostFreshnessResult::AnchorEstablished);
   assert(freshness.acceptHeartbeat(2u, 1100u, 2100u) ==
          HostFreshnessResult::Accepted);
+  // Both results are admitted heartbeat samples. The M7 handler projects each
+  // through CONTROL_ACK; only the second makes sender-time commands admissible.
+  assert(freshness.qualified());
   assert(freshness.acceptCommand(3u, 1100u, 2150u) ==
          HostFreshnessResult::Stale);
 
@@ -437,6 +451,7 @@ void testHostSessionAndSenderTimeBounds() {
 
 int main() {
   testHostSessionAndSenderTimeBounds();
+  testRemoteAuthorityRequiresFreshPositiveLinkEvidence();
   testSourceManagerOwnershipAndEpochs();
   testSharedMemoryIntegrityAndBoundedRing();
   testLongSafeCyclicAndRepeatedSafeStaging();

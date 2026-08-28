@@ -562,20 +562,6 @@
 #define BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED BOARD_ENABLE_HOST_CAN_TX_BUILTIN
 #endif
 
-// Production local control still requires an explicit autonomy-release source.
-// Service/HIL may use the bounded virtual provider; it is never production evidence.
-#ifndef BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE
-#define BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE 0
-#endif
-#ifndef BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
-#define BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH 0
-#endif
-
-#if BOARD_CSM_PROFILE_REMOTE_PRODUCT && !BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH && \
-    BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH
-#error "RemoteProduct may not use virtual autonomy evidence"
-#endif
-
 #if BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING && \
     (!BOARD_CSM_PROFILE_REMOTE_PRODUCT || BOARD_CSM_PROFILE_REMOTE_MDPS_BENCH || \
      !BOARD_ENABLE_REMOTE_CONTROL || !BOARD_ENABLE_REMOTE_AUTHORITY || \
@@ -595,8 +581,7 @@
      !BOARD_ENABLE_FEEDER_UART || BOARD_ENABLE_PRODUCT_VEHICLE_COMMAND_MAPPING || \
      BOARD_ENABLE_MDPS_BENCH_MAPPING || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || \
      !BOARD_ENABLE_HOST_DOWNLINK || !BOARD_HOST_DOWNLINK_TRANSPORT_WIFI || \
-     !BOARD_ENABLE_CONTROL_ISLAND || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED || \
-     !BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)
+     !BOARD_ENABLE_CONTROL_ISLAND || BOARD_BUILTIN_CAN_CONTROL_TX_ALLOWED)
 #error "Service/HIL vehicle mapping violates the feeder/J4 bench contract"
 #endif
 
@@ -2701,10 +2686,6 @@ static void emit_capability() {
   config.host_command_rx = BOARD_ENABLE_HOST_DOWNLINK ? 1 : 0;
   config.control_path = BOARD_REMOTE_SEMANTIC_CONTROL_ENABLED ? 3 :
       (BOARD_ENABLE_HOST_CAN_TX_ANY ? 1 : 0);
-  if (!(BOARD_AUTONOMY_RELEASE_PROVIDER_AVAILABLE ||
-        BOARD_ALLOW_VIRTUAL_CONTROL_EVIDENCE_BENCH)) {
-    config.control_path = 0;
-  }
   config.usb_backpressure_isolated = 1;
   config.dtr_reset_sensitive = BOARD_USB_CDC_RECONNECT_RESET_MS != 0 ? 1 : 0;
   config.passive_acceptance_allowed = passive_acceptance_allowed();
@@ -5231,8 +5212,15 @@ static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t
           command_id, host_mono_ms, now_ms);
   if (freshness == csm::board::control::HostFreshnessResult::Accepted) {
     host_control_session.heartbeat(now_ms);
-  } else if (freshness !=
-             csm::board::control::HostFreshnessResult::AnchorEstablished) {
+  }
+  if (freshness == csm::board::control::HostFreshnessResult::Accepted ||
+      freshness ==
+          csm::board::control::HostFreshnessResult::AnchorEstablished) {
+    // A socket write is not heartbeat admission evidence. Publish the existing
+    // admission ACK so the Host waits for two board-observed samples before ARM.
+    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0,
+                     0, host_heartbeat_total);
+  } else {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault,
         now_ms);

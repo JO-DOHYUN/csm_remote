@@ -7,8 +7,9 @@ Authority: `PRODUCT PURPOSE / PROFILES / OPERATOR GUARANTEES`
 
 ## 제품 목적
 
-CSM Remote는 RC, autonomy, 승인된 service host의 제어 입력을 권한과 admission
-경계에서 판정해 차량의 단일 물리 CAN 실행 경계로 전달한다. 동시에 차량 수신,
+CSM Remote는 RC와 승인된 service host의 제어 입력을 권한과 admission 경계에서
+판정해 차량의 단일 물리 CAN 실행 경계로 전달한다. RC가 Host보다 높은 우선순위를
+가지며 현재 active profile에는 autonomy source가 없다. 동시에 차량 수신,
 제어 admission, terminal outcome, 실제 실행, board/transport 상태를 canonical typed
 evidence로 만들어 독립 observer에 제공한다.
 

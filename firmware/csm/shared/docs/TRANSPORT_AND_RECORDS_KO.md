@@ -347,15 +347,17 @@ magnitude through 5% emits stop. Above 5%, the first active speed is 200 and lat
 speeds are rounded to 50-unit steps through 1000 in standard ID `0x005`, DLC8:
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
 Active mode never carries speed `1..199`.
-RC source loss and RC failsafe use only `AA 02 00 00 00 00 00 00` when
-upstream autonomy is explicitly released and the authority gate allows TX.
+RC source loss and RC failsafe use only `AA 02 00 00 00 00 00 00` while the
+healthy physical transport follows the frozen SAFE wire policy.
 Drive is periodic at 5 ms; steering is independently periodic at 20 ms. Both pass the limiter,
 and a direction reversal reaches zero before applying the opposite direction. A repeated or frozen
 mailbox sequence cannot refresh source freshness.
 
-Remote authority order is `upstream autonomy > RC remote >
-service host > monitoring`. A fresh usable RC sample owns only `0x005/0x007`;
-loss immediately revokes RC ACTIVE and exposes the lower-priority source boundary.
+Remote authority order is `RC remote > service host > monitoring`; this active
+profile has no autonomy source. A fresh usable RC sample requires both a fresh
+channel frame and fresh positive CRSF link-statistics, and owns only `0x005/0x007`.
+Missing/zero/stale link-statistics cannot preempt Host. RC loss immediately revokes
+RC ACTIVE and exposes the lower-priority source boundary.
 Malformed CRSF or IPC evidence cannot remain ACTIVE.
 
 `CAN_RX_RAW` and `CAN_TX_RAW` payload, 30 bytes:
@@ -677,6 +679,9 @@ Safety-gated control session:
 - Production host TX requires heartbeat alive, arm accepted, lease valid, a
   bounded sender-time timeline, and a ready target backend. The first heartbeat
   anchors a transport epoch; a second coherent sample makes commands admissible.
+  Each board-admitted heartbeat emits the existing admission-only `CONTROL_ACK`;
+  Host ARM must count those ACKs, never socket-write completion, as the two
+  coherent samples.
   Excess sender/arrival divergence latches the epoch until reconnect. Heartbeat
   resume alone never auto-arms.
 - Initial fixed Service/HIL budgets are heartbeat extra transport lag `100 ms`,

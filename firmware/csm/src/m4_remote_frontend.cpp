@@ -105,7 +105,7 @@ void updateSampleState(uint32_t now_ms) {
              : link_statistics.uplink_rssi_ant2_dbm_magnitude)
       : kRemoteMetricUnknown;
 
-  if (has_link_statistics && link_statistics.uplink_link_quality == 0) {
+  if (has_link_statistics && link_statistics.uplink_link_quality == 0u) {
     current_sample.sample_state = RcSampleState::Failsafe;
   } else if (!has_rc_sample) {
     current_sample.sample_state =
@@ -117,11 +117,12 @@ void updateSampleState(uint32_t now_ms) {
         frontendMalformedTotal() != malformed_total_at_last_rc
             ? RcSampleState::ProtocolFault
             : RcSampleState::Stale;
-  } else if (has_link_statistics &&
-             now_ms - last_link_statistics_ms >
-                 BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS) {
-    // Fresh channel frames with a dead link-statistics lane are not a
-    // trustworthy R16SM session. Keep authority reserved and fail closed.
+  } else if (!hasFreshPositiveLinkStatistics(
+                 has_link_statistics, current_sample.link_quality,
+                 diagnostics.last_link_statistics_age_ms,
+                 BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS)) {
+    // A channel-shaped frame without fresh positive link evidence can be
+    // floating/noisy Serial3 ingress. It must never preempt Host authority.
     current_sample.sample_state = RcSampleState::ProtocolFault;
   } else {
     current_sample.sample_state = RcSampleState::Ok;

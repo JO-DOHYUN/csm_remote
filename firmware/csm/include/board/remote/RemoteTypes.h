@@ -54,6 +54,14 @@ constexpr bool isUsableRcSampleState(RcSampleState state) {
   return state == RcSampleState::Ok;
 }
 
+constexpr bool hasFreshPositiveLinkStatistics(bool present,
+                                              uint8_t uplink_link_quality,
+                                              uint32_t age_ms,
+                                              uint32_t max_age_ms) {
+  return present && uplink_link_quality != kRemoteMetricUnknown &&
+         uplink_link_quality > 0u && age_ms <= max_age_ms;
+}
+
 constexpr RemoteLinkState remoteLinkStateForRcSampleState(RcSampleState state) {
   switch (state) {
     case RcSampleState::Lost:

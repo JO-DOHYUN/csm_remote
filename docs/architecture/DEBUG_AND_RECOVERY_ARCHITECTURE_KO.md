@@ -32,16 +32,16 @@ reset / power event
        -> BootRecovery (backup SRAM 복구/새 boot commit)
        -> watchdog on/off 결정
        -> Wi-Fi requested/effective mode 결정
-  -> safety pins / USB sink
+  -> USB sink
   -> Wi-Fi worker start request
   -> CAN frontend / M4 RC frontend / RemoteControlRuntime
   -> deterministic main service loop
 
 R16SM -> M4 UART/CRSF -> SRAM4 latest sample -> M7 RC source
-      -> upstream-autonomy release -> RC/service arbitration
-      -> limiter -> explicit vehicle mapper -> CanTxGateway -> CAN backend
+      -> RC-priority global source selection against Service/HIL Host
+      -> limiter -> explicit vehicle mapper -> final snapshot -> M4 FDCAN1 owner
 
-CAN/RC/safety/recovery evidence
+CAN/RC/control/recovery evidence
   -> bounded admission -> CanonicalPublisher (order + encode once)
   -> UsbCdcSink queue
   -> WifiTcpSink queue -> mailbox -> WifiSocketWorker
@@ -218,13 +218,12 @@ scalar black box, compact event ring, quarantine, canonical loss/failure counter
 release artifact 전에 다음 gate가 모두 닫혀야 한다.
 
 1. bootloader early reset-latch 보존 또는 동등한 외부 reset/power evidence
-2. upstream autonomy monitor의 실제 CAN profile·runtime wiring과 fail-closed HIL
-3. 실제 차량 CAN mapping 승인; `0x007` MDPS mapper는 bench 전용이며 기본 Off
-4. 실제 vehicle safety 입력과 CAN backend fault의 fail-safe 의미 검증
-5. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`; driver FIFO enqueue 결과만으로
+2. 실제 차량 CAN mapping 승인; `0x007` MDPS mapper는 bench 전용이며 기본 Off
+3. CAN backend fault의 fail-safe 의미 검증
+4. FDCAN TX completion/TXBTO와 상관된 `CAN_TX_RAW`; driver FIFO enqueue 결과만으로
    actual bus transmission을 주장하지 않음
-6. Kvaser 등 외부 analyzer에서 ID/payload/주기/ACK와 typed evidence 대조
-7. RC + dual CAN + Windows USB + Android Wi-Fi 동시 HIL, fault injection, 장시간 soak
+5. Kvaser 등 외부 analyzer에서 ID/payload/주기/ACK와 typed evidence 대조
+6. RC + dual CAN + Windows USB + Android Wi-Fi 동시 HIL, fault injection, 장시간 soak
 
 이 gate 전의 Production Remote profile은 RC/CAN 관측 vertical slice이며 vehicle
 control release artifact가 아니다.
