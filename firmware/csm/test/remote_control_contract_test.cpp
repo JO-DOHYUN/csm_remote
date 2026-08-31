@@ -641,24 +641,58 @@ void testBringupTraceMonotonicFailureRetention() {
   assert(failed_then_advanced.failure_detail == 499999u);
 }
 
-void testHostSessionAndSenderTimeBounds() {
+void testHostSessionCausalAckProofAndConsumedWatermark() {
   csm::board::control::HostCommandFreshness freshness;
   assert(!freshness.begin({}));
   csm::board::control::HostCommandFreshnessConfig limits;
-  limits.heartbeat_max_extra_lag_ms = 100u;
-  limits.command_max_age_ms = 40u;
-  limits.clock_future_tolerance_ms = 20u;
+  limits.proof_timeout_ms = 300u;
   assert(freshness.begin(limits));
   using csm::board::control::HostFreshnessResult;
-  assert(freshness.acceptHeartbeat(1u, 1000u, 2000u) ==
-         HostFreshnessResult::AnchorEstablished);
-  assert(freshness.acceptHeartbeat(2u, 1100u, 2100u) ==
+
+  // T01: a bootstrap heartbeat is ACKable but cannot qualify liveness.
+  assert(freshness.acceptHeartbeat(1u, 0u, 1000u, 2000u) ==
+         HostFreshnessResult::BootstrapAccepted);
+  assert(!freshness.qualified() && !freshness.proofAlive(2000u));
+
+  // T02/T05: only a causal echo qualifies; forward commands then pass.
+  assert(freshness.acceptHeartbeat(2u, 1u, 500000u, 2100u) ==
          HostFreshnessResult::Accepted);
-  // Both results are admitted heartbeat samples. The M7 handler projects each
-  // through CONTROL_ACK; only the second makes sender-time commands admissible.
   assert(freshness.qualified());
-  assert(freshness.acceptCommand(3u, 1100u, 2150u) ==
-         HostFreshnessResult::Stale);
+  assert(freshness.acceptCommand(3u, 2150u) ==
+         HostFreshnessResult::Accepted);
+
+  // T03/T07: a wrong echo consumes its ID but refreshes neither pending nor
+  // proof time, so repeated wrong proof cannot keep authority alive.
+  assert(freshness.acceptHeartbeat(4u, 1u, 600000u, 2200u) ==
+         HostFreshnessResult::ProofMismatch);
+  assert(freshness.proofAlive(2399u));
+  assert(freshness.acceptHeartbeat(5u, 1u, 700000u, 2399u) ==
+         HostFreshnessResult::ProofMismatch);
+  freshness.update(2401u);
+  assert(!freshness.proofAlive(2401u));
+  assert(freshness.proofTimeoutTotal() == 1u);
+
+  // T04/T06/T08: consumed IDs remain replay-protected across proof timeout and
+  // policy rejection; a late heartbeat is bootstrap only, never auto-resume.
+  assert(freshness.acceptCommand(5u, 2402u) == HostFreshnessResult::Replay);
+  assert(freshness.acceptCommand(6u, 2402u) ==
+         HostFreshnessResult::ProofRequired);
+  assert(freshness.acceptCommand(6u, 2403u) == HostFreshnessResult::Replay);
+  assert(freshness.acceptHeartbeat(7u, 2u, 800000u, 2404u) ==
+         HostFreshnessResult::BootstrapAccepted);
+  assert(!freshness.qualified());
+  assert(freshness.acceptHeartbeat(8u, 7u, 900000u, 2410u) ==
+         HostFreshnessResult::Accepted);
+
+  // T09: uint32 command IDs advance correctly through wrap.
+  freshness.resetTransportEpoch();
+  assert(freshness.acceptHeartbeat(0xFFFFFFFEu, 0u, 0u, 10u) ==
+         HostFreshnessResult::BootstrapAccepted);
+  assert(freshness.acceptHeartbeat(0xFFFFFFFFu, 0xFFFFFFFEu, 0u, 20u) ==
+         HostFreshnessResult::Accepted);
+  assert(freshness.acceptCommand(1u, 21u) == HostFreshnessResult::Accepted);
+  assert(freshness.acceptCommand(0xFFFFFFFFu, 22u) ==
+         HostFreshnessResult::Replay);
 
   csm::board::control::HostControlSession session;
   session.begin(0u);
@@ -667,15 +701,28 @@ void testHostSessionAndSenderTimeBounds() {
   assert(session.arm(10u, 500u, true) == csm::ControlReasonOk);
   const uint32_t first = session.activationEpoch();
   session.update(511u);
+  // T11: proof can remain alive while the independent lease closes.
   assert(!session.leaseAlive(511u) && session.timeoutCount() == 1u);
   session.heartbeat(512u);
   assert(session.arm(512u, 500u, true) == csm::ControlReasonOk);
   assert(session.activationEpoch() > first);
+
+  // T10: an otherwise live lease cannot compensate for expired proof.
+  freshness.resetTransportEpoch();
+  assert(freshness.acceptHeartbeat(10u, 0u, 0u, 1000u) ==
+         HostFreshnessResult::BootstrapAccepted);
+  assert(freshness.acceptHeartbeat(11u, 10u, 0u, 1010u) ==
+         HostFreshnessResult::Accepted);
+  session.heartbeat(1010u);
+  assert(session.arm(1010u, 1000u, true) == csm::ControlReasonOk);
+  freshness.update(1311u);
+  assert(!freshness.proofAlive(1311u));
+  assert(session.leaseAlive(1311u));
 }
 }  // namespace
 
 int main() {
-  testHostSessionAndSenderTimeBounds();
+  testHostSessionCausalAckProofAndConsumedWatermark();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfStreamResynchronizationAndR16smFixture();
   testCrsfModernFramesAndChannelValidity();

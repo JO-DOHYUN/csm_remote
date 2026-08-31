@@ -453,14 +453,8 @@
 #define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 256
 #endif
 
-#ifndef BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS
-#define BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS 100
-#endif
-#ifndef BOARD_HOST_CAN_TX_MAX_AGE_MS
-#define BOARD_HOST_CAN_TX_MAX_AGE_MS 40
-#endif
-#ifndef BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS
-#define BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS 20
+#ifndef BOARD_HOST_PROOF_TIMEOUT_MS
+#define BOARD_HOST_PROOF_TIMEOUT_MS 300
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -2716,8 +2710,7 @@ static void emit_capability() {
   config.control_schema = csm::kHostControlSchema;
   config.terminal_evidence_schema = csm::kControlIslandHealthSchema;
   config.threshold_qualification =
-      host_command_freshness.timingQualified() &&
-              BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS != 0 &&
+      BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS != 0 &&
               BOARD_USB_TRANSIENT_COVERAGE_MS != 0 &&
               BOARD_WIFI_TRANSIENT_COVERAGE_MS != 0
           ? csm::kThresholdQualificationFrozen
@@ -2725,15 +2718,14 @@ static void emit_capability() {
   config.hardware_tx_slots = csm::board::control_island::kLaneCount;
   config.host_software_retention = 0;
   config.hw_pending_stale_us = 0;
-  config.heartbeat_lag_ms = BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
-  config.command_age_ms = BOARD_HOST_CAN_TX_MAX_AGE_MS;
-  config.future_tolerance_ms = BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS;
-  config.observed_heartbeat_lag_ms =
-      host_command_freshness.observedHeartbeatExtraLagMs();
-  config.observed_command_age_ms =
-      host_command_freshness.observedCommandAgeMs();
-  config.observed_future_lead_ms =
-      host_command_freshness.observedCommandFutureLeadMs();
+  config.host_proof_timeout_ms = host_command_freshness.proofTimeoutMs();
+  config.host_proof_ok_total = host_command_freshness.proofOkTotal();
+  config.host_replay_total = host_command_freshness.replayTotal();
+  config.host_proof_max_gap_ms = host_command_freshness.maxProofGapMs();
+  config.host_proof_mismatch_total =
+      host_command_freshness.proofMismatchTotal();
+  config.host_proof_timeout_total =
+      host_command_freshness.proofTimeoutTotal();
   config.admission_reject_total =
       host_can_tx_rejected_total - host_can_tx_transient_rejected_total;
   config.transient_reject_total = host_can_tx_transient_rejected_total;
@@ -4312,10 +4304,38 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
 #endif
 }
 
+static uint8_t host_freshness_reason(
+    csm::board::control::HostFreshnessResult result) {
+  using csm::board::control::HostFreshnessResult;
+  switch (result) {
+    case HostFreshnessResult::ProofRequired:
+      return csm::ControlReasonHostProofRequired;
+    case HostFreshnessResult::ProofMismatch:
+      return csm::ControlReasonHostProofMismatch;
+    case HostFreshnessResult::Replay:
+      return csm::ControlReasonReplay;
+    case HostFreshnessResult::ProofExpired:
+    case HostFreshnessResult::NotConfigured:
+      return csm::ControlReasonHostTimeout;
+    case HostFreshnessResult::Accepted:
+    case HostFreshnessResult::BootstrapAccepted:
+      return csm::ControlReasonOk;
+  }
+  return csm::ControlReasonBadProtocol;
+}
+
+static bool host_freshness_requires_close(
+    csm::board::control::HostFreshnessResult result) {
+  using csm::board::control::HostFreshnessResult;
+  return result == HostFreshnessResult::ProofRequired ||
+         result == HostFreshnessResult::ProofExpired ||
+         result == HostFreshnessResult::ProofMismatch ||
+         result == HostFreshnessResult::NotConfigured;
+}
+
 static void close_host_control_epoch(
     csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
   host_authority_gate.beginClose(reason, 0u);
-  host_command_freshness.reset();
   host_control_session.invalidate(now_ms);
   control_source_manager.clearHost();
   host_authority_gate.observeHostSlots(0u);
@@ -4335,6 +4355,7 @@ static void service_host_authority_boundary(uint32_t now_ms) {
 
 static void update_host_control_session() {
   const uint32_t now_ms = millis();
+  host_command_freshness.update(now_ms);
   host_control_session.update(now_ms);
   service_host_authority_boundary(now_ms);
 }
@@ -5126,6 +5147,21 @@ static void handle_host_control_state(const uint8_t* payload, uint16_t len) {
   const uint8_t valid_mask =
       payload[csm::kHostControlStateValidMaskOffset];
   const uint32_t now_ms = millis();
+  const csm::board::control::HostFreshnessResult freshness =
+      host_command_freshness.acceptCommand(command_id, now_ms);
+  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
+    if (host_freshness_requires_close(freshness)) {
+      close_host_control_epoch(
+          csm::board::control::HostControlCloseReason::FreshnessFault,
+          now_ms);
+    }
+    ++host_can_tx_rejected_total;
+    emit_control_ack(command_id, ControlAckRejected,
+                     host_freshness_reason(freshness),
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_control_state_request_total);
+    return;
+  }
   service_host_authority_boundary(now_ms);
   if (contract_id != csm::kHostControlStateContractId ||
       !host_authority_gate.admissionOpen()) {
@@ -5147,7 +5183,7 @@ static void handle_host_control_state(const uint8_t* payload, uint16_t len) {
   if (!accepted) {
     host_can_tx_rejected_total++;
     emit_control_ack(command_id, ControlAckRejected,
-                     csm::ControlReasonStaleCommand,
+                     csm::ControlReasonReplay,
                      BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
                      host_control_state_request_total);
     return;
@@ -5168,6 +5204,22 @@ static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
     return;
   }
   command_id = rd_u32_le(&payload[csm::kHostControlNShotCommandIdOffset]);
+  const uint32_t now_ms = millis();
+  const csm::board::control::HostFreshnessResult freshness =
+      host_command_freshness.acceptCommand(command_id, now_ms);
+  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
+    if (host_freshness_requires_close(freshness)) {
+      close_host_control_epoch(
+          csm::board::control::HostControlCloseReason::FreshnessFault,
+          now_ms);
+    }
+    ++host_can_tx_rejected_total;
+    emit_control_ack(command_id, ControlAckRejected,
+                     host_freshness_reason(freshness),
+                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
+                     host_can_tx_rejected_total);
+    return;
+  }
   const uint32_t contract_id =
       rd_u32_le(&payload[csm::kHostControlNShotContractIdOffset]);
   const uint8_t lane = payload[csm::kHostControlNShotLaneOffset];
@@ -5207,25 +5259,30 @@ static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t
   const uint32_t now_ms = millis();
   const uint32_t host_mono_ms =
       rd_u32_le(&payload[csm::kHostHeartbeatMonoMsOffset]);
+  const uint32_t ack_ref =
+      rd_u32_le(&payload[csm::kHostHeartbeatAckRefOffset]);
   const csm::board::control::HostFreshnessResult freshness =
       host_command_freshness.acceptHeartbeat(
-          command_id, host_mono_ms, now_ms);
+          command_id, ack_ref, host_mono_ms, now_ms);
   if (freshness == csm::board::control::HostFreshnessResult::Accepted) {
     host_control_session.heartbeat(now_ms);
   }
   if (freshness == csm::board::control::HostFreshnessResult::Accepted ||
       freshness ==
-          csm::board::control::HostFreshnessResult::AnchorEstablished) {
-    // A socket write is not heartbeat admission evidence. Publish the existing
-    // admission ACK so the Host waits for two board-observed samples before ARM.
+          csm::board::control::HostFreshnessResult::BootstrapAccepted) {
+    // Bootstrap is ACKed but does not refresh Host liveness. The next heartbeat
+    // must causally echo this accepted command ID.
     emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0,
                      0, host_heartbeat_total);
   } else {
+    if (host_freshness_requires_close(freshness)) {
+      host_command_freshness.invalidateProof();
+    }
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault,
         now_ms);
     emit_control_ack(command_id, ControlAckRejected,
-                     csm::ControlReasonStaleCommand, 0xFF, 0, 0,
+                     host_freshness_reason(freshness), 0xFF, 0, 0,
                      host_heartbeat_total);
   }
   if ((host_heartbeat_total & 0x3Fu) == 1) {
@@ -5264,12 +5321,33 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
   lease_ms = rd_u16_le(&payload[csm::kHostControlSessionLeaseMsOffset]);
   host_mono_ms =
       rd_u32_le(&payload[csm::kHostControlSessionMonoMsOffset]);
+  (void)host_mono_ms;
   const uint8_t control_schema =
       payload[csm::kHostControlSessionSchemaOffset];
 
   const uint32_t now_ms = millis();
   uint8_t reason = ControlReasonOk;
   uint8_t status = ControlAckAccepted;
+  const csm::board::control::HostFreshnessResult freshness =
+      action == csm::HostControlDisarm
+          ? host_command_freshness.consumeCommand(command_id)
+          : host_command_freshness.acceptCommand(command_id, now_ms);
+  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
+    if (host_freshness_requires_close(freshness)) {
+      close_host_control_epoch(
+          csm::board::control::HostControlCloseReason::FreshnessFault,
+          now_ms);
+    }
+    ++host_can_tx_rejected_total;
+    const uint8_t freshness_reason = host_freshness_reason(freshness);
+    emit_control_ack(command_id, ControlAckRejected, freshness_reason,
+                     requested_bus, 0, 0, host_control_session_total);
+    emit_board_event(
+        EventHostControlSession,
+        (static_cast<uint16_t>(action) << 8) | freshness_reason,
+        host_control_session_total);
+    return;
+  }
   if (action != csm::HostControlDisarm &&
       control_schema != csm::kHostControlSchema) {
     host_can_tx_rejected_total++;
@@ -5282,29 +5360,6 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
             csm::ControlReasonBadProtocol,
         host_control_session_total);
     return;
-  }
-  if (action != csm::HostControlDisarm) {
-    const csm::board::control::HostFreshnessResult freshness =
-        host_command_freshness.acceptCommand(
-            command_id, host_mono_ms, now_ms);
-    if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
-      if (freshness ==
-          csm::board::control::HostFreshnessResult::FaultLatched) {
-        close_host_control_epoch(
-            csm::board::control::HostControlCloseReason::FreshnessFault,
-            now_ms);
-      }
-      host_can_tx_rejected_total++;
-      emit_control_ack(command_id, ControlAckRejected,
-                       csm::ControlReasonStaleCommand, requested_bus, 0, 0,
-                       host_control_session_total);
-      emit_board_event(
-          EventHostControlSession,
-          (static_cast<uint16_t>(action) << 8) |
-              csm::ControlReasonStaleCommand,
-          host_control_session_total);
-      return;
-    }
   }
   switch (action) {
     case csm::HostControlDisarm:
@@ -5444,6 +5499,7 @@ static void service_host_downlink(int budget) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::TransportEpochClosed,
         millis());
+    host_command_freshness.resetTransportEpoch();
     last_wifi_epoch = wifi_epoch;
   }
   Stream* stream = wifi_tcp_sink.downlinkStream();
@@ -5740,11 +5796,7 @@ void setup() {
   host_control_session.begin(millis());
   host_authority_gate.reset();
   csm::board::control::HostCommandFreshnessConfig freshness_config;
-  freshness_config.heartbeat_max_extra_lag_ms =
-      BOARD_HOST_HEARTBEAT_MAX_EXTRA_LAG_MS;
-  freshness_config.command_max_age_ms = BOARD_HOST_CAN_TX_MAX_AGE_MS;
-  freshness_config.clock_future_tolerance_ms =
-      BOARD_HOST_CLOCK_FUTURE_TOLERANCE_MS;
+  freshness_config.proof_timeout_ms = BOARD_HOST_PROOF_TIMEOUT_MS;
   host_command_freshness_ok =
       host_command_freshness.begin(freshness_config);
   voltage_adc_ok = init_voltage_adc_lane();

@@ -15,6 +15,7 @@ static constexpr uint16_t kHostHeartbeatPayloadLen = 12;
 static constexpr uint16_t kHostControlSessionPayloadLen = 24;
 static constexpr uint8_t kHostHeartbeatCommandIdOffset = 0;
 static constexpr uint8_t kHostHeartbeatMonoMsOffset = 4;
+static constexpr uint8_t kHostHeartbeatAckRefOffset = 8;
 static constexpr uint8_t kHostControlSessionCommandIdOffset = 0;
 static constexpr uint8_t kHostControlSessionActionOffset = 4;
 static constexpr uint8_t kHostControlSessionBusOffset = 5;

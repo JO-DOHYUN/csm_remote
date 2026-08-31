@@ -22,6 +22,9 @@ enum ControlAckReason : uint8_t {
   ControlReasonNotArmed = 9,
   ControlReasonHostTimeout = 10,
   ControlReasonControlLeaseExpired = 11,
+  ControlReasonHostProofRequired = 12,
+  ControlReasonHostProofMismatch = 13,
+  ControlReasonReplay = 14,
   ControlReasonQueueFull = 16,
   ControlReasonTxBusy = 17,
   ControlReasonBusOff = 18,
@@ -32,7 +35,6 @@ enum ControlAckReason : uint8_t {
   ControlReasonRateLimited = 23,
   ControlReasonUnsupportedCommand = 24,
   ControlReasonAuthorityDenied = 25,
-  ControlReasonStaleCommand = 26,
 };
 
 }  // namespace csm

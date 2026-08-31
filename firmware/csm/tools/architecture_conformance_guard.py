@@ -55,6 +55,15 @@ remote_runtime = (
 typed_records = (project / "include/protocol/TypedRecords.h").read_text(
     encoding="utf-8"
 )
+host_commands = (project / "include/protocol/HostCommands.h").read_text(
+    encoding="utf-8"
+)
+freshness_header = (
+    project / "include/board/control/HostCommandFreshness.h"
+).read_text(encoding="utf-8")
+freshness_source = (
+    project / "src/board/control/HostCommandFreshness.cpp"
+).read_text(encoding="utf-8")
 m7_linker = (project / "linker/portenta_h7_m7_product.ld").read_text(
     encoding="utf-8"
 )
@@ -82,6 +91,9 @@ for required in (
     "idle_safe: FixedSafeFrame_AA02000000000000",
     "idle_safe: FixedSafeFrame_8200000000000000",
     "evidence_only: true",
+    "host_liveness_owner: csm_m7_receiver_local_causal_ack_proof",
+    "host_command_id_reset: m7_boot_or_new_tcp_epoch_only",
+    "host_mono_runtime_gate: false",
 ):
     if required not in manifest:
         fail(f"active manifest missing {required}")
@@ -122,11 +134,38 @@ heartbeat_handler = main[
     main.find("static void handle_host_control_session")
 ]
 for required in (
-    "HostFreshnessResult::AnchorEstablished",
+    "HostFreshnessResult::BootstrapAccepted",
+    "kHostHeartbeatAckRefOffset",
+    "host_command_freshness.acceptHeartbeat(\n          command_id, ack_ref",
     "emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk",
 ):
     if required not in heartbeat_handler:
         fail(f"Host heartbeat admission evidence missing {required}")
+for source, required in (
+    (host_commands, "kHostHeartbeatAckRefOffset = 8"),
+    (typed_records, "kHostControlSchema = 3"),
+    (freshness_source, "ack_ref != pending_heartbeat_id_"),
+    (freshness_source, "consumeCommand(command_id)"),
+    (freshness_source, "now_ms - last_proof_ms_ <= config_.proof_timeout_ms"),
+):
+    if required not in source:
+        fail(f"Host causal-proof contract missing {required}")
+for obsolete in (
+    "heartbeat_max_extra_lag_ms",
+    "command_max_age_ms",
+    "clock_future_tolerance_ms",
+    "estimated_host_now",
+):
+    if obsolete in freshness_header or obsolete in freshness_source:
+        fail(f"obsolete cross-clock Host gate remains: {obsolete}")
+if "host_command_freshness.resetTransportEpoch();" not in main:
+    fail("Host command watermark lacks explicit transport-epoch reset")
+close_handler = main[
+    main.find("static void close_host_control_epoch"):
+    main.find("static void service_host_authority_boundary")
+]
+if "host_command_freshness" in close_handler:
+    fail("ordinary Host close resets causal proof or command watermark")
 for required in (
     "initializeControlIpcForM7",
     "initializeRemoteSharedMemoryForM7",

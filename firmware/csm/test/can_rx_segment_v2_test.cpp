@@ -237,7 +237,7 @@ void capability_v7_advertises_control_and_qualification_truth() {
   config.threshold_qualification = 0;
   config.hardware_tx_slots = 3;
   config.host_software_retention = 0;
-  config.observed_heartbeat_lag_ms = 17;
+  config.host_proof_max_gap_ms = 17;
   config.intentional_cancel_total = 2;
   config.hardware_failure_total = 3;
   config.tracking_failure_total = 4;
@@ -253,7 +253,7 @@ void capability_v7_advertises_control_and_qualification_truth() {
   CHECK(payload[csm::kCapabilityThresholdQualificationOffset] == 0);
   CHECK(payload[csm::kCapabilityHardwareTxSlotsOffset] == 3);
   CHECK(csm::rd_u16_le(&payload[csm::kCapabilityHostSoftwareRetentionOffset]) == 0);
-  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityObservedHeartbeatLagMsOffset]) == 17);
+  CHECK(csm::rd_u32_le(&payload[csm::kCapabilityHostProofMaxGapMsOffset]) == 17);
   CHECK(csm::rd_u32_le(&payload[csm::kCapabilityIntentionalCancelTotalOffset]) == 2);
   CHECK(csm::rd_u32_le(&payload[csm::kCapabilityHardwareFailureTotalOffset]) == 3);
   CHECK(csm::rd_u32_le(&payload[csm::kCapabilityTrackingFailureTotalOffset]) == 4);

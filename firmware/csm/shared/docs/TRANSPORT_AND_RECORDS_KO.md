@@ -491,10 +491,9 @@ Current `CONTROL_ACK` reasons:
 - `9` safety not armed
 - `10` host heartbeat timeout
 - `11` control lease expired
-- `12` safety lockout
-- `13` estop asserted
-- `14` field power lost
-- `15` encoder fault
+- `12` Host causal proof required
+- `13` Host heartbeat ACK reference mismatch
+- `14` replayed/non-forward Host command ID
 - `16` queue full
 - `17` TX busy
 - `18` bus off
@@ -505,7 +504,6 @@ Current `CONTROL_ACK` reasons:
 - `23` rate limited
 - `24` unsupported command
 - `25` authority denied
-- `26` stale/future/replayed Host sender-time command or unqualified timeline
 
 `HOST_CAN_TX_REQUEST` record 10 is legacy decode-only and is never admitted by the
 active REV.B profile.
@@ -654,15 +652,12 @@ Current active Service/HIL Host policy:
 - State/transaction ACK remains admission-only. M4 health and independent CAN
   observer records carry physical terminal truth.
 
-Safety-gated control session:
+Host control session:
 - `HOST_HEARTBEAT` payload, 12 bytes:
   - `0..3 command_id u32`
-  - `4..7 host_mono_ms u32`
-  - `8..9 flags u16`
-  - `10..11 reserved u16`
-  - `12..15 host_mono_ms u32`
-  - `16 control_schema u8`: `2` for ARM/renew; DISARM remains fail-safe.
-  - `17..23 reserved`
+  - `4..7 host_mono_ms u32`: diagnostic only; never a hard admission clock
+  - `8..11 ack_ref u32`: previous heartbeat command ID whose Accepted ACK was
+    observed by Android; `0` is allowed only for bootstrap
 - `HOST_CONTROL_SESSION` payload, 24 bytes:
   - `0..3 command_id u32`
   - `4 action u8`: `0` disarm, `1` arm, `2` renew lease, `3` install neutral profile reserved
@@ -670,26 +665,28 @@ Safety-gated control session:
   - `6..7 flags u16`
   - `8..9 lease_ms u16`: `0` means board default 500 ms, max 2000 ms
   - `10..11 reserved u16`
-  - `12..15 host_mono_ms u32`: required for ARM/renew freshness; DISARM is honored
-    even when freshness is unavailable
-  - `16..23 reserved`
+  - `12..15 host_mono_ms u32`: diagnostic only
+  - `16 control_schema u8`: `3` for causal-proof ARM/renew; DISARM remains fail-safe
+  - `17..23 reserved`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
   A valid query refreshes the requesting Wi-Fi epoch with
   `STREAM_SESSION -> CAPABILITY -> CONTROL_ACK` in that order. The query is
   idempotent and gives a reconnecting host a fresh boot identity/sequence
   anchor even if it missed the connection-edge announcement.
-- Production host TX requires heartbeat alive, arm accepted, lease valid, a
-  bounded sender-time timeline, and a ready target backend. The first heartbeat
-  anchors a transport epoch; a second coherent sample makes commands admissible.
-  Each board-admitted heartbeat emits the existing admission-only `CONTROL_ACK`;
-  Host ARM must count those ACKs, never socket-write completion, as the two
-  coherent samples.
-  Excess sender/arrival divergence latches the epoch until reconnect. Heartbeat
-  resume alone never auto-arms.
-- Initial fixed Service/HIL budgets are heartbeat extra transport lag `100 ms`,
-  raw/session command max age `40 ms`, and future tolerance `20 ms`. They are
-  product safety limits, not test-fit knobs; changing them requires a decision
-  and fresh HIL evidence.
+- Production Host TX requires a live CSM-local causal proof, accepted ARM, live
+  lease, and ready target backend. The first heartbeat is a pending bootstrap and
+  is ACKed without opening liveness. Only a later heartbeat whose `ack_ref`
+  matches that pending ID proves an application round trip and refreshes the
+  receiver-local proof timer. Raw arrival and socket-write completion never do.
+- Heartbeat/session/state/N-shot share one wrap-safe consumed command-ID
+  watermark. A trustworthy well-formed ID is consumed before later policy
+  rejection and cannot execute after circumstances change. The watermark resets
+  only on M7 boot/new TCP epoch, never on DISARM, re-ARM, lease/proof timeout, RC
+  preemption, or state replacement.
+- Proof timeout is initially `300 ms` and remains independent of lease timeout.
+  Either expiry closes Host authority. `host_mono_ms` remains available only for
+  scheduling/clock diagnostics and is never compared with the CSM clock for a
+  safety decision. Heartbeat resume cannot auto-arm.
 
 Reserved next-phase `CONTROL_ACK` status names, without changing the current v1
 payload:
@@ -1022,19 +1019,19 @@ Extended 272-byte `CAPABILITY` payload:
 
 Extended 332-byte `CAPABILITY` v7 payload:
 - `0..271`: same as the 272-byte payload.
-- `272 control_schema u8`: Service/HIL Host control schema, currently `2`.
+- `272 control_schema u8`: Service/HIL Host control schema, currently `3`.
 - `273 terminal_evidence_schema u8`: record 23 schema, currently `2`.
 - `274 threshold_qualification u8`: `0 Exploratory`, `1 Frozen`.
 - `275 physical_hw_tx_slots u8`: current tracked FDCAN slots, `3`.
 - `276..277 host_software_retention u16`: must be `0`.
 - `278..279 reserved`.
 - `280..283 hw_pending_stale_us u32`
-- `284..287 heartbeat_extra_lag_ms u32`
-- `288..291 command_age_ms u32`
-- `292..295 future_tolerance_ms u32`
-- `296..299 observed_heartbeat_extra_lag_ms u32`
-- `300..303 observed_command_age_ms u32`
-- `304..307 observed_command_future_lead_ms u32`
+- `284..287 host_proof_timeout_ms u32`
+- `288..291 host_proof_ok_total u32`
+- `292..295 host_replay_total u32`
+- `296..299 host_proof_max_gap_ms u32`
+- `300..303 host_proof_mismatch_total u32`
+- `304..307 host_proof_timeout_total u32`
 - `308..311 permanent_admission_reject_total u32`
 - `312..315 transient_admission_reject_total u32`
 - `316..319 intentional_cancel_total u32`

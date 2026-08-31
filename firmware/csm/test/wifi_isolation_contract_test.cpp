@@ -227,7 +227,7 @@ void testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds() {
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES == 8192);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS == 192);
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS == 64);
-  CHECK(kWifiFallbackIngressBytes == 657);
+  CHECK(kWifiFallbackIngressBytes == 658);
   CHECK(kWifiTransientIngressBytes == 0);
   CHECK(kWifiFallbackIngressRecords == 6);
   CHECK(kWifiTransientIngressRecords == 0);

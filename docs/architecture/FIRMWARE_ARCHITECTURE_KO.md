@@ -25,7 +25,7 @@ source/authority/transaction 재사용은 허용하지 않는다.
 
 ### M7
 
-- `HostControlSession` heartbeat/ARM/lease와 sender-time freshness, M4 RC mailbox 검증
+- `HostControlSession` heartbeat causal-ACK proof/ARM/lease와 전역 consumed command-ID 검증, M4 RC mailbox 검증
 - RC channel semantics, limiter, HNO1 payload mapping
 - Host/RC 전역 단일 source authority와 coherent final snapshot
 - canonical typed evidence, feeder bus, bounded USB/Wi-Fi sinks

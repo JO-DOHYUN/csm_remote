@@ -192,17 +192,18 @@ uint16_t build_capability_payload(const CapabilityPayloadConfig& config,
             config.host_software_retention);
   wr_u32_le(&payload[kCapabilityHwPendingStaleUsOffset],
             config.hw_pending_stale_us);
-  wr_u32_le(&payload[kCapabilityHeartbeatLagMsOffset],
-            config.heartbeat_lag_ms);
-  wr_u32_le(&payload[kCapabilityCommandAgeMsOffset], config.command_age_ms);
-  wr_u32_le(&payload[kCapabilityFutureToleranceMsOffset],
-            config.future_tolerance_ms);
-  wr_u32_le(&payload[kCapabilityObservedHeartbeatLagMsOffset],
-            config.observed_heartbeat_lag_ms);
-  wr_u32_le(&payload[kCapabilityObservedCommandAgeMsOffset],
-            config.observed_command_age_ms);
-  wr_u32_le(&payload[kCapabilityObservedFutureLeadMsOffset],
-            config.observed_future_lead_ms);
+  wr_u32_le(&payload[kCapabilityHostProofTimeoutMsOffset],
+            config.host_proof_timeout_ms);
+  wr_u32_le(&payload[kCapabilityHostProofOkTotalOffset],
+            config.host_proof_ok_total);
+  wr_u32_le(&payload[kCapabilityHostReplayTotalOffset],
+            config.host_replay_total);
+  wr_u32_le(&payload[kCapabilityHostProofMaxGapMsOffset],
+            config.host_proof_max_gap_ms);
+  wr_u32_le(&payload[kCapabilityHostProofMismatchTotalOffset],
+            config.host_proof_mismatch_total);
+  wr_u32_le(&payload[kCapabilityHostProofTimeoutTotalOffset],
+            config.host_proof_timeout_total);
   wr_u32_le(&payload[kCapabilityAdmissionRejectTotalOffset],
             config.admission_reject_total);
   wr_u32_le(&payload[kCapabilityTransientRejectTotalOffset],

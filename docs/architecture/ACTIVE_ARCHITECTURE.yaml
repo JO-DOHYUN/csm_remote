@@ -12,6 +12,13 @@ control:
   nominal_request_clock_owner: csm_m4_tim4
   fdcan1_owner: csm_m4_control_island
   host_execution_model: coherent_latest_state
+  host_liveness_owner: csm_m7_receiver_local_causal_ack_proof
+  host_heartbeat_wire: command_id_host_mono_diagnostic_ack_ref
+  host_heartbeat_outstanding: 1
+  host_initial_proof_timeout_ms: 300
+  host_command_id_policy: global_wrap_safe_consumed_watermark
+  host_command_id_reset: m7_boot_or_new_tcp_epoch_only
+  host_mono_runtime_gate: false
   latest_state_depth: 1
   host_software_execution_backlog: false
   hidden_retry: false
