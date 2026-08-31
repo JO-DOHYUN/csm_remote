@@ -41,9 +41,11 @@ bool RemoteControlRuntime::begin(uint32_t now_ms, uint32_t m7_boot_id,
   remote::RemoteControlSourceConfig source_config;
   source_config.drive_channel_index = config.drive_channel_index;
   source_config.steering_channel_index = config.steering_channel_index;
-  source_config.auxiliary_channel_index = 4;
-  source_config.steering_overlay_channel_index = 9;
-  source_config.momentary_overlay_channel_index = 10;
+  source_config.auxiliary_channel_index = remote::kR16smAuxiliaryChannelIndex;
+  source_config.steering_overlay_channel_index =
+      remote::kR16smSteeringOverlayChannelIndex;
+  source_config.momentary_overlay_channel_index =
+      remote::kR16smMomentaryOverlayChannelIndex;
   source_config.drive_deadband_permille = config.drive_deadband_permille;
   source_config.steering_deadband_permille = config.steering_deadband_permille;
   source_config.auxiliary_threshold_permille = config.auxiliary_threshold_permille;
@@ -155,7 +157,11 @@ void RemoteControlRuntime::updateRemoteState(uint32_t now_ms) {
   status_.rssi_magnitude = snapshot.sample.rssi_hint;
   status_.drive_permille = snapshot.sample.ch[config_.drive_channel_index];
   status_.steering_permille = snapshot.sample.ch[config_.steering_channel_index];
-  status_.auxiliary_permille = snapshot.sample.ch[4];
+  status_.auxiliary_permille =
+      (snapshot.sample.channel_valid_mask &
+       (1u << remote::kR16smAuxiliaryChannelIndex)) != 0u
+      ? snapshot.sample.ch[remote::kR16smAuxiliaryChannelIndex]
+      : 0;
   status_.remote_valid = status_.frontend_alive &&
       mailbox_reader_.hasFreshUsableSample();
   status_.remote_reserved = status_.remote_valid;

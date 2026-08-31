@@ -31,6 +31,24 @@ m4_frontend = (project / "src/m4_remote_frontend.cpp").read_text(encoding="utf-8
 remote_types = (
     project / "include/board/remote/RemoteTypes.h"
 ).read_text(encoding="utf-8")
+receiver_profile = (
+    project / "include/board/remote/R16smReceiverProfile.h"
+).read_text(encoding="utf-8")
+receiver_admission = (
+    project / "src/board/remote/ReceiverAdmission.cpp"
+).read_text(encoding="utf-8")
+crsf_parser = (project / "src/board/remote/CrsfParser.cpp").read_text(
+    encoding="utf-8"
+)
+normalizer = (project / "src/board/remote/RcNormalizer.cpp").read_text(
+    encoding="utf-8"
+)
+remote_source = (
+    project / "src/board/remote/RemoteControlSource.cpp"
+).read_text(encoding="utf-8")
+control_test = (project / "test/remote_control_contract_test.cpp").read_text(
+    encoding="utf-8"
+)
 remote_runtime = (
     project / "src/board/control/RemoteControlRuntime.cpp"
 ).read_text(encoding="utf-8")
@@ -51,7 +69,8 @@ for required in (
     "remote_semantic_owner: csm_m7",
     "global_source_authority_owner: csm_m7",
     "source_priority: [remote, host, none]",
-    "remote_activation_requires: fresh_rc_channels_and_fresh_positive_link_statistics",
+    "remote_activation_requires: receiver_qualified_fresh_control_channels",
+    "link_statistics: optional_when_absent_zero_or_stale_veto_when_observed",
     "nominal_request_clock_owner: csm_m4_tim4",
     "latest_state_depth: 1",
     "raw_can_ring_capacity: 512",
@@ -235,6 +254,13 @@ for required in (
         fail(f"M4 physical owner missing {required}")
 if "handle_->Init.AutoRetransmission = ENABLE" in fdcan:
     fail("FDCAN hidden hardware retransmission is enabled")
+enable_failure = fdcan[fdcan.find("if (enable_failure_total_"):
+                       fdcan.find("bool M4Fdcan1Owner::cancel")]
+for required in ("accepted_buffer_mask_ |= buffer",
+                 "HAL_FDCAN_AbortTxRequest",
+                 "EnableFailedAbortPending"):
+    if required not in enable_failure:
+        fail(f"enable-failed physical pending is not terminal-tracked: {required}")
 for ignored in (
     "(void)HAL_FDCAN_ConfigInterruptLines",
     "(void)HAL_FDCAN_ActivateNotification",
@@ -255,9 +281,57 @@ if "recordBringup(BringupStage::ForegroundLoopEntered)" not in m4_frontend or \
         "recordBringup(BringupStage::FirstTim4Tick)" not in m4_frontend:
     fail("M4 foreground/TIM4 milestones bypass bring-up trace owner")
 
-if "hasFreshPositiveLinkStatistics" not in remote_types or \
-        "hasFreshPositiveLinkStatistics(" not in m4_frontend:
-    fail("RC authority can be admitted without fresh positive link evidence")
+if "hasFreshPositiveLinkStatistics" in remote_types or \
+        "hasFreshPositiveLinkStatistics(" in m4_frontend:
+    fail("obsolete mandatory Link Statistics gate remains")
+for required in (
+    "kR16smCrsfAddress = 0xC8u",
+    "kR16smConfiguredBaud = 416666u",
+    "kR16smDriveChannelIndex = 3u",
+    "kR16smSteeringChannelIndex = 1u",
+    "kR16smAdmissionConsecutiveFrames = 3u",
+):
+    if required not in receiver_profile:
+        fail(f"R16SM product profile missing {required}")
+for required in (
+    "link_statistics_observed",
+    "ReceiverAdmissionRejectDetail::LinkQualityZero",
+    "ReceiverAdmissionRejectDetail::LinkStatisticsStale",
+    "consecutive_frames_required",
+):
+    if required not in receiver_admission:
+        fail(f"receiver-qualified admission missing {required}")
+for required in (
+    "kCrsfFrameTypeSubsetRcChannelsPacked",
+    "kCrsfFrameTypeLinkStatisticsRx",
+    "kCrsfFrameTypeLinkStatisticsTx",
+    "discardPrefix(1u)",
+    "buffer_[0] != kR16smCrsfAddress",
+):
+    if required not in crsf_parser:
+        fail(f"stream-resynchronizing CRSF parser missing {required}")
+if "channels.count != kRcChannelCount" in normalizer:
+    fail("RC normalization still requires a full 16-channel frame")
+for required in (
+    "config_.required_channel_mask",
+    "usable_mask &=",
+):
+    if required not in normalizer:
+        fail(f"required/optional channel separation missing {required}")
+if "channelValid(snapshot.sample, config_.drive_channel_index)" not in remote_source or \
+        "optionalChannel(snapshot.sample" not in remote_source:
+    fail("RC source does not separate control validity from optional functions")
+for required in (
+    "testReceiverQualifiedAdmissionAndOptionalStatistics",
+    "testCrsfStreamResynchronizationAndR16smFixture",
+    "testCrsfModernFramesAndChannelValidity",
+    "testTransmitterOffOnAndHostToRcTakeover",
+    "testPhysicalPendingAlwaysReconciles",
+):
+    if required not in control_test:
+        fail(f"focused RC/FDCAN regression missing {required}")
+if "BOARD_M4_REMOTE_BAUD=420000" in platformio or "420000" in m4_frontend:
+    fail("alternate R16SM runtime baud remains")
 
 for required in (
     "if (next_slot_ == 0u)",
@@ -275,6 +349,9 @@ for required in (
     "request_attempt",
     "request_accepted",
     "request_failed",
+    "TxRequestResult::EnableFailedAbortPending",
+    "lane_state_[lane] = LaneState::PendingSafe",
+    "lane_state_[lane] = LaneState::PendingActive",
 ):
     if required not in executor:
         fail(f"M4 executor missing {required}")

@@ -249,17 +249,17 @@ another queue. A stable gate requires zero disconnect/overflow/socket/stall/
 queue-pressure-close delta, positive socket progress, and no sustained backlog
 growth beyond one 4 KiB pump budget.
 
-`REMOTE_CONTROL_STATE` schema 2 payload, 228 bytes:
+`REMOTE_CONTROL_STATE` schema 3 payload, 228 bytes:
 - `0..7 mono_us u64`
-- `8 schema u8`, currently `2`
-- `9 remote_link_state u8`, `10 authority_state u8`, `11 active_source u8`
+- `8 schema u8`, currently `3`
+- `9 remote_link_state u8`, `10..11 reserved`
 - `12 flags u8`: bit0 configured, bit1 M4 frontend alive, bit2 RC boundary
   reserved, bit3 usable RC sample, bits4..6 reserved, bit7 service host allowed
 - `13 link_quality u8`, `14 RSSI dBm magnitude u8`, `15 last CRSF type u8`
 - `16..19 m4_boot_id u32`, `20..23 shared_sequence u32`
 - `24..27 mailbox_age_ms u32`: age of the last accepted M4 mailbox sequence;
   this is IPC freshness, not RC channel-frame freshness
-- `28..29 CH2 drive permille i16`, `30..31 CH4 steering permille i16`
+- `28..29 CH4 drive permille i16`, `30..31 CH2 steering permille i16`
 - `32..33 raw CH2 u16`, `34..35 raw CH4 u16`
 - `36..39 uart_baud u32`, `40..83` CRSF parser, mailbox, and telemetry
   counters in this order: RX bytes, valid frames, decoded RC frames, link frames,
@@ -329,20 +329,21 @@ instead of being silently discarded. `write_result > 0` proves only that Mbed
 accepted the frame into the FDCAN FIFO. Actual transmission requires the same
 attempt's `TXBTO`, no `TXBCF/TXBRP`, and matching external Kvaser evidence.
 
-The M4-M7 shared-memory schema is version `2`. Product M4 and M7 artifacts must
+The M4-M7 shared-memory schema is version `3`. Product M4 and M7 artifacts must
 be deployed as a pair. The fixed 1 KiB SRAM4 window at `0x38000000` replaces the
 OpenAMP resource-table window, so RPC/OpenAMP is compile-time incompatible with
 the remote product profiles. The header, M4-to-M7 channel, and M7-to-M4 channel
 start on separate 32-byte cache-line boundaries. Each writer cleans only its own
 channel so stale M7 cache lines cannot overwrite a concurrent M4 sample. M4 owns
 UART/CRSF parsing and normalization only;
-M7 owns authority, safety, limiting, vehicle mapping, CAN write, and matching
-`CAN_TX_RAW` evidence. For the current RC bench contract, CH2 is drive, CH4 is steering and
-CH5 is the auxiliary three-position switch. CH4 `-1000/0/+1000` maps to standard
+M7 owns authority, limiting, vehicle mapping and coherent latest source images. M4 owns
+physical CAN release and terminal evidence. For the current product contract, CH4 is drive,
+CH2 is steering and CH5 is the optional auxiliary three-position switch. CH2
+`-1000/0/+1000` maps to standard
 CAN ID `0x007`, DLC 8, byte 0 decimal `10/130/250`; bytes 1..6 are zero. CH5 is
 quantized to `-1000/0/+1000`: negative writes byte 7 `0x01`, positive writes
 byte 7 `0x80`, and neutral writes `0x00`. A non-neutral CH5 overrides other RC
-motion targets to neutral. CH2 positive is forward and negative is reverse. Absolute
+motion targets to neutral. CH4 positive is forward and negative is reverse. Absolute
 magnitude through 5% emits stop. Above 5%, the first active speed is 200 and later
 speeds are rounded to 50-unit steps through 1000 in standard ID `0x005`, DLC8:
 `AA 52 speed_lo speed_hi direction 00 00 00`, direction forward `0x50`/reverse `0x60`.
@@ -354,9 +355,10 @@ and a direction reversal reaches zero before applying the opposite direction. A 
 mailbox sequence cannot refresh source freshness.
 
 Remote authority order is `RC remote > service host > monitoring`; this active
-profile has no autonomy source. A fresh usable RC sample requires both a fresh
-channel frame and fresh positive CRSF link-statistics, and owns only `0x005/0x007`.
-Missing/zero/stale link-statistics cannot preempt Host. RC loss immediately revokes
+profile has no autonomy source. A fresh usable RC sample requires valid `0xC8`, CRC,
+calibrated CH4/CH2, and three consecutive fresh RC frames, and owns only `0x005/0x007`.
+Missing Link Statistics is allowed; once observed, LQ=0 or stale statistics veto RC.
+Optional CH5/CH10/CH11 validity never controls the CH4/CH2 authority boundary. RC loss immediately revokes
 RC ACTIVE and exposes the lower-priority source boundary.
 Malformed CRSF or IPC evidence cannot remain ACTIVE.
 

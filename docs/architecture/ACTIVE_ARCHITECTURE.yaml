@@ -18,7 +18,17 @@ control:
   hidden_replay: false
   source_mixing: forbidden
   source_priority: [remote, host, none]
-  remote_activation_requires: fresh_rc_channels_and_fresh_positive_link_statistics
+  remote_activation_requires: receiver_qualified_fresh_control_channels
+  remote_receiver_profile:
+    hardware: radiolink_r16sm_t16d
+    electrical_mode: crsf_blue
+    configured_baud: 416666
+    product_radio_mode: fhss_v2_1_16_channel
+    address: 0xC8
+    required_control_channels: [CH4_drive, CH2_steering]
+    optional_function_channels: [CH5_auxiliary, CH10_steering_overlay, CH11_momentary_overlay]
+    consecutive_fresh_frames: 3
+    link_statistics: optional_when_absent_zero_or_stale_veto_when_observed
   authority_handoff: quiescent_cancel_terminal_then_activate
   mutable_executor_state_writer: csm_m4_tim4_only
   foreground_ingress: latest_validated_snapshot_or_event_depth_1
@@ -75,3 +85,6 @@ qualification:
     - rx_irq_drain_bound
     - jitter_and_deadline_thresholds
     - product_authorization_and_hno1_traffic_matrix
+    - r16sm_uart_bit_time_measured_baud
+    - r16sm_raw_uart_off_on_frame_type_capture
+    - t16d_fhss_v2_1_16_channel_profile_sweep

@@ -13,7 +13,7 @@ namespace csm::board::remote {
 static constexpr uintptr_t kRemoteSharedMemoryAddress = 0x38000000u;
 static constexpr size_t kRemoteSharedMemoryReservedBytes = 0x0400u;
 static constexpr uint32_t kRemoteSharedMemoryMagic = 0x5243534Du;  // "MSCR".
-static constexpr uint16_t kRemoteSharedMemoryVersion = 2;
+static constexpr uint16_t kRemoteSharedMemoryVersion = 3;
 
 struct RemoteFrontendDiagnostics {
   uint32_t uart_baud = 0;
@@ -25,6 +25,7 @@ struct RemoteFrontendDiagnostics {
   uint32_t normalization_rejects = 0;
   uint32_t rejected_length = 0;
   uint32_t rejected_crc = 0;
+  uint32_t rejected_address = 0;
   uint32_t inter_byte_resets = 0;
   uint32_t mailbox_publishes = 0;
   uint32_t telemetry_tx_frames = 0;
@@ -33,6 +34,8 @@ struct RemoteFrontendDiagnostics {
   uint32_t shared_publish_failures = 0;
   uint32_t last_rc_age_ms = 0xFFFFFFFFu;
   uint32_t last_link_statistics_age_ms = 0xFFFFFFFFu;
+  uint32_t admission_resets = 0;
+  uint32_t subset_rc_frames = 0;
   uint16_t raw_ch2 = 0;
   uint16_t raw_ch4 = 0;
   uint16_t raw_channels[kRcChannelCount] = {};
@@ -49,6 +52,11 @@ struct RemoteFrontendDiagnostics {
   uint8_t downlink_link_quality = 0xFF;
   int8_t downlink_snr = 0;
   uint16_t last_normalize_reject_detail = 0;
+  uint16_t channel_valid_mask = 0;
+  uint8_t admission_streak = 0;
+  uint8_t receiver_qualified = 0;
+  uint8_t link_statistics_type = 0;
+  uint8_t reserved0 = 0;
 };
 
 struct alignas(32) RemoteSharedSampleSlot {

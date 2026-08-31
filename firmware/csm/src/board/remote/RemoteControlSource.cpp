@@ -17,6 +17,15 @@ int16_t quantizeAuxiliary(int16_t value, uint16_t threshold) {
   return 0;
 }
 
+bool channelValid(const RcSample& sample, uint8_t channel) {
+  return channel < kRcChannelCount &&
+      (sample.channel_valid_mask & (1u << channel)) != 0u;
+}
+
+int16_t optionalChannel(const RcSample& sample, uint8_t channel) {
+  return channelValid(sample, channel) ? sample.ch[channel] : 0;
+}
+
 }  // namespace
 
 void RemoteControlSource::begin(uint32_t now_ms) {
@@ -67,7 +76,9 @@ void RemoteControlSource::update(uint32_t now_ms,
 
   if (!snapshot.sample_present || !snapshot.integrity_ok ||
       !isUsableRemoteLink(snapshot.link_state) ||
-      !isUsableRcSampleState(snapshot.sample.sample_state)) {
+      !isUsableRcSampleState(snapshot.sample.sample_state) ||
+      !channelValid(snapshot.sample, config_.drive_channel_index) ||
+      !channelValid(snapshot.sample, config_.steering_channel_index)) {
     clearCommand(now_ms);
     reject_detail_ = kDetailNoUsableSample;
     return;
@@ -89,13 +100,13 @@ void RemoteControlSource::update(uint32_t now_ms,
   const int16_t drive = snapshot.sample.ch[config_.drive_channel_index];
   const int16_t steering = snapshot.sample.ch[config_.steering_channel_index];
   const int16_t auxiliary = quantizeAuxiliary(
-      snapshot.sample.ch[config_.auxiliary_channel_index],
+      optionalChannel(snapshot.sample, config_.auxiliary_channel_index),
       config_.auxiliary_threshold_permille);
   const int16_t steering_overlay = quantizeAuxiliary(
-      snapshot.sample.ch[config_.steering_overlay_channel_index],
+      optionalChannel(snapshot.sample, config_.steering_overlay_channel_index),
       config_.auxiliary_threshold_permille);
   const int16_t momentary_overlay = quantizeAuxiliary(
-      snapshot.sample.ch[config_.momentary_overlay_channel_index],
+      optionalChannel(snapshot.sample, config_.momentary_overlay_channel_index),
       config_.auxiliary_threshold_permille);
   const int16_t directed_drive = config_.invert_drive ? -drive : drive;
   command_.throttle_permille = applyDeadband(

@@ -51,7 +51,8 @@ RcNormalizeResult RcNormalizer::normalizeCrsfChannels(uint32_t now_ms,
   if (!config_.configured) {
     return reject(RcNormalizeRejectDetail::NotConfigured);
   }
-  if (channels.count != kRcChannelCount) {
+  if ((channels.valid_mask & config_.required_channel_mask) !=
+      config_.required_channel_mask) {
     return reject(RcNormalizeRejectDetail::MissingChannels);
   }
   if (!isWithinRawRange(channels)) {
@@ -66,9 +67,18 @@ RcNormalizeResult RcNormalizer::normalizeCrsfChannels(uint32_t now_ms,
   result.sample.sample_state = RcSampleState::Ok;
   result.sample.seq = seq;
   result.sample.m4_time_ms = now_ms;
+  uint16_t usable_mask = channels.valid_mask;
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
-    result.sample.ch[i] = normalizeRawChannel(channels.raw[i]);
+    if ((usable_mask & (1u << i)) == 0u) continue;
+    if (!rawWithinCalibration(i, channels.raw[i])) {
+      // Optional functions are disabled, never fabricated from an invalid raw
+      // value. Required controls were rejected above by isWithinRawRange().
+      usable_mask &= static_cast<uint16_t>(~(1u << i));
+      continue;
+    }
+    result.sample.ch[i] = normalizeRawChannel(i, channels.raw[i]);
   }
+  result.sample.channel_valid_mask = usable_mask;
   result.sample.link_quality = link_quality;
   result.sample.rssi_hint = rssi_hint;
   result.sample.flags = flags;
@@ -78,32 +88,53 @@ RcNormalizeResult RcNormalizer::normalizeCrsfChannels(uint32_t now_ms,
 bool RcNormalizer::isValidConfig(const RcNormalizerConfig& config) {
   return config.configured &&
          config.required_channel_mask != 0 &&
-         config.raw_min < config.raw_mid &&
-         config.raw_mid < config.raw_max &&
-         config.raw_max <= kCrsfRawChannelMax &&
          config.deadband_permille >= 0 &&
-         config.deadband_permille <= kRcNormalizedChannelMax;
+         config.deadband_permille <= kRcNormalizedChannelMax &&
+         [&config]() {
+           for (uint8_t i = 0; i < kRcChannelCount; ++i) {
+             if ((config.required_channel_mask & (1u << i)) == 0u) continue;
+             const RcChannelCalibration& calibration = config.channel[i];
+             if (!(calibration.raw_min < calibration.raw_mid &&
+                   calibration.raw_mid < calibration.raw_max &&
+                   calibration.raw_max <= kCrsfRawChannelMax)) return false;
+           }
+           return true;
+         }();
 }
 
 bool RcNormalizer::isWithinRawRange(const CrsfRcChannels& channels) const {
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
     if ((config_.required_channel_mask & (1u << i)) != 0 &&
-        (channels.raw[i] < config_.raw_min ||
-         channels.raw[i] > config_.raw_max)) {
+        !rawWithinCalibration(i, channels.raw[i])) {
       return false;
     }
   }
   return true;
 }
 
-int16_t RcNormalizer::normalizeRawChannel(uint16_t raw) const {
+bool RcNormalizer::calibrationValid(uint8_t channel) const {
+  if (channel >= kRcChannelCount) return false;
+  const RcChannelCalibration& calibration = config_.channel[channel];
+  return calibration.raw_min < calibration.raw_mid &&
+      calibration.raw_mid < calibration.raw_max &&
+      calibration.raw_max <= kCrsfRawChannelMax;
+}
+
+bool RcNormalizer::rawWithinCalibration(uint8_t channel, uint16_t raw) const {
+  if (!calibrationValid(channel)) return false;
+  const RcChannelCalibration& calibration = config_.channel[channel];
+  return raw >= calibration.raw_min && raw <= calibration.raw_max;
+}
+
+int16_t RcNormalizer::normalizeRawChannel(uint8_t channel, uint16_t raw) const {
+  const RcChannelCalibration& calibration = config_.channel[channel];
   int32_t normalized = 0;
-  if (raw >= config_.raw_mid) {
-    normalized = (static_cast<int32_t>(raw) - config_.raw_mid) * 1000 /
-                 (config_.raw_max - config_.raw_mid);
+  if (raw >= calibration.raw_mid) {
+    normalized = (static_cast<int32_t>(raw) - calibration.raw_mid) * 1000 /
+                 (calibration.raw_max - calibration.raw_mid);
   } else {
-    normalized = -((static_cast<int32_t>(config_.raw_mid) - raw) * 1000 /
-                   (config_.raw_mid - config_.raw_min));
+    normalized = -((static_cast<int32_t>(calibration.raw_mid) - raw) * 1000 /
+                   (calibration.raw_mid - calibration.raw_min));
   }
 
   const int16_t clamped = clampPermille(normalized);

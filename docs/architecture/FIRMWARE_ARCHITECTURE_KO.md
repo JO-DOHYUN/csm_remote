@@ -58,9 +58,12 @@ M4 -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
 ```
 
 Source 우선순위는 `RC > Host > None`이며 이 active profile에는 autonomy source가 없다.
-RC는 fresh channel sample과 fresh positive CRSF link-statistics가 함께 있을 때만 source
-candidate가 된다. 전원 OFF/floating/noisy ingress나 link-statistics 부재·0·stale은 Host를
-선점할 수 없다. Source는 image 전체로만 선택한다. Host는 `005/007/364`, RC는 `005/007`만 소유하며 RC가
+RC source admission은 R16SM profile의 `0xC8` address, CRC, 지원 RC frame(`0x16`, bounded
+`0x17`), CH4 drive/CH2 steering calibration, 연속 3개 fresh frame을 요구한다. Link Statistics
+`0x14/0x1C/0x1D`는 receiver가 보내지 않으면 admission 필수가 아니고, 한 번 관측된 receiver에서는
+LQ=0 또는 500 ms stale이 추가 veto다. Optional CH5/CH10/CH11 부재·범위 오류는 해당 기능만
+disable하며 RC 전체를 폐기하지 않는다. 상세 electrical/radio 조건은
+`R16SM_RECEIVER_PROFILE_KO.md`가 소유한다. Source는 image 전체로만 선택한다. Host는 `005/007/364`, RC는 `005/007`만 소유하며 RC가
 소유하지 않는 `364`는 M4 `SuppressTx`로 해석한다. source별 lane을 다른 source의 old image와
 혼합하지 않는다. authority 전환 시 old ACTIVE pending만 cancel 요청하고 terminal closure를
 확인한 뒤 새 source release를 시작한다. SAFE pending은 source transition과 무관하게 보존한다.
@@ -118,7 +121,8 @@ permission이 아니다. 초기 M4→M7 freshness timeout은 300 ms이고 publis
 Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.
 
 TIM4 configured와 실제 tick은 분리 보고되며 FDCAN begin 실패에도 static due truth가
-누적된다. FDCAN request는 Add/Enable/Abort reconciliation 결과를 명시하며 Accepted만
-executor pending을 만든다. schema-4 Control-Island health는 independent M4 bring-up identity,
+누적된다. FDCAN request는 Add/Enable/Abort reconciliation 결과를 명시한다. 정상 `Accepted`와
+Enable 실패 뒤 hardware pending이 확인되어 bounded abort를 요청한 상태는 모두 executor가
+terminal까지 추적하되 admission을 physical success로 세지 않는다. schema-4 Control-Island health는 independent M4 bring-up identity,
 TIM4/FDCAN/IRQ/callback, per-lane due→request→terminal, M7 coordinator/read reject를 함께 싣고
 normal M4 health가 아직 없을 때도 진단 record 자체를 폐기하지 않는다.

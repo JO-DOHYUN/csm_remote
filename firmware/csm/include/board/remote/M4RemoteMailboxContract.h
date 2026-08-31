@@ -7,7 +7,7 @@
 namespace csm::board::remote {
 
 static constexpr uint32_t kM4RemoteMailboxMagic = 0x344D4352u;  // "RCM4".
-static constexpr uint8_t kM4RemoteMailboxVersion = 1;
+static constexpr uint8_t kM4RemoteMailboxVersion = 2;
 static constexpr uint16_t kM4RemoteMailboxFrameBytes = 64;
 
 enum class M4RemoteMailboxRejectDetail : uint16_t {
@@ -34,7 +34,7 @@ struct M4RemoteMailboxFrame {
   uint16_t flags = 0;
   uint32_t m4_time_ms = 0;
   int16_t ch[kRcChannelCount] = {};
-  uint16_t switch_bits = 0;
+  uint16_t channel_valid_mask = 0;
   uint8_t link_quality = kRemoteMetricUnknown;
   uint8_t rssi_hint = kRemoteMetricUnknown;
   uint16_t malformed_count = 0;

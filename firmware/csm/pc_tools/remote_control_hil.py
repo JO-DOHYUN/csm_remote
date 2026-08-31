@@ -215,10 +215,10 @@ def main():
             "ch2": {"min": min(ch2_values), "max": max(ch2_values)},
             "ch4": {"min": min(ch4_values), "max": max(ch4_values)},
         }
-        add_check(checks, "remote_schema", last["schema"] >= 2,
+        add_check(checks, "remote_schema", last["schema"] == 3,
                   f"schema={last['schema']}")
-        add_check(checks, "crsf_baud", last["uart_baud"] == 416666,
-                  f"baud={last['uart_baud']}")
+        add_check(checks, "configured_crsf_baud", last["uart_baud"] == 416666,
+                  f"configured_baud={last['uart_baud']} physical_bit_time=NOT_MEASURED")
         add_check(checks, "crsf_rx_progress",
                   counter_delta(first, last, "rx_bytes") > 0 and
                   counter_delta(first, last, "accepted_rc_frames") > 0,
@@ -233,14 +233,23 @@ def main():
                   f"crc={counter_delta(first, last, 'rejected_crc')} "
                   f"gap={counter_delta(first, last, 'inter_byte_resets')} "
                   f"normalize={counter_delta(first, last, 'normalization_rejects')}")
+        add_check(checks, "r16sm_address",
+                  last["last_address"] == 0xC8,
+                  f"address=0x{last['last_address']:02X} "
+                  f"last_type=0x{last['last_crsf_type']:02X}")
         flags = last["flags"]
         add_check(checks, "remote_live", (flags & 0x0A) == 0x0A,
                   f"flags=0x{flags:02X} link={last['link_state']} "
                   f"sample={last['sample_state']} rc_age={last['last_rc_age_ms']}")
-        add_check(checks, "link_statistics",
-                  last["link_statistics_valid"] == 1 and
-                  0 < last["link_quality"] <= 100 and
-                  last["last_link_statistics_age_ms"] <= 500,
+        link_statistics_observed = last["link_frames"] > 0
+        link_statistics_ok = (
+            not link_statistics_observed or
+            (last["link_statistics_valid"] == 1 and
+             0 < last["link_quality"] <= 100 and
+             last["last_link_statistics_age_ms"] <= 500)
+        )
+        add_check(checks, "optional_link_statistics_veto", link_statistics_ok,
+                  f"observed={link_statistics_observed} "
                   f"valid={last['link_statistics_valid']} lq={last['link_quality']} "
                   f"age={last['last_link_statistics_age_ms']} "
                   f"rssi=-{last['rssi_dbm_magnitude']}dBm")

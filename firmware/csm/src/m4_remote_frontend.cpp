@@ -5,6 +5,8 @@
 #include "board/remote/CrsfParser.h"
 #include "board/remote/M4RemoteMailboxWriter.h"
 #include "board/remote/RcNormalizer.h"
+#include "board/remote/ReceiverAdmission.h"
+#include "board/remote/R16smReceiverProfile.h"
 #include "board/remote/RemoteSharedMemory.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
 #include "board/control_island/M4Fdcan1Owner.h"
@@ -44,6 +46,10 @@
 #define CSM_FW_BUILD_ID 0
 #endif
 
+static_assert(BOARD_M4_REMOTE_BAUD ==
+                  csm::board::remote::kR16smConfiguredBaud,
+              "M4 UART baud drifted from the R16SM product profile");
+
 namespace {
 
 using namespace csm::board::remote;
@@ -51,6 +57,7 @@ using namespace csm::board::control_island;
 
 CrsfParser parser;
 RcNormalizer normalizer;
+ReceiverAdmission receiver_admission;
 M4RemoteMailboxWriter mailbox_writer;
 M4RemoteMailboxFrame mailbox_frame;
 RemoteFrontendDiagnostics diagnostics;
@@ -69,6 +76,7 @@ uint32_t telemetry_sequence = 0;
 uint16_t rc_sequence = 0;
 bool has_rc_sample = false;
 bool has_link_statistics = false;
+bool frontend_configured = false;
 RemoteTelemetrySlot telemetry;
 uint32_t malformed_total_at_last_rc = 0;
 M4StaticCyclicExecutor control_executor;
@@ -96,6 +104,10 @@ void updateSampleState(uint32_t now_ms) {
   diagnostics.last_link_statistics_age_ms = has_link_statistics
       ? now_ms - last_link_statistics_ms
       : 0xFFFFFFFFu;
+  const bool link_statistics_fresh = has_link_statistics &&
+      diagnostics.last_link_statistics_age_ms <=
+          BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS;
+  diagnostics.link_statistics_valid = link_statistics_fresh ? 1u : 0u;
   current_sample.link_quality = has_link_statistics
       ? link_statistics.uplink_link_quality : kRemoteMetricUnknown;
   current_sample.rssi_hint = has_link_statistics
@@ -105,7 +117,18 @@ void updateSampleState(uint32_t now_ms) {
              : link_statistics.uplink_rssi_ant2_dbm_magnitude)
       : kRemoteMetricUnknown;
 
-  if (has_link_statistics && link_statistics.uplink_link_quality == 0u) {
+  const bool receiver_usable = receiver_admission.usable(
+      now_ms, has_link_statistics, current_sample.link_quality,
+      diagnostics.last_link_statistics_age_ms);
+  const ReceiverAdmissionState& admission = receiver_admission.state();
+  diagnostics.admission_resets = admission.reset_count;
+  diagnostics.admission_streak = admission.consecutive_frames;
+  diagnostics.receiver_qualified = admission.receiver_qualified ? 1u : 0u;
+  diagnostics.channel_valid_mask = current_sample.channel_valid_mask;
+
+  if (!frontend_configured) {
+    current_sample.sample_state = RcSampleState::ProtocolFault;
+  } else if (has_link_statistics && link_statistics.uplink_link_quality == 0u) {
     current_sample.sample_state = RcSampleState::Failsafe;
   } else if (!has_rc_sample) {
     current_sample.sample_state =
@@ -117,13 +140,10 @@ void updateSampleState(uint32_t now_ms) {
         frontendMalformedTotal() != malformed_total_at_last_rc
             ? RcSampleState::ProtocolFault
             : RcSampleState::Stale;
-  } else if (!hasFreshPositiveLinkStatistics(
-                 has_link_statistics, current_sample.link_quality,
-                 diagnostics.last_link_statistics_age_ms,
-                 BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS)) {
-    // A channel-shaped frame without fresh positive link evidence can be
-    // floating/noisy Serial3 ingress. It must never preempt Host authority.
+  } else if (has_link_statistics && !link_statistics_fresh) {
     current_sample.sample_state = RcSampleState::ProtocolFault;
+  } else if (!receiver_usable) {
+    current_sample.sample_state = RcSampleState::Lost;
   } else {
     current_sample.sample_state = RcSampleState::Ok;
   }
@@ -144,14 +164,23 @@ void publishSample(uint32_t now_ms) {
 
 void handleRcFrame(uint32_t now_ms, const CrsfFrame& frame) {
   CrsfRcChannels channels;
-  if (decodeCrsfRcChannelsPacked(frame, &channels) != CrsfDecodeStatus::Ok) {
+  if (decodeCrsfRcChannels(frame, &channels) != CrsfDecodeStatus::Ok) {
+    receiver_admission.reset(
+        ReceiverAdmissionRejectDetail::MissingControlChannels);
     return;
   }
   ++diagnostics.rc_frames;
-  diagnostics.raw_ch2 = channels.raw[1];
-  diagnostics.raw_ch4 = channels.raw[3];
+  if (frame.type == kCrsfFrameTypeSubsetRcChannelsPacked) {
+    ++diagnostics.subset_rc_frames;
+  }
+  diagnostics.raw_ch2 = (channels.valid_mask & (1u << 1)) != 0u
+      ? channels.raw[1] : 0u;
+  diagnostics.raw_ch4 = (channels.valid_mask & (1u << 3)) != 0u
+      ? channels.raw[3] : 0u;
   for (uint8_t index = 0; index < kRcChannelCount; ++index) {
-    diagnostics.raw_channels[index] = channels.raw[index];
+    diagnostics.raw_channels[index] =
+        (channels.valid_mask & (1u << index)) != 0u
+            ? channels.raw[index] : 0u;
   }
   const auto normalized = normalizer.normalizeCrsfChannels(
       now_ms, ++rc_sequence, channels,
@@ -166,11 +195,15 @@ void handleRcFrame(uint32_t now_ms, const CrsfFrame& frame) {
   if (!normalized.accepted) {
     ++diagnostics.normalization_rejects;
     diagnostics.last_normalize_reject_detail = normalized.reject_detail;
+    receiver_admission.reset(
+        ReceiverAdmissionRejectDetail::MissingControlChannels);
     return;
   }
   ++diagnostics.accepted_rc_frames;
   diagnostics.last_normalize_reject_detail = 0;
   current_sample = normalized.sample;
+  (void)receiver_admission.observeRcFrame(
+      now_ms, frame.address, current_sample.channel_valid_mask);
   malformed_total_at_last_rc = frontendMalformedTotal();
   has_rc_sample = true;
   last_rc_ms = now_ms;
@@ -180,15 +213,18 @@ void handleFrame(uint32_t now_ms, const CrsfFrame& frame) {
   ++diagnostics.valid_frames;
   diagnostics.last_address = frame.address;
   diagnostics.last_type = frame.type;
-  if (frame.type == kCrsfFrameTypeRcChannelsPacked) {
+  if (frame.type == kCrsfFrameTypeRcChannelsPacked ||
+      frame.type == kCrsfFrameTypeSubsetRcChannelsPacked) {
     handleRcFrame(now_ms, frame);
-  } else if (frame.type == kCrsfFrameTypeLinkStatistics) {
+  } else if (frame.type == kCrsfFrameTypeLinkStatistics ||
+             frame.type == kCrsfFrameTypeLinkStatisticsRx ||
+             frame.type == kCrsfFrameTypeLinkStatisticsTx) {
     CrsfLinkStatistics decoded;
     if (decodeCrsfLinkStatistics(frame, &decoded) == CrsfDecodeStatus::Ok) {
       link_statistics = decoded;
       has_link_statistics = true;
       last_link_statistics_ms = now_ms;
-      diagnostics.link_statistics_valid = 1;
+      diagnostics.link_statistics_type = static_cast<uint8_t>(decoded.kind);
       diagnostics.uplink_rssi_ant1 = decoded.uplink_rssi_ant1_dbm_magnitude;
       diagnostics.uplink_rssi_ant2 = decoded.uplink_rssi_ant2_dbm_magnitude;
       diagnostics.uplink_snr = decoded.uplink_snr_db;
@@ -309,14 +345,29 @@ void setup() {
   recordBringup(BringupStage::M4Entered);
   RcNormalizerConfig config;
   config.configured = true;
-  config.required_channel_mask = kRemoteRequiredRcChannelMask;
-  normalizer.configure(config);
+  config.required_channel_mask = kR16smRequiredControlChannelMask;
+  const bool normalizer_configured = normalizer.configure(config);
+  ReceiverAdmissionConfig admission_config;
+  admission_config.configured = true;
+  admission_config.receiver_address = kR16smCrsfAddress;
+  admission_config.consecutive_frames_required =
+      kR16smAdmissionConsecutiveFrames;
+  admission_config.required_channel_mask = kR16smRequiredControlChannelMask;
+  admission_config.rc_freshness_ms = BOARD_M4_REMOTE_STALE_MS;
+  admission_config.link_statistics_freshness_ms =
+      BOARD_M4_REMOTE_LINK_STATISTICS_STALE_MS;
+  const bool admission_configured =
+      receiver_admission.configure(admission_config);
+  frontend_configured = normalizer_configured && admission_configured;
   parser.reset();
   mailbox_writer.reset();
   mailbox_writer.clearFrame(&mailbox_frame);
   current_sample = {};
   diagnostics = {};
   diagnostics.uart_baud = BOARD_M4_REMOTE_BAUD;
+  if (!frontend_configured) {
+    current_sample.sample_state = RcSampleState::ProtocolFault;
+  }
   control_m4_boot_id = initializeControlIpcForM4();
   bringup_trace.m4_boot_id = control_m4_boot_id;
   recordBringup(BringupStage::ControlIpcValidated,
@@ -358,16 +409,20 @@ void loop() {
         now_us - last_byte_us > kCrsfInterByteTimeoutUs) {
       parser.reset();
       ++diagnostics.inter_byte_resets;
+      receiver_admission.reset(ReceiverAdmissionRejectDetail::SequenceBroken);
     }
     last_byte_us = now_us;
     ++diagnostics.rx_bytes;
     const auto result = parser.ingest(static_cast<uint8_t>(value));
+    diagnostics.rejected_address = parser.rejectedAddressTotal();
+    diagnostics.rejected_length = parser.rejectedLengthTotal();
+    diagnostics.rejected_crc = parser.rejectedCrcTotal();
     if (result.status == CrsfParseStatus::FrameReady) {
       handleFrame(now_ms, result.frame);
-    } else if (result.status == CrsfParseStatus::RejectedLength) {
-      ++diagnostics.rejected_length;
-    } else if (result.status == CrsfParseStatus::RejectedCrc) {
-      ++diagnostics.rejected_crc;
+    } else if (result.status == CrsfParseStatus::RejectedAddress ||
+               result.status == CrsfParseStatus::RejectedLength ||
+               result.status == CrsfParseStatus::RejectedCrc) {
+      receiver_admission.reset(ReceiverAdmissionRejectDetail::SequenceBroken);
     }
   }
 

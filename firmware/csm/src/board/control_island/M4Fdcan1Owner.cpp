@@ -325,6 +325,10 @@ TxRequestResult M4Fdcan1Owner::request(uint8_t lane, const uint8_t data[8]) {
   }
   if (enable_failure_total_ != UINT32_MAX) ++enable_failure_total_;
   if (!pending(lane)) return TxRequestResult::EnableFailedNoPending;
+  // The request is physically pending even though HAL did not confirm the
+  // enable call. Track it before requesting abort so TXBRP/TXBTO/TXBCF remain
+  // the authoritative terminal source if the callback is missed.
+  accepted_buffer_mask_ |= buffer;
   if (HAL_FDCAN_AbortTxRequest(handle_, buffer) == HAL_OK) {
     return TxRequestResult::EnableFailedAbortPending;
   }

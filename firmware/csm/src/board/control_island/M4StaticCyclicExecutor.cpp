@@ -290,6 +290,13 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
   const TxRequestResult result = driver_->request(lane, data);
   if (result != TxRequestResult::Accepted) {
     saturatingIncrement(&health.request_failed);
+    if (result == TxRequestResult::EnableFailedAbortPending) {
+      lane_state_[lane] = LaneState::PendingActive;
+      cancel_issued_[lane] = true;
+      health.state = static_cast<uint8_t>(LaneState::PendingActive);
+      health.last_value_generation = active_.lanes[lane].value_generation;
+      return;
+    }
     if (result == TxRequestResult::AlreadyPending ||
         result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
     return;
@@ -316,6 +323,13 @@ void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
   const TxRequestResult result = driver_->request(lane, safe.data);
   if (result != TxRequestResult::Accepted) {
     saturatingIncrement(&health.request_failed);
+    if (result == TxRequestResult::EnableFailedAbortPending) {
+      lane_state_[lane] = LaneState::PendingSafe;
+      cancel_issued_[lane] = true;
+      health.state = static_cast<uint8_t>(LaneState::PendingSafe);
+      health.last_value_generation = 0u;
+      return;
+    }
     if (result == TxRequestResult::AlreadyPending ||
         result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
     return;

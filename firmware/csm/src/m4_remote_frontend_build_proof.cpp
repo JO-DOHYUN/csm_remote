@@ -19,13 +19,14 @@ bool runM4RemoteFrontendBuildProof() {
   RcNormalizer normalizer;
   RcNormalizerConfig config;
   config.configured = true;
-  config.required_channel_mask = kRemoteRequiredRcChannelMask;
+  config.required_channel_mask = kR16smRequiredControlChannelMask;
   if (!normalizer.configure(config)) {
     return false;
   }
 
   CrsfRcChannels channels;
   channels.count = kRcChannelCount;
+  channels.valid_mask = kR16smSixteenChannelMask;
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
     channels.raw[i] = kCrsfRawDefaultMid;
   }

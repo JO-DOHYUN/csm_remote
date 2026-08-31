@@ -7,6 +7,11 @@
 #include "board/control_island/M4StaticCyclicExecutor.h"
 #include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlSession.h"
+#include "board/remote/CrsfParser.h"
+#include "board/remote/R16smReceiverProfile.h"
+#include "board/remote/RcNormalizer.h"
+#include "board/remote/ReceiverAdmission.h"
+#include "board/remote/RemoteControlSource.h"
 #include "board/remote/RemoteTypes.h"
 #include "protocol/ControlProtocol.h"
 #include "protocol/TypedRecords.h"
@@ -120,13 +125,12 @@ void testStaticDueAndExplicitRequestAccounting() {
       lane.transport_blocked + lane.request_attempt);
 }
 
-void testOnlyAcceptedCreatesPending() {
+void testPhysicalPendingAlwaysReconciles() {
   const TxRequestResult failures[] = {
       TxRequestResult::TransportUnavailable,
       TxRequestResult::AlreadyPending,
       TxRequestResult::AddFailed,
       TxRequestResult::EnableFailedNoPending,
-      TxRequestResult::EnableFailedAbortPending,
   };
   for (TxRequestResult failure : failures) {
     FakeDriver driver;
@@ -138,6 +142,18 @@ void testOnlyAcceptedCreatesPending() {
            static_cast<uint8_t>(LaneState::Free));
     assert(executor.health().lanes[kLane005].request_failed == 1u);
   }
+  FakeDriver aborting_driver;
+  M4StaticCyclicExecutor aborting_executor;
+  aborting_executor.begin(3u, 300000u, &aborting_driver);
+  aborting_driver.next_result = TxRequestResult::EnableFailedAbortPending;
+  aborting_executor.onFiveMillisecondSlot(5000u);
+  assert(aborting_executor.health().lanes[kLane005].state ==
+         static_cast<uint8_t>(LaneState::PendingSafe));
+  assert(aborting_executor.health().lanes[kLane005].request_failed == 1u);
+  assert(aborting_executor.health().lanes[kLane005].request_accepted == 0u);
+  aborting_driver.terminal(&aborting_executor, kLane005, false, true);
+  aborting_executor.onFiveMillisecondSlot(10000u);
+  assert(aborting_executor.health().lanes[kLane005].cancel_count == 1u);
   FakeDriver fatal_driver;
   M4StaticCyclicExecutor fatal_executor;
   fatal_executor.begin(3u, 300000u, &fatal_driver);
@@ -190,14 +206,223 @@ void testSourceManagerOwnershipAndEpochs() {
   assert(!rc.lanes[kLane364].valid);
 }
 
-void testRemoteAuthorityRequiresFreshPositiveLinkEvidence() {
-  using csm::board::remote::hasFreshPositiveLinkStatistics;
-  using csm::board::remote::kRemoteMetricUnknown;
-  assert(!hasFreshPositiveLinkStatistics(false, 100u, 0u, 500u));
-  assert(!hasFreshPositiveLinkStatistics(true, 0u, 0u, 500u));
-  assert(!hasFreshPositiveLinkStatistics(true, kRemoteMetricUnknown, 0u, 500u));
-  assert(!hasFreshPositiveLinkStatistics(true, 100u, 501u, 500u));
-  assert(hasFreshPositiveLinkStatistics(true, 1u, 500u, 500u));
+void testReceiverQualifiedAdmissionAndOptionalStatistics() {
+  using namespace csm::board::remote;
+  ReceiverAdmission admission;
+  ReceiverAdmissionConfig config;
+  config.configured = true;
+  config.receiver_address = kR16smCrsfAddress;
+  config.consecutive_frames_required = kR16smAdmissionConsecutiveFrames;
+  config.required_channel_mask = kR16smRequiredControlChannelMask;
+  config.rc_freshness_ms = kR16smRcFreshnessMs;
+  config.link_statistics_freshness_ms = kR16smLinkStatisticsFreshnessMs;
+  assert(admission.configure(config));
+  assert(!admission.observeRcFrame(10u, 0xEEu,
+                                   kR16smRequiredControlChannelMask));
+  assert(!admission.observeRcFrame(20u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(!admission.observeRcFrame(30u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(admission.observeRcFrame(40u, kR16smCrsfAddress,
+                                  kR16smRequiredControlChannelMask));
+  // R16SM captures without 0x14 remain admissible. If a receiver publishes
+  // statistics, zero LQ or stale statistics become an additional veto.
+  assert(admission.usable(40u, false, kRemoteMetricUnknown, UINT32_MAX));
+  assert(!admission.usable(41u, true, 0u, 0u));
+  assert(admission.usable(42u, true, 80u, 0u));
+  assert(!admission.usable(43u, true, 80u,
+                           kR16smLinkStatisticsFreshnessMs + 1u));
+  assert(!admission.usable(200u, false, kRemoteMetricUnknown, UINT32_MAX));
+  assert(!admission.observeRcFrame(201u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+}
+
+void testCrsfStreamResynchronizationAndR16smFixture() {
+  using namespace csm::board::remote;
+  // Byte-exact frame reconstructed from the typed 2026-07-21 R16SM capture
+  // (address/type/raw16); an independently captured raw UART fixture remains
+  // physical qualification evidence rather than being claimed here.
+  constexpr uint8_t fixture[] = {
+      0xC8, 0x18, 0x16, 0xE0, 0x03, 0x1F, 0xF8, 0xC0, 0x07,
+      0x3E, 0xF0, 0x19, 0xC5, 0x28, 0xE0, 0x33, 0x8A, 0x51,
+      0xC0, 0x07, 0x3E, 0xF0, 0x81, 0x0F, 0x7C, 0x86};
+  constexpr uint16_t expected[kRcChannelCount] = {
+      992, 992, 992, 992, 992, 992, 326, 326,
+      992, 326, 326, 992, 992, 992, 992, 992};
+  for (size_t offset = 0; offset < sizeof(fixture); ++offset) {
+    CrsfParser parser;
+    CrsfRcChannels decoded;
+    bool found = false;
+    for (uint8_t repeat = 0; repeat < 3u && !found; ++repeat) {
+      const size_t begin = repeat == 0u ? offset : 0u;
+      for (size_t index = begin; index < sizeof(fixture); ++index) {
+        const CrsfParseResult parsed = parser.ingest(fixture[index]);
+        if (parsed.status == CrsfParseStatus::FrameReady &&
+            decodeCrsfRcChannels(parsed.frame, &decoded) ==
+                CrsfDecodeStatus::Ok) {
+          found = true;
+          break;
+        }
+      }
+    }
+    assert(found);
+    assert(decoded.valid_mask == kR16smSixteenChannelMask);
+    for (uint8_t channel = 0; channel < kRcChannelCount; ++channel) {
+      assert(decoded.raw[channel] == expected[channel]);
+    }
+  }
+
+  uint8_t corrupt[sizeof(fixture)] = {};
+  memcpy(corrupt, fixture, sizeof(fixture));
+  corrupt[7] ^= 0x01u;
+  CrsfParser recovery;
+  for (uint8_t byte : corrupt) (void)recovery.ingest(byte);
+  bool recovered = false;
+  for (uint8_t byte : fixture) {
+    recovered |= recovery.ingest(byte).status == CrsfParseStatus::FrameReady;
+  }
+  assert(recovered && recovery.rejectedCrcTotal() != 0u);
+}
+
+void packLittleEndian(uint8_t* output, uint16_t bit_offset,
+                      uint8_t bit_count, uint16_t value) {
+  for (uint8_t bit = 0; bit < bit_count; ++bit) {
+    if ((value & (1u << bit)) != 0u) {
+      const uint16_t target = bit_offset + bit;
+      output[target / 8u] |= static_cast<uint8_t>(1u << (target % 8u));
+    }
+  }
+}
+
+void testCrsfModernFramesAndChannelValidity() {
+  using namespace csm::board::remote;
+  CrsfFrame subset;
+  subset.address = kR16smCrsfAddress;
+  subset.type = kCrsfFrameTypeSubsetRcChannelsPacked;
+  subset.payload_len = 6u;
+  subset.payload[0] = 0x21u;  // CH2 first, 11-bit, analog encoding.
+  packLittleEndian(&subset.payload[1], 0u, 11u, 992u);
+  packLittleEndian(&subset.payload[1], 11u, 11u, 992u);
+  packLittleEndian(&subset.payload[1], 22u, 11u, 992u);
+  CrsfRcChannels subset_channels;
+  assert(decodeCrsfRcChannels(subset, &subset_channels) ==
+         CrsfDecodeStatus::Ok);
+  assert(subset_channels.valid_mask == 0x000Eu);
+
+  RcNormalizer normalizer;
+  RcNormalizerConfig normalizer_config;
+  normalizer_config.configured = true;
+  normalizer_config.required_channel_mask = kR16smRequiredControlChannelMask;
+  assert(normalizer.configure(normalizer_config));
+  const RcNormalizeResult normalized = normalizer.normalizeCrsfChannels(
+      10u, 1u, subset_channels, kRemoteMetricUnknown,
+      kRemoteMetricUnknown, 0u);
+  assert(normalized.accepted);
+  assert(normalized.sample.channel_valid_mask == 0x000Eu);
+
+  CrsfRcChannels eight_channels;
+  eight_channels.count = 8u;
+  eight_channels.valid_mask = 0x00FFu;
+  for (uint8_t channel = 0; channel < 8u; ++channel) {
+    eight_channels.raw[channel] = kCrsfRawDefaultMid;
+  }
+  const RcNormalizeResult eight = normalizer.normalizeCrsfChannels(
+      20u, 2u, eight_channels, kRemoteMetricUnknown,
+      kRemoteMetricUnknown, 0u);
+  assert(eight.accepted && eight.sample.channel_valid_mask == 0x00FFu);
+  M4RemoteMailboxSnapshot snapshot;
+  snapshot.sample = eight.sample;
+  snapshot.sample_present = true;
+  snapshot.integrity_ok = true;
+  snapshot.link_state = RemoteLinkState::Valid;
+  RemoteControlSource source;
+  source.begin(20u);
+  assert(source.configure(RemoteControlSourceConfig{}));
+  source.update(20u, snapshot, true, false);
+  assert(source.readyForTakeover());
+  assert(source.command().auxiliary_permille == 0);
+  assert(source.command().steering_overlay_permille == 0);
+  assert(source.command().momentary_overlay_permille == 0);
+
+  const uint8_t rx_payload[5] = {60u, 90u, 75u, 4u, 10u};
+  const uint8_t tx_payload[6] = {62u, 88u, 70u, 3u, 10u, 50u};
+  const uint8_t link_types[] = {kCrsfFrameTypeLinkStatisticsRx,
+                                kCrsfFrameTypeLinkStatisticsTx};
+  for (uint8_t type : link_types) {
+    uint8_t wire[kCrsfMaxFrameBytes] = {};
+    const uint8_t* payload = type == kCrsfFrameTypeLinkStatisticsRx
+        ? rx_payload : tx_payload;
+    const uint8_t payload_len = type == kCrsfFrameTypeLinkStatisticsRx
+        ? sizeof(rx_payload) : sizeof(tx_payload);
+    const uint8_t length = buildCrsfBroadcastFrame(
+        type, payload, payload_len, wire, sizeof(wire));
+    CrsfParser parser;
+    CrsfParseResult parsed;
+    for (uint8_t index = 0; index < length; ++index) {
+      parsed = parser.ingest(wire[index]);
+    }
+    CrsfLinkStatistics statistics;
+    assert(parsed.status == CrsfParseStatus::FrameReady);
+    assert(decodeCrsfLinkStatistics(parsed.frame, &statistics) ==
+           CrsfDecodeStatus::Ok);
+    assert(statistics.uplink_link_quality ==
+           (type == kCrsfFrameTypeLinkStatisticsRx ? 75u : 70u));
+  }
+}
+
+void testTransmitterOffOnAndHostToRcTakeover() {
+  using namespace csm::board::remote;
+  ReceiverAdmission admission;
+  ReceiverAdmissionConfig admission_config;
+  admission_config.configured = true;
+  admission_config.receiver_address = kR16smCrsfAddress;
+  admission_config.consecutive_frames_required =
+      kR16smAdmissionConsecutiveFrames;
+  admission_config.required_channel_mask = kR16smRequiredControlChannelMask;
+  admission_config.rc_freshness_ms = kR16smRcFreshnessMs;
+  admission_config.link_statistics_freshness_ms =
+      kR16smLinkStatisticsFreshnessMs;
+  assert(admission.configure(admission_config));
+
+  ControlSourceManager manager;
+  manager.begin(19u);
+  uint8_t lane005[8] = {1u};
+  uint8_t lane007[8] = {2u};
+  uint8_t lane364[8] = {3u};
+  assert(manager.acceptHostState(1u, kAllLanePermitMask,
+                                 lane005, lane007, lane364, 1u));
+  manager.select(ControlSource::Host);
+  assert(manager.activeSource() == ControlSource::Host);
+
+  assert(!admission.observeRcFrame(10u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(!admission.observeRcFrame(20u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(admission.observeRcFrame(30u, kR16smCrsfAddress,
+                                  kR16smRequiredControlChannelMask));
+  LaneExecutionImage remote[kLaneCount] = {};
+  remote[kLane005].valid = 1u;
+  remote[kLane007].valid = 1u;
+  manager.updateRemote(1u, 1u, remote,
+                       admission.usable(30u, false, kRemoteMetricUnknown,
+                                        UINT32_MAX));
+  manager.select(ControlSource::Remote);
+  assert(manager.activeSource() == ControlSource::Remote);
+  const FinalControlSnapshotPayload rc = manager.snapshot(0x03u, 2u);
+  assert(rc.permit_mask == 0x03u && !rc.lanes[kLane364].valid);
+
+  // Transmitter OFF revokes RC. ON requires a fresh three-frame sequence; an
+  // old qualified state cannot preempt Host after the stale boundary.
+  assert(!admission.usable(200u, false, kRemoteMetricUnknown, UINT32_MAX));
+  manager.updateRemote(2u, 2u, remote, false);
+  manager.select(ControlSource::Host);
+  assert(manager.activeSource() == ControlSource::Host);
+  assert(!admission.observeRcFrame(201u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(!admission.observeRcFrame(211u, kR16smCrsfAddress,
+                                   kR16smRequiredControlChannelMask));
+  assert(admission.observeRcFrame(221u, kR16smCrsfAddress,
+                                  kR16smRequiredControlChannelMask));
 }
 
 void testSharedMemoryIntegrityAndBoundedRing() {
@@ -451,7 +676,10 @@ void testHostSessionAndSenderTimeBounds() {
 
 int main() {
   testHostSessionAndSenderTimeBounds();
-  testRemoteAuthorityRequiresFreshPositiveLinkEvidence();
+  testReceiverQualifiedAdmissionAndOptionalStatistics();
+  testCrsfStreamResynchronizationAndR16smFixture();
+  testCrsfModernFramesAndChannelValidity();
+  testTransmitterOffOnAndHostToRcTakeover();
   testSourceManagerOwnershipAndEpochs();
   testSharedMemoryIntegrityAndBoundedRing();
   testLongSafeCyclicAndRepeatedSafeStaging();
@@ -463,6 +691,6 @@ int main() {
   testDedicatedBufferTerminalReconciliation();
   testBringupTraceMonotonicFailureRetention();
   testStaticDueAndExplicitRequestAccounting();
-  testOnlyAcceptedCreatesPending();
+  testPhysicalPendingAlwaysReconciles();
   return 0;
 }

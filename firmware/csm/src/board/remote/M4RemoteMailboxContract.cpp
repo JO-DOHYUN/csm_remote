@@ -76,7 +76,7 @@ uint16_t computeM4RemoteMailboxCrc(const M4RemoteMailboxFrame& frame) {
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
     crcAppendI16(&crc, frame.ch[i]);
   }
-  crcAppendU16(&crc, frame.switch_bits);
+  crcAppendU16(&crc, frame.channel_valid_mask);
   crcAppendU8(&crc, frame.link_quality);
   crcAppendU8(&crc, frame.rssi_hint);
   crcAppendU16(&crc, frame.malformed_count);
@@ -137,7 +137,7 @@ M4RemoteMailboxDecodeResult decodeM4RemoteMailboxFrame(
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
     result.sample.ch[i] = frame.ch[i];
   }
-  result.sample.switch_bits = frame.switch_bits;
+  result.sample.channel_valid_mask = frame.channel_valid_mask;
   result.sample.link_quality = frame.link_quality;
   result.sample.rssi_hint = frame.rssi_hint;
   result.sample.malformed_count = frame.malformed_count;

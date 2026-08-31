@@ -5,7 +5,7 @@
 namespace csm::board::remote {
 
 static constexpr uint16_t kRcSampleMagic = 0x4352;  // "RC" little-endian marker.
-static constexpr uint8_t kRcSampleVersion = 1;
+static constexpr uint8_t kRcSampleVersion = 2;
 static constexpr uint8_t kRcChannelCount = 16;
 static constexpr uint8_t kRemoteMetricUnknown = 0xFF;
 static constexpr int16_t kRcNormalizedChannelMin = -1000;
@@ -38,7 +38,7 @@ struct RcSample {
   uint16_t seq = 0;
   uint32_t m4_time_ms = 0;
   int16_t ch[kRcChannelCount] = {};
-  uint16_t switch_bits = 0;
+  uint16_t channel_valid_mask = 0;
   uint8_t link_quality = kRemoteMetricUnknown;
   uint8_t rssi_hint = kRemoteMetricUnknown;
   uint16_t malformed_count = 0;
@@ -52,14 +52,6 @@ constexpr bool isUsableRemoteLink(RemoteLinkState state) {
 
 constexpr bool isUsableRcSampleState(RcSampleState state) {
   return state == RcSampleState::Ok;
-}
-
-constexpr bool hasFreshPositiveLinkStatistics(bool present,
-                                              uint8_t uplink_link_quality,
-                                              uint32_t age_ms,
-                                              uint32_t max_age_ms) {
-  return present && uplink_link_quality != kRemoteMetricUnknown &&
-         uplink_link_quality > 0u && age_ms <= max_age_ms;
 }
 
 constexpr RemoteLinkState remoteLinkStateForRcSampleState(RcSampleState state) {

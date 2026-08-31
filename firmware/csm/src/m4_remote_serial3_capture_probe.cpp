@@ -31,7 +31,7 @@
 #endif
 
 #ifndef BOARD_M4_REMOTE_CAPTURE_BAUD
-#define BOARD_M4_REMOTE_CAPTURE_BAUD 420000UL
+#define BOARD_M4_REMOTE_CAPTURE_BAUD 416666UL
 #endif
 
 #if BOARD_M4_REMOTE_CAPTURE_BAUD < 9600
@@ -48,7 +48,7 @@ using csm::board::remote::M4RemoteMailboxFrame;
 using csm::board::remote::M4RemoteMailboxWriter;
 using csm::board::remote::RcNormalizer;
 using csm::board::remote::RcNormalizerConfig;
-using csm::board::remote::decodeCrsfRcChannelsPacked;
+using csm::board::remote::decodeCrsfRcChannels;
 using csm::board::remote::kRemoteMetricUnknown;
 
 struct CaptureCounters {
@@ -59,6 +59,7 @@ struct CaptureCounters {
   uint32_t mailbox_publishes = 0;
   uint32_t rejected_length = 0;
   uint32_t rejected_crc = 0;
+  uint32_t rejected_address = 0;
   uint32_t decode_wrong_type = 0;
   uint32_t decode_bad_length = 0;
   uint32_t normalize_rejects = 0;
@@ -77,6 +78,7 @@ volatile uint32_t g_remote_probe_rc_frames = 0;
 volatile uint32_t g_remote_probe_mailbox_publishes = 0;
 volatile uint32_t g_remote_probe_rejected_length = 0;
 volatile uint32_t g_remote_probe_rejected_crc = 0;
+volatile uint32_t g_remote_probe_rejected_address = 0;
 volatile uint32_t g_remote_probe_last_byte_ms = 0;
 volatile uint32_t g_remote_probe_last_frame_ms = 0;
 volatile uint32_t g_remote_probe_last_mailbox_sequence = 0;
@@ -92,13 +94,16 @@ void publishVolatileSnapshot(uint32_t now_ms) {
   g_remote_probe_mailbox_publishes = g_counters.mailbox_publishes;
   g_remote_probe_rejected_length = g_counters.rejected_length;
   g_remote_probe_rejected_crc = g_counters.rejected_crc;
+  g_remote_probe_rejected_address = g_counters.rejected_address;
   if (g_counters.bytes > 0) {
     g_remote_probe_last_byte_ms = now_ms;
   }
 }
 
 void handleParseReject(CrsfParseStatus status) {
-  if (status == CrsfParseStatus::RejectedLength) {
+  if (status == CrsfParseStatus::RejectedAddress) {
+    ++g_counters.rejected_address;
+  } else if (status == CrsfParseStatus::RejectedLength) {
     ++g_counters.rejected_length;
   } else if (status == CrsfParseStatus::RejectedCrc) {
     ++g_counters.rejected_crc;
@@ -112,7 +117,7 @@ void handleFrame(uint32_t now_ms,
 
   CrsfRcChannels channels;
   const CrsfDecodeStatus decode_status =
-      decodeCrsfRcChannelsPacked(frame, &channels);
+      decodeCrsfRcChannels(frame, &channels);
   if (decode_status == CrsfDecodeStatus::WrongType) {
     ++g_counters.decode_wrong_type;
     return;
@@ -162,7 +167,7 @@ void setup() {
   RcNormalizerConfig config;
   config.configured = true;
   config.required_channel_mask =
-      csm::board::remote::kRemoteRequiredRcChannelMask;
+      csm::board::remote::kR16smRequiredControlChannelMask;
   g_normalizer.configure(config);
   g_parser.reset();
   g_mailbox_writer.reset();
@@ -182,7 +187,8 @@ void loop() {
     const auto result = g_parser.ingest(static_cast<uint8_t>(value));
     if (result.status == CrsfParseStatus::FrameReady) {
       handleFrame(now_ms, result.frame);
-    } else if (result.status == CrsfParseStatus::RejectedLength ||
+    } else if (result.status == CrsfParseStatus::RejectedAddress ||
+               result.status == CrsfParseStatus::RejectedLength ||
                result.status == CrsfParseStatus::RejectedCrc) {
       handleParseReject(result.status);
     }

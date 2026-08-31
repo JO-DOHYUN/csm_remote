@@ -14,7 +14,7 @@ void copySampleToFramePayload(const RcSample& sample, M4RemoteMailboxFrame* fram
   for (uint8_t i = 0; i < kRcChannelCount; ++i) {
     frame->ch[i] = sample.ch[i];
   }
-  frame->switch_bits = sample.switch_bits;
+  frame->channel_valid_mask = sample.channel_valid_mask;
   frame->link_quality = sample.link_quality;
   frame->rssi_hint = sample.rssi_hint;
   frame->malformed_count = sample.malformed_count;

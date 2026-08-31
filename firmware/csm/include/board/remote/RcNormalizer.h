@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "board/remote/CrsfParser.h"
+#include "board/remote/R16smReceiverProfile.h"
 #include "board/remote/RemoteTypes.h"
 
 namespace csm::board::remote {
@@ -10,9 +11,6 @@ namespace csm::board::remote {
 static constexpr uint16_t kCrsfRawDefaultMin = 172;
 static constexpr uint16_t kCrsfRawDefaultMid = 992;
 static constexpr uint16_t kCrsfRawDefaultMax = 1811;
-static constexpr uint16_t kRemoteRequiredRcChannelMask =
-    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 9) | (1u << 10);
-
 enum class RcNormalizeRejectDetail : uint16_t {
   None = 0,
   NotConfigured = 1,
@@ -21,11 +19,15 @@ enum class RcNormalizeRejectDetail : uint16_t {
   RawOutOfRange = 4,
 };
 
-struct RcNormalizerConfig {
-  bool configured = false;
+struct RcChannelCalibration {
   uint16_t raw_min = kCrsfRawDefaultMin;
   uint16_t raw_mid = kCrsfRawDefaultMid;
   uint16_t raw_max = kCrsfRawDefaultMax;
+};
+
+struct RcNormalizerConfig {
+  bool configured = false;
+  RcChannelCalibration channel[kRcChannelCount] = {};
   int16_t deadband_permille = 0;
   uint16_t required_channel_mask = 0;
 };
@@ -53,7 +55,9 @@ class RcNormalizer {
  private:
   static bool isValidConfig(const RcNormalizerConfig& config);
   bool isWithinRawRange(const CrsfRcChannels& channels) const;
-  int16_t normalizeRawChannel(uint16_t raw) const;
+  bool calibrationValid(uint8_t channel) const;
+  bool rawWithinCalibration(uint8_t channel, uint16_t raw) const;
+  int16_t normalizeRawChannel(uint8_t channel, uint16_t raw) const;
 
   RcNormalizerConfig config_ = {};
 };

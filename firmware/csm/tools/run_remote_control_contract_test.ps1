@@ -22,7 +22,12 @@ $sources = @(
   (Join-Path $project "src\board\control_island\ControlSourceManager.cpp"),
   (Join-Path $project "src\board\control_island\M4StaticCyclicExecutor.cpp"),
   (Join-Path $project "src\board\control\HostCommandFreshness.cpp"),
-  (Join-Path $project "src\board\control\HostControlSession.cpp")
+  (Join-Path $project "src\board\control\HostControlSession.cpp"),
+  (Join-Path $project "src\board\remote\CrsfParser.cpp"),
+  (Join-Path $project "src\board\remote\M4RemoteMailboxContract.cpp"),
+  (Join-Path $project "src\board\remote\RcNormalizer.cpp"),
+  (Join-Path $project "src\board\remote\ReceiverAdmission.cpp"),
+  (Join-Path $project "src\board\remote\RemoteControlSource.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /D CSM_CONTROL_ISLAND_SHARED_MEMORY_TEST=1 /I`"$testSupport`" /I`"$include`" $quotedSources /Fe:`"$output`""

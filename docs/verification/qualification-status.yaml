@@ -11,5 +11,8 @@ open_measurements:
   - exact_n_ehb
   - long_soak
   - feeder_pairing
+  - r16sm_uart_bit_time_measured_baud
+  - r16sm_raw_uart_off_on_frame_type_capture
+  - t16d_fhss_v2_1_16_channel_profile_sweep
 promotion_rule: measure_then_review_then_freeze_then_qualify
 runtime_permission: false
