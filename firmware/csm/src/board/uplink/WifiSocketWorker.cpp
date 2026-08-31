@@ -7,6 +7,13 @@
 
 namespace csm::board::uplink {
 
+namespace {
+// The product WHD interface is backed by lwIP. These are the stable POSIX/lwIP
+// IPPROTO_TCP and TCP_NODELAY values accepted as stack-specific Mbed options.
+constexpr int kTcpProtocolLevel = 6;
+constexpr int kTcpNoDelayOption = 1;
+}  // namespace
+
 WifiSocketWorker::WifiSocketWorker(WifiWorkerMailbox& mailbox)
     : mailbox_(mailbox) {}
 
@@ -380,9 +387,19 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
 
   beginCall(WifiWorkerCallPhase::ConfigureClient);
   candidate->set_blocking(false);
-  candidate->sigio(
-      mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
-  endCall(0);
+  int no_delay = 1;
+  const nsapi_error_t configure_result = candidate->setsockopt(
+      kTcpProtocolLevel, kTcpNoDelayOption, &no_delay, sizeof(no_delay));
+  if (configure_result == NSAPI_ERROR_OK) {
+    candidate->sigio(
+        mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
+  }
+  endCall(configure_result);
+  if (configure_result != NSAPI_ERROR_OK) {
+    noteSocketError(configure_result);
+    closeSocket(candidate, WifiWorkerCallPhase::CloseClient);
+    return;
+  }
 
   // RX reset has a worker-owned odd/even generation. Clear the prior socket
   // epoch before producer admission or facade downlink can observe this one.

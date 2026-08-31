@@ -145,6 +145,9 @@ logger/storage에 용량, wear, retention과 export 계약을 승인해야 한�
 
 - `WifiSocketWorker` 하나만 AP, listener, accepted socket, send, receive,
   abort와 close를 소유한다.
+- accepted client는 Live admission 전에 `TCP_NODELAY` 설정에 성공해야 하며,
+  실패한 client는 닫는다. health/control evidence를 TCP small-write batching으로
+  freshness 경계 밖에 보류하지 않는다.
 - producer transition, critical/control request와 `sigio`가 worker를 깨우며
   bounded fallback이 notification loss를 제한한다.
 - 한 pump는 설정된 write 수/byte/time budget을 넘지 않는다.

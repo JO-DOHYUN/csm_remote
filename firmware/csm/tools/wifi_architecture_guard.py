@@ -643,6 +643,19 @@ if accept_path.index("resetRxForNewEpoch()") > accept_path.index(
     "activateLiveSession()"
 ):
     fail("new RX epoch is exposed before its stale bytes are reset")
+for token in (
+    "candidate->setsockopt(",
+    "kTcpProtocolLevel",
+    "kTcpNoDelayOption",
+    "if (configure_result != NSAPI_ERROR_OK)",
+    "closeSocket(candidate, WifiWorkerCallPhase::CloseClient);",
+):
+    if token not in accept_path:
+        fail(f"accepted TCP client lacks fail-closed no-delay configuration: {token!r}")
+if accept_path.index("if (configure_result != NSAPI_ERROR_OK)") > accept_path.index(
+    "activateLiveSession()"
+):
+    fail("TCP client is admitted before no-delay configuration succeeds")
 if close_client.index("deactivateLiveSession()") > close_client.index(
     "invalidateRxEpoch()"
 ):
