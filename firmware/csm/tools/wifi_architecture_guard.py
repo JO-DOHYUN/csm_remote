@@ -38,6 +38,12 @@ platformio = (ROOT / "platformio.ini").read_text(encoding="utf-8")
 product_envelope = (
     ROOT / "include" / "board" / "uplink" / "ProductUplinkEnvelope.h"
 ).read_text(encoding="utf-8")
+control_mailbox_header = (
+    ROOT / "include" / "board" / "uplink" / "WifiControlPlaneMailbox.h"
+).read_text(encoding="utf-8")
+control_mailbox_source = (
+    ROOT / "src" / "board" / "uplink" / "WifiControlPlaneMailbox.cpp"
+).read_text(encoding="utf-8")
 
 
 def env_section(name: str) -> str:
@@ -70,6 +76,11 @@ for token in (
     "server_.bind(",
     "server_.listen(1)",
     "server_.accept(",
+    "control_server_.bind(config_.control_port)",
+    "control_server_.listen(1)",
+    "control_server_.accept(",
+    "control_client_->send(",
+    "control_client_->recv(",
     "client_->send(",
     "client_->recv(",
     "candidate->set_blocking(false)",
@@ -108,6 +119,7 @@ for token in (
     "BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS=192",
     "BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS=64",
     "BOARD_WIFI_STALL_TIMEOUT_MS=5000",
+    "BOARD_WIFI_CONTROL_TCP_PORT=3334",
     "BOARD_WIFI_CALL_STALL_TIMEOUT_MS=5000",
     "BOARD_CAN_RX_SEGMENT_FLUSH_US=20000",
 ):
@@ -169,10 +181,31 @@ for token in (
     "quarantineStartupFailure(",
     "bool WifiSocketWorker::rollbackNetwork()",
     "if (!startup_complete_ && !state_.startup_attempts_exhausted)",
-    "return cleanup_confirmed && !server_opened_ && !ap_started_;",
+    "return cleanup_confirmed && !server_opened_ && !control_server_opened_ &&",
 ):
     if token not in worker:
         fail(f"bounded AP startup recovery is missing {token!r}")
+
+for token in (
+    "kFrameCapacity = 64",
+    "kQueueRecords = 16",
+    "kRxCapacity = 1024",
+    "disconnect_request_sequence_",
+    "publish_sequence_",
+):
+    if token not in control_mailbox_header:
+        fail(f"bounded Host control mailbox is missing {token!r}")
+for token in (
+    "RecordType::StreamSession",
+    "RecordType::ControlAck",
+    "connection_epoch_.fetch_add",
+    "tail - head >= kQueueRecords",
+    "generation_.load(std::memory_order_acquire) != generation",
+):
+    if token not in control_mailbox_source:
+        fail(f"Host control epoch/sequence contract is missing {token!r}")
+if worker.index("serviceControlClient(now_ms)") > worker.index("serviceClient(now_ms)"):
+    fail("bulk telemetry is serviced before Host control")
 
 for token in (
     "state_revision_",
@@ -439,7 +472,7 @@ for token in (
         fail(f"runtime-mode contract is missing {token!r}")
 
 disabled_guard = "if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;"
-worker_construction = "static WifiSocketWorker socket_worker(mailbox_);"
+worker_construction = "static WifiSocketWorker socket_worker(mailbox_, control_mailbox_);"
 if disabled_guard not in sink or sink.index(disabled_guard) > sink.index(worker_construction):
     fail("Disabled mode is not rejected before worker construction/start")
 

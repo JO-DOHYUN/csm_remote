@@ -206,6 +206,7 @@ struct WifiTcpSinkConfig {
   const char* ap_ssid = nullptr;
   const char* ap_passphrase = nullptr;
   uint16_t port = 3333;
+  uint16_t control_port = 3334;
   uint8_t channel = 6;
   uint8_t ip[4] = {192, 168, 4, 1};
   uint64_t boot_session_id = 0;
@@ -252,6 +253,13 @@ enum class WifiWorkerCallPhase : uint8_t {
   DeleteExtraClient = 12,
   StopServer = 13,
   StopAccessPoint = 14,
+  BeginControlServer = 15,
+  AcceptControlClient = 16,
+  ConfigureControlClient = 17,
+  SendControl = 18,
+  ReceiveControl = 19,
+  CloseControlClient = 20,
+  StopControlServer = 21,
 };
 
 enum class WifiCloseReason : uint8_t {

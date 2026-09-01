@@ -17,6 +17,7 @@
 #endif
 
 #include "board/uplink/WifiWorkerContract.h"
+#include "board/uplink/WifiControlPlaneMailbox.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 
@@ -128,6 +129,12 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   bool isolateMissedSessionAnchor(uint64_t publish_seq);
   void abortQueuedFrames();
   Stream* downlinkStream();
+  Stream* controlDownlinkStream();
+  bool offerControlAck(const uint8_t* payload, uint16_t length);
+  bool controlConnected() const { return control_mailbox_.connected(); }
+  uint32_t controlConnectionEpoch() const {
+    return control_mailbox_.connectionEpoch();
+  }
 
   int available() override;
   int read() override;
@@ -155,6 +162,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
       uint64_t mono_us, uint32_t now_ms) const;
  private:
   WifiWorkerMailbox mailbox_;
+  WifiControlPlaneMailbox control_mailbox_;
   WifiSocketWorker* worker_ = nullptr;
   WifiTcpSinkConfig config_;
   WifiTcpSinkCounters counters_;

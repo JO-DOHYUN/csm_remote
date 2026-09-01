@@ -14,8 +14,9 @@ constexpr int kTcpProtocolLevel = 6;
 constexpr int kTcpNoDelayOption = 1;
 }  // namespace
 
-WifiSocketWorker::WifiSocketWorker(WifiWorkerMailbox& mailbox)
-    : mailbox_(mailbox) {}
+WifiSocketWorker::WifiSocketWorker(
+    WifiWorkerMailbox& mailbox, WifiControlPlaneMailbox& control_mailbox)
+    : mailbox_(mailbox), control_mailbox_(control_mailbox) {}
 
 bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   if (thread_started_) {
@@ -34,7 +35,9 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode) ||
       config_.startup_retry_ms == 0 || config_.ap_ssid == nullptr ||
       config_.ap_passphrase == nullptr ||
-      (state_.tcp_enabled && config_.port == 0)) {
+      (state_.tcp_enabled &&
+       (config_.port == 0 || config_.control_port == 0 ||
+        config_.port == config_.control_port))) {
     state_.counters.worker_start_fail_total = 1;
     mailbox_.publishState(state_);
     return false;
@@ -104,11 +107,24 @@ void WifiSocketWorker::run() {
     }
 
     serviceRequests();
+    serviceControlRequests();
     if (mailbox_.abortRequestSequence() != handled_abort_sequence_) {
       // A producer was still committing while the prior epoch closed. Do not
       // accept a new client until that epoch's unsent queue is fully discarded.
       publishState(now_ms);
       continue;
+    }
+    // Host causal ACKs are serviced before the bulk evidence socket. Both are
+    // nonblocking and bounded, but telemetry backpressure never gets first
+    // claim on a worker turn.
+    if (control_client_ == nullptr) {
+      if (static_cast<uint32_t>(now_ms - last_control_accept_poll_ms_) >=
+          BOARD_WIFI_ACCEPT_POLL_MS) {
+        last_control_accept_poll_ms_ = now_ms;
+        serviceControlAccept(now_ms);
+      }
+    } else {
+      serviceControlClient(now_ms);
     }
     if (client_ == nullptr) {
       if (static_cast<uint32_t>(now_ms - last_accept_poll_ms_) >=
@@ -150,8 +166,15 @@ uint32_t WifiSocketWorker::nextWaitTimeoutMs(uint32_t now_ms) const {
                : BOARD_WIFI_STATE_PUBLISH_PERIOD_MS;
   }
   if (!state_.tcp_enabled) return BOARD_WIFI_STATE_PUBLISH_PERIOD_MS;
-  if (client_ == nullptr) {
-    const uint32_t elapsed = now_ms - last_accept_poll_ms_;
+  if (client_ == nullptr || control_client_ == nullptr) {
+    const uint32_t telemetry_elapsed = now_ms - last_accept_poll_ms_;
+    const uint32_t control_elapsed = now_ms - last_control_accept_poll_ms_;
+    const uint32_t elapsed = client_ == nullptr && control_client_ == nullptr
+                                 ? (telemetry_elapsed < control_elapsed
+                                        ? telemetry_elapsed
+                                        : control_elapsed)
+                                 : (client_ == nullptr ? telemetry_elapsed
+                                                       : control_elapsed);
     return elapsed >= BOARD_WIFI_ACCEPT_POLL_MS
                ? 0
                : BOARD_WIFI_ACCEPT_POLL_MS - elapsed;
@@ -271,12 +294,60 @@ bool WifiSocketWorker::initializeNetwork() {
   }
 
   state_.server_ready = true;
+
+  beginCall(WifiWorkerCallPhase::BeginControlServer);
+  nsapi_error_t control_server_result = control_server_.open(ap_interface_);
+  if (control_server_result == NSAPI_ERROR_OK) {
+    control_server_opened_ = true;
+    int reuse_address = 1;
+    control_server_result = control_server_.setsockopt(
+        NSAPI_SOCKET, NSAPI_REUSEADDR, &reuse_address, sizeof(reuse_address));
+  }
+  if (control_server_result == NSAPI_ERROR_OK) {
+    control_server_result = control_server_.bind(config_.control_port);
+  }
+  if (control_server_result == NSAPI_ERROR_OK) {
+    control_server_result = control_server_.listen(1);
+  }
+  if (control_server_result == NSAPI_ERROR_OK) {
+    control_server_.set_blocking(false);
+    control_server_.sigio(
+        mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
+  }
+  endCall(control_server_result);
+  if (control_server_result != NSAPI_ERROR_OK) {
+    state_.counters.server_start_fail_total++;
+    state_.last_network_error = control_server_result;
+    const bool cleanup_confirmed = rollbackNetwork();
+    if (!wifiStartupRetryAllowed(
+            WifiStartupFailureBoundary::AfterApStarted,
+            cleanup_confirmed)) {
+      quarantineStartupFailure(state_.last_network_error);
+    } else {
+      state_.last_network_error = control_server_result;
+    }
+    return false;
+  }
+
   state_.last_network_error = 0;
   return true;
 }
 
 bool WifiSocketWorker::rollbackNetwork() {
   bool cleanup_confirmed = true;
+  closeControlClient();
+  if (control_server_opened_) {
+    control_server_.sigio(nullptr);
+    beginCall(WifiWorkerCallPhase::StopControlServer);
+    const nsapi_error_t result = control_server_.close();
+    endCall(result);
+    if (result == NSAPI_ERROR_OK || result == NSAPI_ERROR_NO_SOCKET) {
+      control_server_opened_ = false;
+    } else {
+      noteSocketError(result);
+      cleanup_confirmed = false;
+    }
+  }
   if (server_opened_) {
     server_.sigio(nullptr);
     beginCall(WifiWorkerCallPhase::StopServer);
@@ -292,7 +363,8 @@ bool WifiSocketWorker::rollbackNetwork() {
   // Do not tear down the parent AP when its child server could not be closed.
   // The worker is quarantined instead of retrying into an unknown ownership
   // state.
-  if (ap_started_ && !server_opened_ && ap_interface_ != nullptr) {
+  if (ap_started_ && !server_opened_ && !control_server_opened_ &&
+      ap_interface_ != nullptr) {
     beginCall(WifiWorkerCallPhase::StopAccessPoint);
     const nsapi_error_t result = ap_interface_->stop();
     endCall(result);
@@ -308,7 +380,8 @@ bool WifiSocketWorker::rollbackNetwork() {
   state_.ap_ready = ap_started_;
   state_.server_ready = server_opened_;
   state_.network_ready = false;
-  return cleanup_confirmed && !server_opened_ && !ap_started_;
+  return cleanup_confirmed && !server_opened_ && !control_server_opened_ &&
+         !ap_started_;
 }
 
 void WifiSocketWorker::quarantineStartupFailure(nsapi_error_t error) {
@@ -544,6 +617,136 @@ void WifiSocketWorker::serviceReceive(uint32_t) {
   } else if (received != NSAPI_ERROR_WOULD_BLOCK) {
     noteSocketError(static_cast<nsapi_error_t>(received));
     closeClient(WifiCloseReason::SocketError);
+  }
+}
+
+void WifiSocketWorker::serviceControlRequests() {
+  const uint32_t requested =
+      control_mailbox_.disconnectRequestSequence();
+  if (requested != handled_control_disconnect_sequence_) {
+    handled_control_disconnect_sequence_ = requested;
+    closeControlClient();
+  }
+}
+
+void WifiSocketWorker::serviceControlAccept(uint32_t) {
+  nsapi_error_t error = NSAPI_ERROR_WOULD_BLOCK;
+  beginCall(WifiWorkerCallPhase::AcceptControlClient);
+  TCPSocket* candidate = control_server_.accept(&error);
+  endCall(error);
+  if (candidate == nullptr) {
+    if (error != NSAPI_ERROR_WOULD_BLOCK) noteSocketError(error);
+    return;
+  }
+  beginCall(WifiWorkerCallPhase::ConfigureControlClient);
+  candidate->set_blocking(false);
+  int no_delay = 1;
+  const nsapi_error_t configured = candidate->setsockopt(
+      kTcpProtocolLevel, kTcpNoDelayOption, &no_delay, sizeof(no_delay));
+  if (configured == NSAPI_ERROR_OK) {
+    candidate->sigio(
+        mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
+  }
+  endCall(configured);
+  if (configured != NSAPI_ERROR_OK ||
+      !control_mailbox_.activate(static_cast<uint64_t>(micros()))) {
+    if (configured != NSAPI_ERROR_OK) noteSocketError(configured);
+    closeSocket(candidate, WifiWorkerCallPhase::CloseControlClient);
+    return;
+  }
+  control_client_ = candidate;
+  control_anchor_length_ = 0;
+  control_anchor_offset_ = 0;
+  control_anchor_pending_ = true;
+  control_tx_length_ = 0;
+  control_tx_offset_ = 0;
+  control_tx_progress_.reset();
+  signalWake(WifiWakeTxData);
+}
+
+void WifiSocketWorker::serviceControlClient(uint32_t now_ms) {
+  serviceControlReceive();
+  if (control_client_ == nullptr) return;
+  serviceControlTransmit(now_ms);
+}
+
+void WifiSocketWorker::serviceControlReceive() {
+  beginCall(WifiWorkerCallPhase::ReceiveControl);
+  const nsapi_size_or_error_t received =
+      control_client_->recv(control_rx_buffer_, sizeof(control_rx_buffer_));
+  endCall(received);
+  if (received > 0) {
+    if (!control_mailbox_.pushRx(control_rx_buffer_,
+                                 static_cast<uint16_t>(received))) {
+      closeControlClient();
+    }
+    return;
+  }
+  if (received == 0) {
+    closeControlClient();
+  } else if (received != NSAPI_ERROR_WOULD_BLOCK) {
+    noteSocketError(static_cast<nsapi_error_t>(received));
+    closeControlClient();
+  }
+}
+
+void WifiSocketWorker::serviceControlTransmit(uint32_t now_ms) {
+  if (control_anchor_pending_ && control_anchor_length_ == 0) {
+    if (!control_mailbox_.copyAnchor(
+            control_tx_buffer_, sizeof(control_tx_buffer_),
+            control_anchor_length_)) {
+      closeControlClient();
+      return;
+    }
+  }
+  if (!control_anchor_pending_ && control_tx_length_ == 0) {
+    if (!control_mailbox_.peekTx(control_tx_buffer_, sizeof(control_tx_buffer_),
+                                 control_tx_length_)) {
+      return;
+    }
+    control_tx_offset_ = 0;
+  }
+  const uint16_t length =
+      control_anchor_pending_ ? control_anchor_length_ : control_tx_length_;
+  uint16_t& offset =
+      control_anchor_pending_ ? control_anchor_offset_ : control_tx_offset_;
+  if (length == 0 || offset >= length) return;
+
+  beginCall(WifiWorkerCallPhase::SendControl);
+  const nsapi_size_or_error_t sent =
+      control_client_->send(control_tx_buffer_ + offset, length - offset);
+  endCall(sent);
+  const uint32_t completed_ms = millis();
+  if (sent > 0) {
+    const uint16_t remaining = static_cast<uint16_t>(length - offset);
+    const uint16_t progressed =
+        sent > remaining ? remaining : static_cast<uint16_t>(sent);
+    offset = static_cast<uint16_t>(offset + progressed);
+    control_tx_progress_.observe(completed_ms, true, 300);
+    if (offset == length) {
+      if (control_anchor_pending_) {
+        control_anchor_pending_ = false;
+        control_anchor_length_ = 0;
+        control_anchor_offset_ = 0;
+      } else {
+        control_mailbox_.consumeTx();
+        control_tx_length_ = 0;
+        control_tx_offset_ = 0;
+      }
+      if (control_mailbox_.queuedRecords() != 0) signalWake(WifiWakeTxData);
+    }
+    return;
+  }
+  if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
+    noteSocketError(static_cast<nsapi_error_t>(sent));
+    closeControlClient();
+    return;
+  }
+  const WifiTxProgressObservation progress =
+      control_tx_progress_.observe(completed_ms, false, 300);
+  if (progress.close_no_progress ||
+      static_cast<uint32_t>(completed_ms - now_ms) > 300u) {
+    closeControlClient();
   }
 }
 
@@ -858,6 +1061,19 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   // close. The facade must not misclassify the close itself as a new stall.
   publishState(millis(), true);
   closeSocket(closing, WifiWorkerCallPhase::CloseClient);
+}
+
+void WifiSocketWorker::closeControlClient() {
+  TCPSocket* closing = control_client_;
+  control_client_ = nullptr;
+  control_mailbox_.deactivate();
+  control_anchor_pending_ = false;
+  control_anchor_length_ = 0;
+  control_anchor_offset_ = 0;
+  control_tx_length_ = 0;
+  control_tx_offset_ = 0;
+  control_tx_progress_.reset();
+  closeSocket(closing, WifiWorkerCallPhase::CloseControlClient);
 }
 
 void WifiSocketWorker::closeSocket(TCPSocket*& socket,

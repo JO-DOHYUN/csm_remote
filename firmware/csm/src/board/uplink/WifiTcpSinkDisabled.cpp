@@ -26,6 +26,10 @@ void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
 Stream* WifiTcpSink::downlinkStream() { return nullptr; }
 
+Stream* WifiTcpSink::controlDownlinkStream() { return nullptr; }
+
+bool WifiTcpSink::offerControlAck(const uint8_t*, uint16_t) { return false; }
+
 int WifiTcpSink::available() { return 0; }
 
 int WifiTcpSink::read() { return -1; }

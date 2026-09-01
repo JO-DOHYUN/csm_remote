@@ -1,5 +1,28 @@
 # TRANSPORT_AND_RECORDS_KO
 
+## 2026-09-01 Host control-plane isolation contract
+
+This section supersedes older statements that placed Service/HIL Host commands
+and causal ACK consumption on the canonical telemetry TCP epoch.
+
+- TCP `3333` remains the live-only canonical telemetry/evidence stream with the
+  existing global publish identity and bounded FIFO.
+- TCP `3334` is the Host control stream. It starts each connection with its own
+  `STREAM_SESSION` carrying the same M7 boot identity, then carries Host
+  downlink commands and `CONTROL_ACK` only. Its connection epoch and publish
+  sequence are independent from `3333`.
+- The control ACK queue is fixed at 16 complete records of at most 64 encoded
+  bytes. Full admission, RX overflow, socket failure, peer close, or 300 ms
+  without positive TX progress closes that control epoch and discards all old
+  command/ACK bytes. There is no reconnect replay, retry queue, or telemetry
+  fallback.
+- M7 continues to publish the same `CONTROL_ACK` on canonical USB/`3333` as
+  immutable evidence. Only the `3334` copy satisfies Android causal liveness;
+  canonical observation delay cannot keep or revoke Host authority.
+- The bounded nonblocking Wi-Fi worker services `3334` before the bulk evidence
+  socket on every turn. Telemetry queue occupancy/would-block cannot consume the
+  control FIFO or reorder its sequence.
+
 ## 2026-08-03 live-first transient-envelope contract
 
 This section supersedes the queue dimensions and close-policy statements in
@@ -574,7 +597,7 @@ Current active Service/HIL Host policy:
   이는 M4 vehicle semantic 계산이나 implicit zero fallback이 아니다.
 - N-shot is a source-agnostic successful-TX budget. `TXBTO` increments the count;
   Nth success immediately blocks further transaction releases.
-- The Service/HIL Wi-Fi profile accepts downlink only from its active Wi-Fi TCP
+- The Service/HIL Wi-Fi profile accepts Host control downlink only from active TCP `3334`
   client. USB CDC remains an independent observation sink and is not a second
   host-control source in that profile.
 - TCP arrival spacing and Host timestamps are not CAN cadence clocks. M4 TIM4 is
@@ -596,12 +619,13 @@ Current active Service/HIL Host policy:
   socket calls from the CAN/main loop.
 - The worker is event-driven. Empty-to-nonempty producer transitions, critical
   records, control requests, and socket `sigio` set RTOS event flags. The
-  callback performs no socket operation. A 10 ms connected fallback wake covers
+  callback performs no socket operation. A 5 ms connected fallback wake covers
   lost/coalesced notifications; there is no 1 ms polling loop. Positive bounded
   progress self-schedules another drain wake while data remains. Worker state is
   coalesced to 100 ms except forced connection transitions.
-- A single active TCP client is allowed. While it is active, the listener is not
-  polled; a second connection remains outside the canonical sink. Disconnect or
+- One active client is allowed per listener (`3333` evidence, `3334` control).
+  While one is active its own listener is not polled; an extra connection to
+  that same port remains outside its stream. Disconnect or
   stall handling clears only
   that sink's queued copies and advances its connection epoch; it never clears
   source truth or another sink.
@@ -669,8 +693,11 @@ Host control session:
   - `16 control_schema u8`: `3` for causal-proof ARM/renew; DISARM remains fail-safe
   - `17..23 reserved`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
-  A valid query refreshes the requesting Wi-Fi epoch with
-  `STREAM_SESSION -> CAPABILITY -> CONTROL_ACK` in that order. The query is
+  It is the only downlink record accepted on telemetry TCP `3333`, so
+  ProductionObserver can probe identity without opening Host authority. A valid
+  query on either channel requests fresh canonical
+  `STREAM_SESSION -> CAPABILITY` evidence on TCP `3333`/USB and returns its
+  `CONTROL_ACK` on TCP `3334` (plus the canonical evidence mirror). The query is
   idempotent and gives a reconnecting host a fresh boot identity/sequence
   anchor even if it missed the connection-edge announcement.
 - Production Host TX requires a live CSM-local causal proof, accepted ARM, live

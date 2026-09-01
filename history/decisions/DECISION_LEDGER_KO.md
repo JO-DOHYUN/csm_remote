@@ -824,3 +824,28 @@ Targeted history route는 `HISTORY_NAVIGATOR.md`가 제공한다. 이 ledger의 
 - Supersedes: D-039 Harness V2 routing. Rollback requires restoring V2 only as a
   historical snapshot, never as current identity.
 - Runtime: repository knowledge, docs and tools only; source/wire/control behavior unchanged.
+
+## D-041 Isolate Host causal control from canonical telemetry backpressure
+
+- Date: 2026-09-01
+- Status: Active owner-approved architecture correction.
+- Proven failure: a valid 10-minute ARM run lost Android ARM near 46 s while M4
+  TIM4/FDCAN, M7 publish age/gap, bus state, CRC and raw-ring loss remained
+  healthy. Immediately before the drop, canonical TCP `3333` accumulated 30
+  records/5,182 B, 532 ms oldest age and 220 would-block outcomes; Android
+  declared `CONTROL_ISLAND_HEALTH stale`, then M7 rejected the next renewal as
+  `HostProofRequired`. Raising Android health stale from 350 to 1,000 ms cannot
+  repair the independent M7 300 ms causal-proof expiry.
+- Decision: keep `3333` as ordered evidence and add TCP `3334` as a bounded
+  Host command/causal-ACK stream with independent anchor, epoch and sequence.
+  CSM mirrors ACKs canonically for evidence, but only `3334` drives Android
+  liveness. Control is serviced before bulk telemetry; no bytes replay across
+  reconnect.
+- Safety: M7 300 ms causal proof, M4 300 ms source freshness, M4-health 500 ms,
+  explicit ARM/lease, RC priority, fixed safe wire and FDCAN ownership are
+  unchanged. Telemetry stale can block a new ARM but cannot by itself revoke a
+  healthy already-ACTIVE control session; fresh telemetry faults/RC authority
+  still veto it.
+- Supersedes: the single-TCP control-liveness portion of the live-first Wi-Fi
+  decisions. It does not supersede canonical ordering, capture integrity,
+  live-only/no-replay evidence, or USB fanout.

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "board/uplink/WifiWorkerContract.h"
+#include "board/uplink/WifiControlPlaneMailbox.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 
 #if BOARD_ENABLE_WIFI_UPLINK
@@ -22,20 +23,35 @@ namespace csm::board::uplink {
 #if BOARD_ENABLE_WIFI_UPLINK
 class WifiSocketWorker final {
  public:
- explicit WifiSocketWorker(WifiWorkerMailbox& mailbox);
+  WifiSocketWorker(WifiWorkerMailbox& mailbox,
+                   WifiControlPlaneMailbox& control_mailbox);
   bool start(const WifiTcpSinkConfig& config);
 
  private:
   WifiWorkerMailbox& mailbox_;
+  WifiControlPlaneMailbox& control_mailbox_;
   WifiTcpSinkConfig config_;
   WifiWorkerStateSnapshot state_;
   WhdSoftAPInterface* ap_interface_ = nullptr;
   TCPSocket server_;
   TCPSocket* client_ = nullptr;
+  TCPSocket control_server_;
+  TCPSocket* control_client_ = nullptr;
   bool ap_started_ = false;
   bool server_opened_ = false;
+  bool control_server_opened_ = false;
   uint8_t tx_buffer_[BOARD_WIFI_TX_CHUNK_BYTES] = {};
   uint8_t rx_buffer_[256] = {};
+  uint8_t control_tx_buffer_[WifiControlPlaneMailbox::kFrameCapacity] = {};
+  uint8_t control_rx_buffer_[256] = {};
+  uint16_t control_tx_length_ = 0;
+  uint16_t control_tx_offset_ = 0;
+  uint16_t control_anchor_length_ = 0;
+  uint16_t control_anchor_offset_ = 0;
+  bool control_anchor_pending_ = false;
+  uint32_t handled_control_disconnect_sequence_ = 0;
+  uint32_t last_control_accept_poll_ms_ = 0;
+  WifiTxProgressTracker control_tx_progress_;
   WifiMailboxSessionAnchor session_anchor_;
   uint16_t session_anchor_offset_ = 0;
   uint16_t session_anchor_accounted_offset_ = 0;
@@ -77,6 +93,11 @@ class WifiSocketWorker final {
   void serviceClient(uint32_t now_ms);
   void serviceAccept(uint32_t now_ms);
   void serviceReceive(uint32_t now_ms);
+  void serviceControlRequests();
+  void serviceControlAccept(uint32_t now_ms);
+  void serviceControlClient(uint32_t now_ms);
+  void serviceControlReceive();
+  void serviceControlTransmit(uint32_t now_ms);
   WifiTransmitPumpResult serviceSessionAnchor(uint32_t now_ms);
   WifiTransmitPumpResult serviceTransmit(uint32_t now_ms);
   void updateQueuePressure(uint32_t now_ms);
@@ -86,6 +107,7 @@ class WifiSocketWorker final {
   bool refreshAdmissionSnapshotForSettlement();
   bool applyPendingConsume();
   void closeClient(WifiCloseReason reason);
+  void closeControlClient();
   void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);
   void applyAbortRequest();
   void noteSocketError(nsapi_error_t error);

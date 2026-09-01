@@ -25,7 +25,7 @@ source/authority/transaction 재사용은 허용하지 않는다.
 
 ### M7
 
-- `HostControlSession` heartbeat causal-ACK proof/ARM/lease와 전역 consumed command-ID 검증, M4 RC mailbox 검증
+- 독립 Host control TCP `3334`의 heartbeat causal-ACK proof/ARM/lease와 전역 consumed command-ID 검증, M4 RC mailbox 검증
 - RC channel semantics, limiter, HNO1 payload mapping
 - Host/RC 전역 단일 source authority와 coherent final snapshot
 - canonical typed evidence, feeder bus, bounded USB/Wi-Fi sinks
@@ -56,6 +56,15 @@ M4 -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
                        health/terminal counters <─────┤
                        bounded raw CAN1 ring <────────┘ -> M7 canonical evidence
 ```
+
+Host control transport는 bulk canonical telemetry와 분리된다. TCP `3334`는 fresh
+`STREAM_SESSION` anchor 뒤 Host 명령과 `CONTROL_ACK`만 전달하고 자체 connection epoch와
+publish sequence를 가진다. 16×64-byte bounded ACK FIFO가 full이거나 300 ms 동안 positive
+send progress가 없으면 해당 control epoch를 닫고 old bytes를 폐기한다. TCP `3333`의
+canonical `CONTROL_ACK` mirror는 capture/diagnostic evidence이며 Host causal proof를 열지
+않는다. 두 socket은 같은 bounded nonblocking Wi-Fi worker를 사용하되 매 turn control을 먼저
+서비스한다. `3333` downlink는 observer `HOST_QUERY_CAPABILITY`만 허용하고 motion/session
+record는 dispatch하지 않는다. reconnect replay와 telemetry backlog에 의한 control gating은 없다.
 
 Source 우선순위는 `RC > Host > None`이며 이 active profile에는 autonomy source가 없다.
 RC source admission은 R16SM profile의 `0xC8` address, CRC, 지원 RC frame(`0x16`, bounded

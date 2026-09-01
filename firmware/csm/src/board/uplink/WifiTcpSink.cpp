@@ -33,7 +33,8 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
   session_anchor_queued_ = false;
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
-  static WifiSocketWorker socket_worker(mailbox_);
+  control_mailbox_.configure(config_.boot_session_id);
+  static WifiSocketWorker socket_worker(mailbox_, control_mailbox_);
   worker_ = &socket_worker;
   enabled_ = worker_->start(config_);
   if (!enabled_) {
@@ -214,6 +215,14 @@ void WifiTcpSink::abortQueuedFrames() { mailbox_.requestAbort(); }
 
 Stream* WifiTcpSink::downlinkStream() {
   return connected() ? this : nullptr;
+}
+
+Stream* WifiTcpSink::controlDownlinkStream() {
+  return control_mailbox_.connected() ? &control_mailbox_ : nullptr;
+}
+
+bool WifiTcpSink::offerControlAck(const uint8_t* payload, uint16_t length) {
+  return control_mailbox_.offerAck(payload, length);
 }
 
 int WifiTcpSink::available() {

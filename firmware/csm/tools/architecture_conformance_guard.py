@@ -94,6 +94,9 @@ for required in (
     "host_liveness_owner: csm_m7_receiver_local_causal_ack_proof",
     "host_command_id_reset: m7_boot_or_new_tcp_epoch_only",
     "host_mono_runtime_gate: false",
+    "command_ack_tcp_port: 3334",
+    "telemetry_evidence_tcp_port: 3333",
+    "canonical_ack_mirror: evidence_only",
 ):
     if required not in manifest:
         fail(f"active manifest missing {required}")
@@ -160,6 +163,25 @@ for obsolete in (
         fail(f"obsolete cross-clock Host gate remains: {obsolete}")
 if "host_command_freshness.resetTransportEpoch();" not in main:
     fail("Host command watermark lacks explicit transport-epoch reset")
+for required in (
+    "wifi_tcp_sink.offerControlAck(payload, sizeof(payload))",
+    "wifi_tcp_sink.controlConnectionEpoch()",
+    "wifi_tcp_sink.controlDownlinkStream()",
+    "wifi_sink_config.control_port = BOARD_WIFI_CONTROL_TCP_PORT",
+    "handle_observer_downlink_frame",
+    "observer_downlink_parser.service(*observer, 32)",
+):
+    if required not in main:
+        fail(f"independent Host control transport missing {required}")
+observer_handler = main[
+    main.find("static void handle_observer_downlink_frame"):
+    main.find("static void handle_host_downlink_crc_failure")
+]
+if "RecordType::HostQueryCapability" not in observer_handler:
+    fail("telemetry downlink lost bounded observer capability query")
+for forbidden in ("dispatch_host_frame", "HostControlSession", "HostControlStateV2"):
+    if forbidden in observer_handler:
+        fail(f"telemetry downlink can dispatch Host control: {forbidden}")
 close_handler = main[
     main.find("static void close_host_control_epoch"):
     main.find("static void service_host_authority_boundary")

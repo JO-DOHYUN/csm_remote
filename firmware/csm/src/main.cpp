@@ -82,6 +82,9 @@
 #ifndef BOARD_WIFI_TCP_PORT
 #define BOARD_WIFI_TCP_PORT 3333
 #endif
+#ifndef BOARD_WIFI_CONTROL_TCP_PORT
+#define BOARD_WIFI_CONTROL_TCP_PORT 3334
+#endif
 
 #ifndef BOARD_WIFI_AP_CHANNEL
 #define BOARD_WIFI_AP_CHANNEL 6
@@ -2495,6 +2498,12 @@ static void __attribute__((unused)) emit_control_ack(uint32_t command_id, uint8_
   wr_u32_le(&payload[20], counter);
   wr_u32_le(&payload[24], host_can_tx_rejected_total);
   emit_record(RecordType::ControlAck, payload, sizeof(payload));
+#if BOARD_ENABLE_WIFI_UPLINK
+  // Control-plane delivery is independent of canonical telemetry. Failure to
+  // admit here closes/re-epochs only Host control; the canonical ACK remains
+  // evidence and physical M4 safety stays local.
+  (void)wifi_tcp_sink.offerControlAck(payload, sizeof(payload));
+#endif
 }
 
 #if BOARD_HW_PROFILE_MID_MCP2515 || BOARD_HW_PROFILE_MID_FEEDER_UART || \
@@ -5477,6 +5486,20 @@ static void handle_host_downlink_frame(void*, uint8_t version, uint8_t record_ty
   dispatch_host_frame(version, record_type, seq, payload, len);
 }
 
+static void handle_observer_downlink_frame(void*, uint8_t version,
+                                           uint8_t record_type, uint16_t seq,
+                                           const uint8_t* payload,
+                                           uint16_t len) {
+  if (record_type == static_cast<uint8_t>(RecordType::HostQueryCapability)) {
+    if (version != kProtocolVersion) {
+      emit_control_ack(seq, ControlAckRejected, ControlReasonBadProtocol,
+                       0xFF, 0, 0, 0);
+      return;
+    }
+    handle_host_query_capability(seq, payload, len);
+  }
+}
+
 static void handle_host_downlink_crc_failure(void*) {
   host_frame_crc_failed_total++;
   if ((host_frame_crc_failed_total & 0x0F) == 1) {
@@ -5484,15 +5507,17 @@ static void handle_host_downlink_crc_failure(void*) {
   }
 }
 
-static csm::board::HostDownlinkParser host_downlink_parser(
+static csm::board::HostDownlinkParser host_control_downlink_parser(
     handle_host_downlink_frame, handle_host_downlink_crc_failure);
+static csm::board::HostDownlinkParser observer_downlink_parser(
+    handle_observer_downlink_frame, handle_host_downlink_crc_failure);
 
 static void service_host_downlink(int budget) {
 #if BOARD_HOST_DOWNLINK_TRANSPORT_WIFI
   static uint32_t last_wifi_epoch = 0;
-  const uint32_t wifi_epoch = wifi_tcp_sink.counters().connection_epoch;
+  const uint32_t wifi_epoch = wifi_tcp_sink.controlConnectionEpoch();
   if (wifi_epoch != last_wifi_epoch) {
-    host_downlink_parser.reset();
+    host_control_downlink_parser.reset();
     // A transport epoch is also a control-authority epoch. A disconnected or
     // newly accepted Wi-Fi client must establish a fresh heartbeat and arm;
     // it cannot renew the prior client's lease.
@@ -5502,10 +5527,18 @@ static void service_host_downlink(int budget) {
     host_command_freshness.resetTransportEpoch();
     last_wifi_epoch = wifi_epoch;
   }
-  Stream* stream = wifi_tcp_sink.downlinkStream();
-  if (stream != nullptr) host_downlink_parser.service(*stream, budget);
+  Stream* stream = wifi_tcp_sink.controlDownlinkStream();
+  if (stream != nullptr) host_control_downlink_parser.service(*stream, budget);
+  static uint32_t last_observer_epoch = 0;
+  const uint32_t observer_epoch = wifi_tcp_sink.counters().connection_epoch;
+  if (observer_epoch != last_observer_epoch) {
+    observer_downlink_parser.reset();
+    last_observer_epoch = observer_epoch;
+  }
+  Stream* observer = wifi_tcp_sink.downlinkStream();
+  if (observer != nullptr) observer_downlink_parser.service(*observer, 32);
 #else
-  host_downlink_parser.service(Serial, budget);
+  host_control_downlink_parser.service(Serial, budget);
 #endif
 }
 #else
@@ -5740,6 +5773,7 @@ void setup() {
   wifi_sink_config.ap_ssid = BOARD_WIFI_AP_SSID;
   wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
   wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
+  wifi_sink_config.control_port = BOARD_WIFI_CONTROL_TCP_PORT;
   wifi_sink_config.channel = BOARD_WIFI_AP_CHANNEL;
   wifi_sink_config.boot_session_id = boot_session_id;
   wifi_sink_config.drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
