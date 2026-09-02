@@ -4,6 +4,7 @@
 
 #include "board/uplink/UplinkPriority.h"
 #include "protocol/TypedFrame.h"
+#include "protocol/TypedRecords.h"
 
 #ifndef BOARD_UPLINK_CRITICAL_QUEUE_RECORDS
 #define BOARD_UPLINK_CRITICAL_QUEUE_RECORDS 16
@@ -29,6 +30,9 @@
 #ifndef BOARD_UPLINK_POOL_MEDIUM_BLOCKS
 #define BOARD_UPLINK_POOL_MEDIUM_BLOCKS 16
 #endif
+#ifndef BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES
+#define BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES 128
+#endif
 #ifndef BOARD_UPLINK_POOL_SMALL_BLOCKS
 #define BOARD_UPLINK_POOL_SMALL_BLOCKS 24
 #endif
@@ -39,6 +43,11 @@ static_assert(BOARD_UPLINK_POOL_LARGE_CAN_RESERVE +
                       BOARD_UPLINK_POOL_LARGE_CRITICAL_RESERVE <=
                   BOARD_UPLINK_POOL_LARGE_BLOCKS,
               "large-payload reserves exceed pool capacity");
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+static_assert(BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES >=
+                  csm::kTransportDiagnosticPayloadLen,
+              "Service/HIL transport diagnostic must remain medium-pool admissible");
+#endif
 
 struct AdmissionCounters {
   uint32_t record_accept_total = 0;
@@ -125,7 +134,8 @@ class RecordAdmission {
   DescriptorQueue diagnostic_queue_;
 
   uint8_t pool_large_[BOARD_UPLINK_POOL_LARGE_BLOCKS][csm::kMaxPayloadLen] = {};
-  uint8_t pool_medium_[BOARD_UPLINK_POOL_MEDIUM_BLOCKS][128] = {};
+  uint8_t pool_medium_[BOARD_UPLINK_POOL_MEDIUM_BLOCKS]
+                      [BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES] = {};
   uint8_t pool_small_[BOARD_UPLINK_POOL_SMALL_BLOCKS][64] = {};
   bool pool_large_used_[BOARD_UPLINK_POOL_LARGE_BLOCKS] = {};
   bool pool_medium_used_[BOARD_UPLINK_POOL_MEDIUM_BLOCKS] = {};

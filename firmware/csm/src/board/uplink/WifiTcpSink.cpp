@@ -2,6 +2,12 @@
 
 #include "protocol/TypedRecords.h"
 
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+extern "C" void csm_lwip_socket_arena_snapshot(
+    uint32_t* capacity, uint32_t* used, uint32_t* high_water,
+    uint32_t* allocation_failures);
+#endif
+
 #if BOARD_ENABLE_WIFI_UPLINK
 #include "board/uplink/WifiSocketWorker.h"
 #endif
@@ -292,6 +298,50 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
   snapshot.close_reason =
       static_cast<uint8_t>(worker_state_.last_close_reason);
   snapshot.runtime_mode = static_cast<uint8_t>(config_.runtime_mode);
+  snapshot.last_network_error = worker_state_.last_network_error;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  snapshot.last_failure_phase =
+      static_cast<uint8_t>(worker_state_.last_failure_phase);
+  snapshot.last_failure_result = worker_state_.last_failure_result;
+  const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
+  if (call.coherent) {
+    snapshot.current_call_phase = static_cast<uint8_t>(call.phase);
+    snapshot.current_call_flags |=
+        csm::kTransportDiagnosticCurrentCallFlagCoherent;
+    if (call.in_progress) {
+      snapshot.current_call_flags |=
+          csm::kTransportDiagnosticCurrentCallFlagInProgress;
+    }
+    snapshot.current_call_sequence = call.sequence;
+    snapshot.current_call_started_ms = call.started_ms;
+    snapshot.current_call_duration_us = call.duration_us;
+    snapshot.current_call_result = call.result;
+  }
+  snapshot.worker_heartbeat_age_ms =
+      wifiObservedAgeMs(now_ms, worker_state_.heartbeat_ms);
+  snapshot.control_connection_epoch = control_mailbox_.connectionEpoch();
+  if (control_mailbox_.connected()) {
+    snapshot.control_flags |= csm::kTransportDiagnosticControlFlagConnected;
+  }
+#ifdef MBED_CONF_LWIP_SOCKET_MAX
+  snapshot.configured_socket_max = MBED_CONF_LWIP_SOCKET_MAX;
+#endif
+#ifdef MBED_CONF_LWIP_TCP_SOCKET_MAX
+  snapshot.configured_tcp_socket_max = MBED_CONF_LWIP_TCP_SOCKET_MAX;
+#endif
+#ifdef MBED_CONF_LWIP_TCP_SERVER_MAX
+  snapshot.configured_tcp_server_max = MBED_CONF_LWIP_TCP_SERVER_MAX;
+#endif
+  // Two listeners plus one accepted client for each independent lane.
+  snapshot.required_application_sockets = 4;
+  // Cold HIL proves one AP-internal arena owner remains live in addition to
+  // the four application sockets. Evidence only; never a runtime gate.
+  snapshot.required_total_socket_arena = 5;
+  csm_lwip_socket_arena_snapshot(
+      &snapshot.socket_arena_capacity, &snapshot.socket_arena_used,
+      &snapshot.socket_arena_high_water,
+      &snapshot.socket_arena_allocation_failures);
+#endif
   if (enabled_) snapshot.flags |= csm::kTransportDiagnosticFlagEnabled;
   if (connected()) snapshot.flags |= csm::kTransportDiagnosticFlagConnected;
   if (backpressure_active_) {

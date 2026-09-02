@@ -120,9 +120,9 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   schema/header/entry/max; capability_v3_flags bit1 advertises compact segment
   publication.
 
-`TRANSPORT_DIAGNOSTIC` schema 3 remains exactly 128 bytes:
+`TRANSPORT_DIAGNOSTIC` schema 4 is exactly 192 bytes:
 
-- `0..7 mono_us u64`; `8 schema=3 u8`; `9 flags u8`; `10 close_reason u8`;
+- `0..7 mono_us u64`; `8 schema=4 u8`; `9 flags u8`; `10 close_reason u8`;
   `11 runtime_mode u8`; `12..15 connection_epoch u32`
 - `16..19 offered_bytes u32`; `20..23 accepted_bytes u32`;
   `24..27 accepted_records u32`; `28..31 rejected_records u32`
@@ -140,6 +140,30 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   `104..111 last_lost_publish_seq u64`
 - `112..119 last_accepted_publish_seq u64`;
   `120..127 last_sent_publish_seq u64`
+- `128..131 last_network_error i32`; `132 last_failure_phase u8`;
+  `133..135 reserved`; `136..139 last_failure_result i32`
+- `140 current_call_phase u8`; `141 current_call_flags u8` (bit0 coherent,
+  bit1 in progress); `142..143 reserved`; `144..147 current_call_sequence u32`;
+  `148..151 current_call_started_ms u32`; `152..155 current_call_duration_us u32`;
+  `156..159 current_call_result i32`; `160..163 worker_heartbeat_age_ms u32`
+- `164..167 control_connection_epoch u32`; `168 control_flags u8` (bit0
+  control client connected); `169 configured_socket_max u8`; `170
+  configured_tcp_socket_max u8`; `171 configured_tcp_server_max u8`; `172
+  required_application_sockets u8`; `173 required_total_socket_arena u8`
+  (cold HIL에서 확인된 AP 내부 1 + application 4); `174..175 reserved`
+- Service/HIL 전용 `176..179 socket_arena_capacity u32`; `180..183
+  socket_arena_used u32`; `184..187 socket_arena_high_water u32`; `188..191
+  socket_arena_allocation_failures u32`. 이 값은 pinned lwIP arena의 bounded
+  evidence이며 runtime gate나 복구 입력으로 사용하지 않는다.
+- Bytes `128..191` and this record's publication belong to the compile-time
+  `BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY` package. They are evidence only:
+  no value is consumed by authority, freshness, safe-wire, or physical TX.
+  Disabling that Service/HIL flag removes the live publication and failure
+  latch; the production admission medium block remains 128 bytes.
+- `last_failure_*` latches the latest actionable non-`WOULD_BLOCK` call error.
+  Normal nonblocking accept polls therefore cannot erase a configure/start/
+  send/receive/close failure before the 1 Hz sample. `current_call_*` remains
+  the separate live/last call snapshot used to diagnose an in-progress stall.
 - Flag bit4 means the first/last loss sequence range is valid. A fresh anchor
   never clears this cumulative range.
 - Flag bit0 is enabled, bit1 connected, bit2 socket backpressure, bit3 either
@@ -165,10 +189,10 @@ below. The outer typed v1 frame and record type numbers are unchanged.
   instantaneous FIFO depth. High-water and oldest-age remain physical queue
   observations and are not used in the conservation equation.
 - Internal accepted, socket-sent, and aborted byte ledgers are `u64`; the
-  schema-3 `u32` byte fields carry their low 32 bits and receivers compute
+  schema-4 `u32` byte fields carry their low 32 bits and receivers compute
   bounded-window deltas modulo `2^32`. This keeps 24-hour operation correct
   after the first wire-counter wrap.
-- Offset 108 is the upper half of `last_lost_publish_seq`; schema 3 carries no
+- Offset 108 is the upper half of `last_lost_publish_seq`; schema 4 carries no
   worker-stack field. Schema 1/2 remain decode-only. A measurement window must
   not mix schemas.
 
@@ -1070,7 +1094,7 @@ State `0` is measurement-only and is not a release approval. Values move to
 state `1` only in the order exploratory measurement -> reviewed value decision
 -> product constant freeze -> qualification HIL. `120000 B/s` is retired and
 `135000 B/s` is not an approved envelope. The enabled steady schema computes
-1095 records/s and exactly 131513 B/s before qualification headroom is chosen.
+1095 records/s and exactly 131577 B/s before qualification headroom is chosen.
 
 The hardware fields above are advertised claims and artifact references. They
 do not by themselves prove vehicle-impact-free behavior. VSM may display them

@@ -4,6 +4,10 @@
 
 #include "board/uplink/ProductUplinkEnvelope.h"
 
+#ifndef BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+#define BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY 0
+#endif
+
 #ifndef BOARD_WIFI_STALL_TIMEOUT_MS
 #define BOARD_WIFI_STALL_TIMEOUT_MS 5000
 #endif
@@ -260,6 +264,14 @@ enum class WifiWorkerCallPhase : uint8_t {
   ReceiveControl = 19,
   CloseControlClient = 20,
   StopControlServer = 21,
+  OpenTelemetryServer = 22,
+  ConfigureTelemetryServer = 23,
+  BindTelemetryServer = 24,
+  ListenTelemetryServer = 25,
+  OpenControlServer = 26,
+  ConfigureControlServer = 27,
+  BindControlServer = 28,
+  ListenControlServer = 29,
 };
 
 enum class WifiCloseReason : uint8_t {
@@ -452,6 +464,28 @@ struct WifiWorkerCallSnapshot {
   uint32_t heartbeat_ms = 0;
 };
 
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+// SERVICE_HIL_OBSERVABILITY: a normal nonblocking accept poll must not erase
+// the last actionable vendor/API failure before the 1 Hz record is sampled.
+class WifiWorkerFailureLatch {
+ public:
+  bool observe(WifiWorkerCallPhase phase, int32_t result,
+               int32_t would_block_result) {
+    if (result == 0 || result == would_block_result) return false;
+    phase_ = phase;
+    result_ = result;
+    return true;
+  }
+
+  WifiWorkerCallPhase phase() const { return phase_; }
+  int32_t result() const { return result_; }
+
+ private:
+  WifiWorkerCallPhase phase_ = WifiWorkerCallPhase::Idle;
+  int32_t result_ = 0;
+};
+#endif
+
 constexpr bool wifiSendResultHasPositiveProgress(int32_t result) {
   return result > 0;
 }
@@ -569,6 +603,12 @@ struct WifiWorkerStateSnapshot {
   uint32_t stack_free_bytes = 0;
   uint32_t stack_max_used_bytes = 0;
   int32_t last_network_error = 0;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  // SERVICE_HIL_OBSERVABILITY: persistent failure evidence is distinct from
+  // the rapidly changing accept-poll call snapshot. It is never a control gate.
+  WifiWorkerCallPhase last_failure_phase = WifiWorkerCallPhase::Idle;
+  int32_t last_failure_result = 0;
+#endif
   uint32_t queue_bytes = 0;
   uint32_t queue_high_water_bytes = 0;
   uint32_t queue_records = 0;

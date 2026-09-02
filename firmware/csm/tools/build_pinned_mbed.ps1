@@ -1,6 +1,8 @@
 param(
   [string]$FrameworkRoot = "$env:USERPROFILE\.platformio\packages\framework-arduino-mbed",
   [string]$ToolchainRoot = "$env:USERPROFILE\.platformio\packages\toolchain-gccarmnoneeabi",
+  [ValidatePattern('^[D-Z]$')]
+  [string]$ShortDrive = 'X',
   [switch]$PackageOnly
 )
 
@@ -45,7 +47,7 @@ function Get-Sha256([string]$Path) {
   return (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToUpperInvariant()
 }
 
-function Test-ProductSourcePatches {
+function Test-BaseProductSourcePatches {
   $heap = Join-Path $mbedRoot 'connectivity\lwipstack\lwip-sys\arch\lwip_sys_arch.c'
   $buffer = Join-Path $mbedRoot 'connectivity\drivers\wifi\COMPONENT_WHD\whd-bsp-integration\cy_network_buffer.c'
   $sdio = Join-Path $mbedRoot 'targets\TARGET_STM\TARGET_STM32H7\TARGET_STM32H747xI\TARGET_PORTENTA_H7\COMPONENT_WHD\port\cyhal_sdio.c'
@@ -54,6 +56,11 @@ function Test-ProductSourcePatches {
     (Select-String -Quiet -LiteralPath $buffer -Pattern 'pbuf_alloc\(PBUF_RAW, size, PBUF_RAM\)') -and
     (Select-String -Quiet -LiteralPath $sdio -Pattern 'Product contract: propagate SDIO failure') -and
     (Select-String -Quiet -LiteralPath $portenta -Pattern 'port/cy_hal.c')
+}
+
+function Test-ServiceHilArenaPatch {
+  $arena = Join-Path $mbedRoot 'connectivity\lwipstack\source\lwip_tools.cpp'
+  return Select-String -Quiet -LiteralPath $arena -Pattern 'csm_lwip_socket_arena_snapshot'
 }
 
 New-Item -ItemType Directory -Force -Path $buildRoot,$vendorRoot,$artifactRoot | Out-Null
@@ -75,7 +82,7 @@ if (-not $PackageOnly) {
     throw 'Mbed OS source is not at the pinned commit'
   }
 
-  if (-not (Test-ProductSourcePatches)) {
+  if (-not (Test-BaseProductSourcePatches)) {
     if ((git -C $mbedRoot status --porcelain).Count -ne 0) {
       throw 'Generated Mbed source is modified but does not match the product patch markers'
     }
@@ -100,8 +107,16 @@ if (-not $PackageOnly) {
         Invoke-Checked git @('-C', $mbedRoot, 'apply', '--whitespace=nowarn', $_.FullName)
       }
   }
-  if (-not (Test-ProductSourcePatches)) {
+  if (-not (Test-BaseProductSourcePatches)) {
     throw 'Pinned product source patches did not materialize'
+  }
+  if (-not (Test-ServiceHilArenaPatch)) {
+    $arenaPatch = Join-Path $profileRoot 'patches\0005-service-hil-lwip-arena-observability.patch'
+    Invoke-Checked git @('-C', $mbedRoot, 'apply', '--check', $arenaPatch)
+    Invoke-Checked git @('-C', $mbedRoot, 'apply', '--whitespace=nowarn', $arenaPatch)
+  }
+  if (-not (Test-ServiceHilArenaPatch)) {
+    throw 'Service/HIL lwIP arena observability patch did not materialize'
   }
 
   if (-not (Test-Path -LiteralPath (Join-Path $venvRoot 'Scripts\python.exe'))) {
@@ -117,19 +132,34 @@ if (-not $PackageOnly) {
   $mbedTools = Join-Path $scripts 'mbed-tools.exe'
   $cmake = Join-Path $scripts 'cmake.exe'
   $env:Path = "$(Join-Path $ToolchainRoot 'bin');$scripts;$env:Path"
-  Invoke-Checked $mbedTools @(
-    'configure', '-m', 'PORTENTA_H7_M7', '-t', 'GCC_ARM', '-b', 'release',
-    '-p', $builderRoot, '--mbed-os-path', $mbedRoot,
-    '--app-config', (Join-Path $profileRoot 'mbed_app.product.json'),
-    '-o', $cmakeBuild
-  )
-  Invoke-Checked $cmake @(
-    '-S', $builderRoot, '-B', $cmakeBuild, '-G', 'Ninja',
-    '-DCMAKE_BUILD_TYPE=Release',
-    "-DMBED_PATH=$($mbedRoot -replace '\\','/')",
-    "-DPython3_EXECUTABLE=$((Join-Path $scripts 'python.exe') -replace '\\','/')"
-  )
-  Invoke-Checked $cmake @('--build', $cmakeBuild, '--parallel', '8')
+  $shortDriveRoot = "${ShortDrive}:"
+  $shortProjectHost = Join-Path $buildRoot 'mbed-product-app'
+  $shortProject = "$shortDriveRoot\mbed-product-app"
+  $shortBuild = "$shortProject\short-build"
+  if (Test-Path -LiteralPath "$shortDriveRoot\") {
+    throw "Short build drive is already in use: $shortDriveRoot"
+  }
+  New-Item -ItemType Directory -Force -Path $shortProjectHost | Out-Null
+  Copy-Item -Force -Path (Join-Path $builderRoot '*') -Destination $shortProjectHost
+  Invoke-Checked subst @($shortDriveRoot, $buildRoot)
+  try {
+    Invoke-Checked $mbedTools @(
+      'configure', '-m', 'PORTENTA_H7_M7', '-t', 'GCC_ARM', '-b', 'release',
+      '-p', $shortProject,
+      '--mbed-os-path', "$shortDriveRoot\vendor-src\mbed-os-17dc3dc2",
+      '--app-config', (Join-Path $profileRoot 'mbed_app.product.json'),
+      '-o', $shortBuild
+    )
+    Invoke-Checked $cmake @(
+      '-S', $shortProject, '-B', $shortBuild, '-G', 'Ninja',
+      '-DCMAKE_BUILD_TYPE=Release',
+      "-DMBED_PATH=$shortDriveRoot/vendor-src/mbed-os-17dc3dc2",
+      "-DPython3_EXECUTABLE=$shortDriveRoot/mbed-venv/Scripts/python.exe"
+    )
+    Invoke-Checked $cmake @('--build', $shortBuild, '--parallel', '8')
+  } finally {
+    & subst $shortDriveRoot /D
+  }
 }
 
 if ((Get-Sha256 $stockLibrary) -ne $stockLibrarySha -or
@@ -139,7 +169,7 @@ if ((Get-Sha256 $stockLibrary) -ne $stockLibrarySha -or
 
 $compiledRoot = Join-Path $cmakeBuild 'CMakeFiles\csm_mbed_product.dir'
 $shortCompiledRoot = Join-Path $buildRoot 'mbed-product-app\short-build\CMakeFiles\csm_mbed_product.dir'
-if ($PackageOnly -and (Test-Path -LiteralPath $shortCompiledRoot)) {
+if (Test-Path -LiteralPath $shortCompiledRoot) {
   # The Mbed compiler expands response files before spawning its child process.
   # Keep the reproducible short X: build as the packaging source so Windows'
   # command-line limit cannot turn a valid product build into CreateProcess.
@@ -147,7 +177,7 @@ if ($PackageOnly -and (Test-Path -LiteralPath $shortCompiledRoot)) {
 }
 $generatedConfig = Join-Path $cmakeBuild 'mbed_config.h'
 $shortGeneratedConfig = Join-Path $buildRoot 'mbed-product-app\short-build\mbed_config.h'
-if ($PackageOnly -and (Test-Path -LiteralPath $shortGeneratedConfig)) {
+if (Test-Path -LiteralPath $shortGeneratedConfig) {
   $generatedConfig = $shortGeneratedConfig
 }
 if (-not (Test-Path -LiteralPath $compiledRoot) -or

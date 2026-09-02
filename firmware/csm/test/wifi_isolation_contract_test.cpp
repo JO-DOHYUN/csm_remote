@@ -218,7 +218,7 @@ void testFreshAnchorPartialCompletionBoundary() {
 
 void testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds() {
   using namespace csm::board::uplink;
-  CHECK(kProductEnabledWireBytesPerSecond == 131513);
+  CHECK(kProductEnabledWireBytesPerSecond == 131577);
   CHECK(kProductEnabledRecordsPerSecond == 1095);
   CHECK(BOARD_WIFI_SINK_QUEUE_BYTES == 49152);
   CHECK(BOARD_WIFI_SINK_QUEUE_RECORDS == 256);

@@ -1,0 +1,33 @@
+authority_level: L3
+production_authority: false
+id: service-hil-boundary-observability
+state: active
+hypothesis: >-
+  A bounded typed snapshot can identify the first Wi-Fi worker boundary that
+  fails without changing control, CAN, freshness, authority, or socket policy.
+measurement:
+  profile_gate: BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  record: TRANSPORT_DIAGNOSTIC schema 4
+  producer: WifiSocketWorker and WifiTcpSink read-only snapshots
+  consumer: verify_typed_stream.py and remote_control_hil.py
+  boundaries:
+    - AP and listener readiness
+    - telemetry accept and client configuration
+    - control accept and client configuration
+    - send, receive, close, queue, and connection epoch
+    - pinned lwIP socket arena capacity, used, high-water, and allocation-fail
+  verdicts:
+    - PASS
+    - FAIL
+    - NOT_OBSERVED
+    - NOT_RUN
+  artifact_requirement: raw typed stream plus JSON with exact firmware identity
+promotion_gate: >-
+  No measured value becomes product policy. A production change requires a
+  repeatable physical failure, exact first failing phase/result, focused native
+  regression, paired build, and an independently reviewed implementation delta.
+cleanup: >-
+  Disable BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY, use the uninstrumented pinned
+  Mbed artifact, and restore the default 128-byte medium admission block. No
+  authority, safe-wire, freshness, CAN, or control source code may depend on
+  the diagnostic record, failure latch, or socket-arena counters.

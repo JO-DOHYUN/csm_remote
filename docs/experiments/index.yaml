@@ -4,6 +4,9 @@ status: active
 read_when: running or reviewing an experiment
 production_authority: false
 experiments:
+  - id: service-hil-boundary-observability
+    record: service_hil_boundary_observability.yaml
+    state: active
   - id: host-threshold-qualification
     record: host_threshold_qualification.yaml
     state: exploratory

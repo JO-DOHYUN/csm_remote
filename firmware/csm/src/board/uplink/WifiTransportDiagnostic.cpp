@@ -75,6 +75,52 @@ uint16_t build_wifi_transport_diagnostic_payload(
       snapshot.last_accepted_publish_seq);
   csm::wr_u64_le(&payload[csm::kTransportDiagnosticLastSentPublishSeqOffset],
                  snapshot.last_sent_publish_seq);
+  csm::wr_i32_le(&payload[csm::kTransportDiagnosticLastNetworkErrorOffset],
+                 snapshot.last_network_error);
+  payload[csm::kTransportDiagnosticLastFailurePhaseOffset] =
+      snapshot.last_failure_phase;
+  csm::wr_i32_le(&payload[csm::kTransportDiagnosticLastFailureResultOffset],
+                 snapshot.last_failure_result);
+  payload[csm::kTransportDiagnosticCurrentCallPhaseOffset] =
+      snapshot.current_call_phase;
+  payload[csm::kTransportDiagnosticCurrentCallFlagsOffset] =
+      snapshot.current_call_flags;
+  csm::wr_u32_le(&payload[csm::kTransportDiagnosticCurrentCallSequenceOffset],
+                 snapshot.current_call_sequence);
+  csm::wr_u32_le(&payload[csm::kTransportDiagnosticCurrentCallStartedMsOffset],
+                 snapshot.current_call_started_ms);
+  csm::wr_u32_le(&payload[csm::kTransportDiagnosticCurrentCallDurationUsOffset],
+                 snapshot.current_call_duration_us);
+  csm::wr_i32_le(&payload[csm::kTransportDiagnosticCurrentCallResultOffset],
+                 snapshot.current_call_result);
+  csm::wr_u32_le(
+      &payload[csm::kTransportDiagnosticWorkerHeartbeatAgeMsOffset],
+      snapshot.worker_heartbeat_age_ms);
+  csm::wr_u32_le(
+      &payload[csm::kTransportDiagnosticControlConnectionEpochOffset],
+      snapshot.control_connection_epoch);
+  payload[csm::kTransportDiagnosticControlFlagsOffset] = snapshot.control_flags;
+  payload[csm::kTransportDiagnosticConfiguredSocketMaxOffset] =
+      snapshot.configured_socket_max;
+  payload[csm::kTransportDiagnosticConfiguredTcpSocketMaxOffset] =
+      snapshot.configured_tcp_socket_max;
+  payload[csm::kTransportDiagnosticConfiguredTcpServerMaxOffset] =
+      snapshot.configured_tcp_server_max;
+  payload[csm::kTransportDiagnosticRequiredApplicationSocketsOffset] =
+      snapshot.required_application_sockets;
+  payload[csm::kTransportDiagnosticRequiredTotalSocketArenaOffset] =
+      snapshot.required_total_socket_arena;
+  csm::wr_u32_le(
+      &payload[csm::kTransportDiagnosticSocketArenaCapacityOffset],
+      snapshot.socket_arena_capacity);
+  csm::wr_u32_le(&payload[csm::kTransportDiagnosticSocketArenaUsedOffset],
+                 snapshot.socket_arena_used);
+  csm::wr_u32_le(
+      &payload[csm::kTransportDiagnosticSocketArenaHighWaterOffset],
+      snapshot.socket_arena_high_water);
+  csm::wr_u32_le(
+      &payload[csm::kTransportDiagnosticSocketArenaAllocationFailuresOffset],
+      snapshot.socket_arena_allocation_failures);
   return csm::kTransportDiagnosticPayloadLen;
 }
 

@@ -34,6 +34,27 @@ struct WifiTransportDiagnosticSnapshot {
   uint8_t flags = 0;
   uint8_t close_reason = 0;
   uint8_t runtime_mode = 0;
+  int32_t last_network_error = 0;
+  uint8_t last_failure_phase = 0;
+  int32_t last_failure_result = 0;
+  uint8_t current_call_phase = 0;
+  uint8_t current_call_flags = 0;
+  uint32_t current_call_sequence = 0;
+  uint32_t current_call_started_ms = 0;
+  uint32_t current_call_duration_us = 0;
+  int32_t current_call_result = 0;
+  uint32_t worker_heartbeat_age_ms = 0;
+  uint32_t control_connection_epoch = 0;
+  uint8_t control_flags = 0;
+  uint8_t configured_socket_max = 0;
+  uint8_t configured_tcp_socket_max = 0;
+  uint8_t configured_tcp_server_max = 0;
+  uint8_t required_application_sockets = 0;
+  uint8_t required_total_socket_arena = 0;
+  uint32_t socket_arena_capacity = 0;
+  uint32_t socket_arena_used = 0;
+  uint32_t socket_arena_high_water = 0;
+  uint32_t socket_arena_allocation_failures = 0;
 };
 
 uint16_t build_wifi_transport_diagnostic_payload(

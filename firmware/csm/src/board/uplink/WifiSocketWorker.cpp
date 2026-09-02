@@ -258,27 +258,33 @@ bool WifiSocketWorker::initializeNetwork() {
   if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode)) return true;
 
   state_.counters.server_start_total++;
-  beginCall(WifiWorkerCallPhase::BeginServer);
+  beginCall(WifiWorkerCallPhase::OpenTelemetryServer);
   nsapi_error_t server_result = server_.open(ap_interface_);
+  endCall(server_result);
   if (server_result == NSAPI_ERROR_OK) {
     server_opened_ = true;
     int reuse_address = 1;
+    beginCall(WifiWorkerCallPhase::ConfigureTelemetryServer);
     server_result =
         server_.setsockopt(NSAPI_SOCKET, NSAPI_REUSEADDR, &reuse_address,
                            sizeof(reuse_address));
+    endCall(server_result);
   }
   if (server_result == NSAPI_ERROR_OK) {
+    beginCall(WifiWorkerCallPhase::BindTelemetryServer);
     server_result = server_.bind(config_.port);
+    endCall(server_result);
   }
   if (server_result == NSAPI_ERROR_OK) {
+    beginCall(WifiWorkerCallPhase::ListenTelemetryServer);
     server_result = server_.listen(1);
+    endCall(server_result);
   }
   if (server_result == NSAPI_ERROR_OK) {
     server_.set_blocking(false);
     server_.sigio(
         mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
   }
-  endCall(server_result);
   if (server_result != NSAPI_ERROR_OK) {
     state_.counters.server_start_fail_total++;
     state_.last_network_error = server_result;
@@ -295,26 +301,32 @@ bool WifiSocketWorker::initializeNetwork() {
 
   state_.server_ready = true;
 
-  beginCall(WifiWorkerCallPhase::BeginControlServer);
+  beginCall(WifiWorkerCallPhase::OpenControlServer);
   nsapi_error_t control_server_result = control_server_.open(ap_interface_);
+  endCall(control_server_result);
   if (control_server_result == NSAPI_ERROR_OK) {
     control_server_opened_ = true;
     int reuse_address = 1;
+    beginCall(WifiWorkerCallPhase::ConfigureControlServer);
     control_server_result = control_server_.setsockopt(
         NSAPI_SOCKET, NSAPI_REUSEADDR, &reuse_address, sizeof(reuse_address));
+    endCall(control_server_result);
   }
   if (control_server_result == NSAPI_ERROR_OK) {
+    beginCall(WifiWorkerCallPhase::BindControlServer);
     control_server_result = control_server_.bind(config_.control_port);
+    endCall(control_server_result);
   }
   if (control_server_result == NSAPI_ERROR_OK) {
+    beginCall(WifiWorkerCallPhase::ListenControlServer);
     control_server_result = control_server_.listen(1);
+    endCall(control_server_result);
   }
   if (control_server_result == NSAPI_ERROR_OK) {
     control_server_.set_blocking(false);
     control_server_.sigio(
         mbed::callback(this, &WifiSocketWorker::onSocketStateChanged));
   }
-  endCall(control_server_result);
   if (control_server_result != NSAPI_ERROR_OK) {
     state_.counters.server_start_fail_total++;
     state_.last_network_error = control_server_result;
@@ -1131,6 +1143,9 @@ void WifiSocketWorker::beginCall(WifiWorkerCallPhase phase) {
   const uint32_t now_ms = millis();
   publishState(now_ms);
   current_call_started_us_ = micros();
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  current_call_phase_ = phase;
+#endif
   mailbox_.beginCall(phase, now_ms);
   if (config_.call_persistence.enter != nullptr) {
     const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
@@ -1144,6 +1159,13 @@ uint32_t WifiSocketWorker::endCall(int32_t result) {
   const uint32_t duration_us = micros() - current_call_started_us_;
   const uint32_t now_ms = millis();
   mailbox_.endCall(now_ms, duration_us, result);
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  if (failure_latch_.observe(current_call_phase_, result,
+                             NSAPI_ERROR_WOULD_BLOCK)) {
+    state_.last_failure_phase = failure_latch_.phase();
+    state_.last_failure_result = failure_latch_.result();
+  }
+#endif
   if (config_.call_persistence.leave != nullptr) {
     config_.call_persistence.leave(config_.call_persistence.context, result,
                                    duration_us, now_ms);

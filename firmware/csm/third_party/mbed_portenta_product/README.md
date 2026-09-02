@@ -10,7 +10,7 @@ The product archive is built from:
 3. the CSM patches in `patches/`;
 4. `mbed_app.product.json`.
 
-`tools/build_pinned_mbed.ps1` rebuilds the network slice, overlays its 66
+`tools/build_pinned_mbed.ps1` rebuilds the network slice, overlays its 67
 objects onto the hash-pinned Arduino Mbed 4.3.1 archive, and writes the
 generated artifact manifest. Replacement-object debug sections are stripped
 before packaging; release code and relocation data remain unchanged. Product PlatformIO environments resolve

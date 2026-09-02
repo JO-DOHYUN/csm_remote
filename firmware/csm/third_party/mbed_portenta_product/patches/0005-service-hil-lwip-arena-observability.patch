@@ -1,0 +1,91 @@
+diff --git a/connectivity/lwipstack/source/lwip_tools.cpp b/connectivity/lwipstack/source/lwip_tools.cpp
+index 7253b3ee..e318210e 100644
+--- a/connectivity/lwipstack/source/lwip_tools.cpp
++++ b/connectivity/lwipstack/source/lwip_tools.cpp
+@@ -28,6 +28,33 @@
+ 
+ #include "netsocket/nsapi_types.h"
+ 
++#if CSM_SERVICE_HIL_OBSERVABILITY
++namespace {
++uint32_t csm_arena_used = 0;
++uint32_t csm_arena_high_water = 0;
++uint32_t csm_arena_allocation_failures = 0;
++}  // namespace
++
++extern "C" void csm_lwip_socket_arena_snapshot(
++    uint32_t *capacity, uint32_t *used, uint32_t *high_water,
++    uint32_t *allocation_failures)
++{
++    if (capacity) {
++        *capacity = MEMP_NUM_NETCONN;
++    }
++    if (used) {
++        *used = __atomic_load_n(&csm_arena_used, __ATOMIC_RELAXED);
++    }
++    if (high_water) {
++        *high_water = __atomic_load_n(&csm_arena_high_water, __ATOMIC_RELAXED);
++    }
++    if (allocation_failures) {
++        *allocation_failures =
++            __atomic_load_n(&csm_arena_allocation_failures, __ATOMIC_RELAXED);
++    }
++}
++#endif
++
+ #if !LWIP_IPV4 || !LWIP_IPV6
+ static bool all_zeros(const uint8_t *p, int len);
+ #endif
+@@ -182,6 +209,11 @@ const ip_addr_t *LWIP::get_ip_addr(bool any_addr, const struct netif *netif)
+ void LWIP::arena_init(void)
+ {
+     memset(arena, 0, sizeof(arena));
++#if CSM_SERVICE_HIL_OBSERVABILITY
++    __atomic_store_n(&csm_arena_used, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&csm_arena_high_water, 0, __ATOMIC_RELAXED);
++    __atomic_store_n(&csm_arena_allocation_failures, 0, __ATOMIC_RELAXED);
++#endif
+ }
+ 
+ struct LWIP::mbed_lwip_socket *LWIP::arena_alloc()
+@@ -195,11 +227,25 @@ struct LWIP::mbed_lwip_socket *LWIP::arena_alloc()
+             struct mbed_lwip_socket *s = &arena[i];
+             memset(s, 0, sizeof(*s));
+             s->in_use = true;
++#if CSM_SERVICE_HIL_OBSERVABILITY
++            const uint32_t used =
++                __atomic_add_fetch(&csm_arena_used, 1, __ATOMIC_RELAXED);
++            uint32_t high_water =
++                __atomic_load_n(&csm_arena_high_water, __ATOMIC_RELAXED);
++            while (used > high_water &&
++                   !__atomic_compare_exchange_n(
++                       &csm_arena_high_water, &high_water, used, false,
++                       __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
++            }
++#endif
+             lwip.adaptation.unlock();
+             return s;
+         }
+     }
+ 
++#if CSM_SERVICE_HIL_OBSERVABILITY
++    __atomic_add_fetch(&csm_arena_allocation_failures, 1, __ATOMIC_RELAXED);
++#endif
+     lwip.adaptation.unlock();
+ 
+     return 0;
+@@ -208,6 +254,14 @@ struct LWIP::mbed_lwip_socket *LWIP::arena_dealloc(struct mbed_lwip_socket *s)
+ void LWIP::arena_dealloc(struct mbed_lwip_socket *s)
+ {
+     s->in_use = false;
++#if CSM_SERVICE_HIL_OBSERVABILITY
++    uint32_t used = __atomic_load_n(&csm_arena_used, __ATOMIC_RELAXED);
++    while (used > 0 &&
++           !__atomic_compare_exchange_n(&csm_arena_used, &used, used - 1,
++                                        false, __ATOMIC_RELAXED,
++                                        __ATOMIC_RELAXED)) {
++    }
++#endif
+ 
+     while (s->multicast_memberships_count > 0) {
+         uint32_t index = 0;

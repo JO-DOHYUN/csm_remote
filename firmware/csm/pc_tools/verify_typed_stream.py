@@ -26,6 +26,23 @@ TYPE_NAMES = {
     17: "STREAM_SESSION",
     18: "REMOTE_CONTROL_STATE",
     19: "RUNTIME_DIAGNOSTIC",
+    20: "TRANSPORT_DIAGNOSTIC",
+}
+
+WIFI_CALL_PHASES = {
+    0: "idle", 1: "configure_ip", 2: "begin_access_point",
+    3: "begin_server", 4: "accept_client", 5: "configure_client",
+    6: "send", 7: "receive", 8: "close_client", 9: "delete_client",
+    10: "accept_extra_client", 11: "close_extra_client",
+    12: "delete_extra_client", 13: "stop_server",
+    14: "stop_access_point", 15: "begin_control_server",
+    16: "accept_control_client", 17: "configure_control_client",
+    18: "send_control", 19: "receive_control",
+    20: "close_control_client", 21: "stop_control_server",
+    22: "open_telemetry_server", 23: "configure_telemetry_server",
+    24: "bind_telemetry_server", 25: "listen_telemetry_server",
+    26: "open_control_server", 27: "configure_control_server",
+    28: "bind_control_server", 29: "listen_control_server",
 }
 
 BUS_ROLE_NAMES = {
@@ -347,6 +364,57 @@ def parse_frame(buf: bytearray):
         "flags": flags,
         "seq": seq,
         "payload": frame[9:-2],
+    }
+
+
+def decode_transport_diagnostic(payload: bytes):
+    if len(payload) < 192 or payload[8] != 4:
+        return None
+    call_flags = payload[141]
+    return {
+        "mono_us": u64(payload, 0),
+        "schema": payload[8],
+        "flags": payload[9],
+        "close_reason": payload[10],
+        "runtime_mode": payload[11],
+        "connection_epoch": u32(payload, 12),
+        "offered_bytes": u32(payload, 16),
+        "accepted_bytes": u32(payload, 20),
+        "accepted_records": u32(payload, 24),
+        "rejected_records": u32(payload, 28),
+        "pending_queue_bytes": u32(payload, 32),
+        "pending_queue_records": u32(payload, 36),
+        "positive_socket_bytes": u32(payload, 48),
+        "completed_socket_records": u32(payload, 52),
+        "socket_errors": u32(payload, 64),
+        "last_network_error": i32(payload, 128),
+        "last_failure_phase": payload[132],
+        "last_failure_phase_name": WIFI_CALL_PHASES.get(
+            payload[132], f"unknown_{payload[132]}"
+        ),
+        "last_failure_result": i32(payload, 136),
+        "current_call_phase": payload[140],
+        "current_call_phase_name": WIFI_CALL_PHASES.get(
+            payload[140], f"unknown_{payload[140]}"
+        ),
+        "current_call_coherent": bool(call_flags & 1),
+        "current_call_in_progress": bool(call_flags & 2),
+        "current_call_sequence": u32(payload, 144),
+        "current_call_started_ms": u32(payload, 148),
+        "current_call_duration_us": u32(payload, 152),
+        "current_call_result": i32(payload, 156),
+        "worker_heartbeat_age_ms": u32(payload, 160),
+        "control_connection_epoch": u32(payload, 164),
+        "control_connected": bool(payload[168] & 1),
+        "configured_socket_max": payload[169],
+        "configured_tcp_socket_max": payload[170],
+        "configured_tcp_server_max": payload[171],
+        "required_application_sockets": payload[172],
+        "required_total_socket_arena": payload[173],
+        "socket_arena_capacity": u32(payload, 176),
+        "socket_arena_used": u32(payload, 180),
+        "socket_arena_high_water": u32(payload, 184),
+        "socket_arena_allocation_failures": u32(payload, 188),
     }
 
 
@@ -737,6 +805,32 @@ def describe(frame):
                     )
                 return tail
         return base
+
+    if rtype == 20:
+        diagnostic = decode_transport_diagnostic(payload)
+        if diagnostic is None:
+            return f"[{name}] seq={seq} invalid_schema_or_length={len(payload)}"
+        return (
+            f"[{name}] seq={seq} schema={diagnostic['schema']} "
+            f"epoch={diagnostic['connection_epoch']} flags=0x{diagnostic['flags']:02X} "
+            f"accepted={diagnostic['accepted_bytes']}/{diagnostic['accepted_records']} "
+            f"socket={diagnostic['positive_socket_bytes']}/"
+            f"{diagnostic['completed_socket_records']} errors={diagnostic['socket_errors']} "
+            f"last_network_error={diagnostic['last_network_error']} "
+            f"last_failure={diagnostic['last_failure_phase_name']}:"
+            f"{diagnostic['last_failure_result']} "
+            f"current_call={diagnostic['current_call_phase_name']}:"
+            f"{diagnostic['current_call_result']} "
+            f"control_connected={diagnostic['control_connected']} "
+            f"socket_budget={diagnostic['configured_socket_max']}/"
+            f"{diagnostic['required_total_socket_arena']} "
+            f"arena={diagnostic['socket_arena_used']}/"
+            f"{diagnostic['socket_arena_capacity']} "
+            f"arena_high={diagnostic['socket_arena_high_water']} "
+            f"arena_fail={diagnostic['socket_arena_allocation_failures']} "
+            f"in_progress={diagnostic['current_call_in_progress']} "
+            f"heartbeat_age_ms={diagnostic['worker_heartbeat_age_ms']}"
+        )
 
     if rtype == 18 and len(payload) >= 208:
         flags = payload[12]

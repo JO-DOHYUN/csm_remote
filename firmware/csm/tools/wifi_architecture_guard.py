@@ -44,6 +44,9 @@ control_mailbox_header = (
 control_mailbox_source = (
     ROOT / "src" / "board" / "uplink" / "WifiControlPlaneMailbox.cpp"
 ).read_text(encoding="utf-8")
+record_admission_header = (
+    ROOT / "include" / "board" / "uplink" / "RecordAdmission.h"
+).read_text(encoding="utf-8")
 
 
 def env_section(name: str) -> str:
@@ -129,7 +132,7 @@ for token in (
 feeder_product = env_section(
     "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi"
 )
-if "BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS=1" not in feeder_product:
+if "BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY=1" not in feeder_product:
     fail("final feeder product must publish bounded 1 Hz TRANSPORT_DIAGNOSTIC")
 
 if "WifiTxProgressTracker" not in contract:
@@ -159,7 +162,7 @@ for token in (
         fail(f"worker recovery/evidence contract is missing {token!r}")
 
 for token in (
-    "kProductEnabledWireBytesPerSecond == 131513",
+    "kProductEnabledWireBytesPerSecond == 131577",
     "kProductEnabledRecordsPerSecond == 1095",
     "productSegmentWireBytesPerSecond",
     "csm::kControlAckPayloadLen",
@@ -511,9 +514,22 @@ for token in (
         fail(f"diagnostic mixes independent conservation owners: {token!r}")
 
 ap_only_gate = "if (!wifiRuntimeModeEnablesTcp(config_.runtime_mode)) return true;"
-server_start = "beginCall(WifiWorkerCallPhase::BeginServer)"
+server_start = "beginCall(WifiWorkerCallPhase::OpenTelemetryServer)"
 if ap_only_gate not in worker or worker.index(ap_only_gate) > worker.index(server_start):
     fail("AccessPointOnly mode does not stop before server startup")
+
+for token in (
+    "WifiWorkerCallPhase::OpenTelemetryServer",
+    "WifiWorkerCallPhase::ConfigureTelemetryServer",
+    "WifiWorkerCallPhase::BindTelemetryServer",
+    "WifiWorkerCallPhase::ListenTelemetryServer",
+    "WifiWorkerCallPhase::OpenControlServer",
+    "WifiWorkerCallPhase::ConfigureControlServer",
+    "WifiWorkerCallPhase::BindControlServer",
+    "WifiWorkerCallPhase::ListenControlServer",
+):
+    if token not in worker:
+        fail(f"listener startup failure boundary is still aggregated: missing {token!r}")
 
 for token in (
     "if (!state_.tcp_enabled)",
@@ -750,15 +766,36 @@ for token in (
         fail(f"producer-release admission reconciliation is missing {token!r}")
 
 for token in (
-    "kTransportDiagnosticSchema = 3",
+    "kTransportDiagnosticSchema = 4",
     "kTransportDiagnosticAcceptedRecordsOffset",
     "kTransportDiagnosticRejectedRecordsOffset",
     "kTransportDiagnosticAbortedBytesOffset",
     "kTransportDiagnosticAbortedRecordsOffset",
     "kTransportDiagnosticFirstLostPublishSeqOffset",
     "kTransportDiagnosticLastLostPublishSeqOffset",
+    "kTransportDiagnosticLastNetworkErrorOffset",
+    "kTransportDiagnosticLastFailurePhaseOffset",
+    "kTransportDiagnosticLastFailureResultOffset",
+    "kTransportDiagnosticCurrentCallPhaseOffset",
+    "kTransportDiagnosticCurrentCallFlagsOffset",
+    "kTransportDiagnosticCurrentCallSequenceOffset",
+    "kTransportDiagnosticCurrentCallStartedMsOffset",
+    "kTransportDiagnosticCurrentCallDurationUsOffset",
+    "kTransportDiagnosticCurrentCallResultOffset",
+    "kTransportDiagnosticWorkerHeartbeatAgeMsOffset",
+    "kTransportDiagnosticControlConnectionEpochOffset",
+    "kTransportDiagnosticControlFlagsOffset",
+    "kTransportDiagnosticConfiguredSocketMaxOffset",
+    "kTransportDiagnosticRequiredApplicationSocketsOffset",
+    "kTransportDiagnosticRequiredTotalSocketArenaOffset",
+    "kTransportDiagnosticSocketArenaCapacityOffset",
+    "kTransportDiagnosticSocketArenaUsedOffset",
+    "kTransportDiagnosticSocketArenaHighWaterOffset",
+    "kTransportDiagnosticSocketArenaAllocationFailuresOffset",
 ):
     if token not in typed_records:
-        fail(f"schema-3 conservation evidence is missing {token!r}")
+        fail(f"schema-4 conservation/failure evidence is missing {token!r}")
+if "BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES=192" not in feeder_product:
+    fail("transport diagnostic no longer has bounded medium-pool admission")
 
 print("Wi-Fi architecture guard PASS")

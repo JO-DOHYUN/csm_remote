@@ -443,8 +443,8 @@
 #define BOARD_WIFI_TRANSPORT_DIAGNOSTIC_PERIOD_MS 1000
 #endif
 
-#ifndef BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
-#define BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS 0
+#ifndef BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+#define BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY 0
 #endif
 
 #ifndef BOARD_BUILTIN_CAN_TX_COMPLETION_TIMEOUT_US
@@ -1998,7 +1998,7 @@ static bool emit_record(RecordType type, const uint8_t* payload, uint16_t len,
 
 #if BOARD_ENABLE_WIFI_UPLINK
 static void emit_wifi_transport_diagnostic(uint32_t now_ms) {
-#if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
   uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
   const auto snapshot =
       wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
@@ -2622,7 +2622,7 @@ static void emit_capability() {
       (1u << static_cast<uint8_t>(RecordType::RuntimeDiagnostic));
 #endif
 #if BOARD_ENABLE_WIFI_UPLINK
-#if BOARD_ENABLE_WIFI_DEEP_DIAGNOSTICS
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
   config.supported_uplink_records |=
       (1u << static_cast<uint8_t>(RecordType::TransportDiagnostic));
 #endif
@@ -3767,7 +3767,8 @@ static void emit_board_health(const EncoderSnapshot& snap) {
             admission_counters.diagnostic_suppressed_total);
   const uint32_t pool_high_bytes =
       admission_counters.pool_large_used_high_water * csm::kMaxPayloadLen +
-      admission_counters.pool_medium_used_high_water * 128u +
+      admission_counters.pool_medium_used_high_water *
+          BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES +
       admission_counters.pool_small_used_high_water * 64u;
   if (pool_high_bytes > uplink_pool_high_water_bytes) {
     uplink_pool_high_water_bytes = pool_high_bytes;

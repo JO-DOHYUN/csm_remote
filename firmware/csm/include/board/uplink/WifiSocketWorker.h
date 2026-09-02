@@ -71,6 +71,10 @@ class WifiSocketWorker final {
   uint32_t last_stack_sample_ms_ = 0;
   uint32_t next_startup_attempt_ms_ = 0;
   uint32_t current_call_started_us_ = 0;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  WifiWorkerCallPhase current_call_phase_ = WifiWorkerCallPhase::Idle;
+  WifiWorkerFailureLatch failure_latch_;
+#endif
   bool startup_complete_ = false;
   bool thread_started_ = false;
   std::atomic<uint32_t> sigio_total_{0};

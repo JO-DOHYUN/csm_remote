@@ -1,6 +1,7 @@
 {
   "macros": [
-    "CSM_PRODUCT_MBED_PROFILE=1"
+    "CSM_PRODUCT_MBED_PROFILE=1",
+    "CSM_SERVICE_HIL_OBSERVABILITY=1"
   ],
   "target_overrides": {
     "*": {
@@ -30,7 +31,7 @@
       "lwip.mem-size": 40960,
       "lwip.pbuf-pool-size": 5,
       "lwip.tcpip-thread-stacksize": 4096,
-      "lwip.socket-max": 4,
+      "lwip.socket-max": 5,
       "lwip.tcp-socket-max": 4,
       "lwip.tcp-server-max": 4,
       "target.macros_add": [
@@ -42,7 +43,8 @@
         "METAL_MAX_DEVICE_REGIONS=2",
         "RPMSG_BUFFER_SIZE=512",
         "LSE_STARTUP_TIMEOUT=200",
-        "CSM_PRODUCT_MBED_PROFILE=1"
+        "CSM_PRODUCT_MBED_PROFILE=1",
+        "CSM_SERVICE_HIL_OBSERVABILITY=1"
       ]
     }
   }

@@ -21,6 +21,7 @@ using csm::board::uplink::CanonicalPublisher;
 using csm::board::uplink::IFrameSink;
 using csm::board::uplink::FixedFrameQueue;
 using csm::board::uplink::PublishedFrameView;
+using csm::board::uplink::RecordAdmission;
 using csm::board::uplink::SinkOfferResult;
 using csm::board::uplink::UplinkPriority;
 using csm::board::uplink::UsbCdcSinkCounters;
@@ -1007,6 +1008,28 @@ void transport_diagnostic_is_single_bounded_wire_record() {
   snapshot.last_lost_publish_seq = 701;
   snapshot.last_accepted_publish_seq = 899;
   snapshot.last_sent_publish_seq = 897;
+  snapshot.last_network_error = -3005;
+  snapshot.last_failure_phase = 17;
+  snapshot.last_failure_result = -3005;
+  snapshot.current_call_phase = 16;
+  snapshot.current_call_flags =
+      csm::kTransportDiagnosticCurrentCallFlagCoherent;
+  snapshot.current_call_sequence = 55;
+  snapshot.current_call_started_ms = 1234;
+  snapshot.current_call_duration_us = 77;
+  snapshot.current_call_result = -3001;
+  snapshot.worker_heartbeat_age_ms = 4;
+  snapshot.control_connection_epoch = 9;
+  snapshot.control_flags = csm::kTransportDiagnosticControlFlagConnected;
+  snapshot.configured_socket_max = 5;
+  snapshot.configured_tcp_socket_max = 4;
+  snapshot.configured_tcp_server_max = 4;
+  snapshot.required_application_sockets = 4;
+  snapshot.required_total_socket_arena = 5;
+  snapshot.socket_arena_capacity = 5;
+  snapshot.socket_arena_used = 3;
+  snapshot.socket_arena_high_water = 4;
+  snapshot.socket_arena_allocation_failures = 17;
   uint8_t payload[csm::kTransportDiagnosticPayloadLen] = {};
   CHECK(csm::board::uplink::build_wifi_transport_diagnostic_payload(
             snapshot, payload, sizeof(payload)) ==
@@ -1047,8 +1070,70 @@ void transport_diagnostic_is_single_bounded_wire_record() {
   CHECK(csm::rd_u64_le(
             &payload[csm::kTransportDiagnosticLastSentPublishSeqOffset]) ==
         snapshot.last_sent_publish_seq);
-  CHECK(csm::kTransportDiagnosticLastSentPublishSeqOffset + sizeof(uint64_t) ==
+  CHECK(static_cast<int32_t>(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticLastNetworkErrorOffset])) ==
+        snapshot.last_network_error);
+  CHECK(payload[csm::kTransportDiagnosticLastFailurePhaseOffset] ==
+        snapshot.last_failure_phase);
+  CHECK(static_cast<int32_t>(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticLastFailureResultOffset])) ==
+        snapshot.last_failure_result);
+  CHECK(payload[csm::kTransportDiagnosticCurrentCallPhaseOffset] ==
+        snapshot.current_call_phase);
+  CHECK(payload[csm::kTransportDiagnosticCurrentCallFlagsOffset] ==
+        snapshot.current_call_flags);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticCurrentCallSequenceOffset]) ==
+        snapshot.current_call_sequence);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticCurrentCallStartedMsOffset]) ==
+        snapshot.current_call_started_ms);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticCurrentCallDurationUsOffset]) ==
+        snapshot.current_call_duration_us);
+  CHECK(static_cast<int32_t>(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticCurrentCallResultOffset])) ==
+        snapshot.current_call_result);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticWorkerHeartbeatAgeMsOffset]) ==
+        snapshot.worker_heartbeat_age_ms);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticControlConnectionEpochOffset]) ==
+        snapshot.control_connection_epoch);
+  CHECK(payload[csm::kTransportDiagnosticControlFlagsOffset] ==
+        snapshot.control_flags);
+  CHECK(payload[csm::kTransportDiagnosticConfiguredSocketMaxOffset] == 5);
+  CHECK(payload[csm::kTransportDiagnosticConfiguredTcpSocketMaxOffset] == 4);
+  CHECK(payload[csm::kTransportDiagnosticConfiguredTcpServerMaxOffset] == 4);
+  CHECK(payload[csm::kTransportDiagnosticRequiredApplicationSocketsOffset] == 4);
+  CHECK(payload[csm::kTransportDiagnosticRequiredTotalSocketArenaOffset] == 5);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticSocketArenaCapacityOffset]) == 5);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticSocketArenaUsedOffset]) == 3);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticSocketArenaHighWaterOffset]) == 4);
+  CHECK(csm::rd_u32_le(
+            &payload[csm::kTransportDiagnosticSocketArenaAllocationFailuresOffset]) ==
+        17);
+  CHECK(csm::kTransportDiagnosticSocketArenaAllocationFailuresOffset + 4 ==
         csm::kTransportDiagnosticPayloadLen);
+
+  RecordAdmission admission;
+  admission.begin();
+  CHECK(admission.enqueue(RecordType::TransportDiagnostic, payload,
+                          sizeof(payload), UplinkPriority::Diagnostic, 0));
+  CHECK(admission.poolLargeUsed() == 0);
+}
+
+void service_hil_failure_latch_survives_normal_accept_poll() {
+  using csm::board::uplink::WifiWorkerCallPhase;
+  using csm::board::uplink::WifiWorkerFailureLatch;
+  WifiWorkerFailureLatch latch;
+  CHECK(latch.observe(WifiWorkerCallPhase::ConfigureClient, -3005, -3001));
+  CHECK(!latch.observe(WifiWorkerCallPhase::AcceptClient, -3001, -3001));
+  CHECK(latch.phase() == WifiWorkerCallPhase::ConfigureClient);
+  CHECK(latch.result() == -3005);
 }
 
 struct SegmentCapture {
@@ -1129,6 +1214,7 @@ int main() {
   wifi_mailbox_wakes_only_on_actionable_transitions();
   runtime_diagnostic_layout_is_fixed_and_bounded();
   transport_diagnostic_is_single_bounded_wire_record();
+  service_hil_failure_latch_survives_normal_accept_poll();
   can_segment_batches_with_bounded_latency();
   wifi_queue_snapshot_supports_product_descriptor_capacity();
   if (failures != 0) return 1;

@@ -8,7 +8,9 @@ import time
 
 import serial
 
-from verify_typed_stream import parse_frame, u16, u32, u64, i16
+from verify_typed_stream import (
+    decode_transport_diagnostic, parse_frame, u16, u32, u64, i16,
+)
 
 
 CONTROL_IDS = (0x007,)
@@ -104,6 +106,7 @@ def main():
     parser.add_argument("--seconds", type=float, default=20.0)
     parser.add_argument("--artifact-dir", default="artifacts/remote_hil")
     parser.add_argument("--receive-only", action="store_true")
+    parser.add_argument("--require-wifi-dual-lane", action="store_true")
     parser.add_argument("--require-motion", action="store_true")
     parser.add_argument("--minimum-raw-span", type=int, default=300)
     args = parser.parse_args()
@@ -117,6 +120,7 @@ def main():
     raw_capture = bytearray()
     parse_buffer = bytearray()
     states = []
+    transport_diagnostics = []
     typed_seq_last = None
     typed_seq_gaps = 0
     bad_crc = 0
@@ -159,6 +163,10 @@ def main():
                     if state is not None:
                         states.append(state)
                         m4_boot_ids.add(state["m4_boot_id"])
+                elif rtype == 20:
+                    diagnostic = decode_transport_diagnostic(payload)
+                    if diagnostic is not None:
+                        transport_diagnostics.append(diagnostic)
                 elif rtype == 2 and len(payload) >= 30:
                     can_id = u32(payload, 8) & 0x1FFFFFFF
                     if can_id in can_times:
@@ -187,6 +195,9 @@ def main():
               f"typed_seq_gaps={typed_seq_gaps}")
     add_check(checks, "remote_records", len(states) >= 10,
               f"records={len(states)}")
+    add_check(checks, "service_hil_observability",
+              len(transport_diagnostics) >= 2,
+              f"transport_diagnostic_records={len(transport_diagnostics)}")
 
     result = {
         "captured_at": stamp,
@@ -200,9 +211,81 @@ def main():
         "boot_session_ids": [f"0x{x:016X}" for x in sorted(boot_session_ids)],
         "m4_boot_ids": [f"0x{x:08X}" for x in sorted(m4_boot_ids)],
         "capability": capability,
+        "wifi_transport_first": (
+            transport_diagnostics[0] if transport_diagnostics else None
+        ),
+        "wifi_transport_last": (
+            transport_diagnostics[-1] if transport_diagnostics else None
+        ),
         "can": {},
         "checks": checks,
     }
+
+    if len(transport_diagnostics) >= 2:
+        transport_first = transport_diagnostics[0]
+        transport_last = transport_diagnostics[-1]
+        arena_fail_delta = counter_delta(
+            transport_first, transport_last, "socket_arena_allocation_failures"
+        )
+        add_check(
+            checks,
+            "wifi_socket_arena_capacity",
+            transport_last["socket_arena_capacity"] >=
+            transport_last["required_total_socket_arena"] and
+            transport_last["socket_arena_used"] <=
+            transport_last["socket_arena_capacity"],
+            f"capacity={transport_last['socket_arena_capacity']} "
+            f"required={transport_last['required_total_socket_arena']} "
+            f"used={transport_last['socket_arena_used']} "
+            f"high={transport_last['socket_arena_high_water']}",
+        )
+        add_check(
+            checks,
+            "wifi_socket_arena_no_new_failures",
+            arena_fail_delta == 0,
+            f"allocation_fail_delta={arena_fail_delta}",
+        )
+        if args.require_wifi_dual_lane:
+            dual_connected = [
+                bool(item["flags"] & 0x02) and item["control_connected"]
+                for item in transport_diagnostics
+            ]
+            first_dual_index = next(
+                (index for index, connected in enumerate(dual_connected) if connected),
+                None,
+            )
+            stable_diagnostics = (
+                transport_diagnostics[first_dual_index:]
+                if first_dual_index is not None else []
+            )
+            telemetry_epochs = {
+                item["connection_epoch"] for item in stable_diagnostics
+            }
+            control_epochs = {
+                item["control_connection_epoch"] for item in stable_diagnostics
+            }
+            socket_error_delta = (
+                counter_delta(
+                    stable_diagnostics[0], stable_diagnostics[-1], "socket_errors"
+                )
+                if len(stable_diagnostics) >= 2 else None
+            )
+            add_check(
+                checks,
+                "wifi_dual_lane_connected",
+                first_dual_index is not None and
+                len(stable_diagnostics) >= 2 and
+                all(dual_connected[first_dual_index:]) and
+                len(telemetry_epochs) == 1 and
+                len(control_epochs) == 1 and
+                socket_error_delta == 0,
+                f"first_dual_index={first_dual_index} "
+                f"stable_samples={len(stable_diagnostics)} "
+                f"all_connected={bool(stable_diagnostics) and all(dual_connected[first_dual_index:])} "
+                f"telemetry_epochs={sorted(telemetry_epochs)} "
+                f"control_epochs={sorted(control_epochs)} "
+                f"socket_error_delta={socket_error_delta}",
+            )
 
     if states:
         first = states[0]

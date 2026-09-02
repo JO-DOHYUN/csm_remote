@@ -6,7 +6,8 @@ namespace csm::board::uplink {
 
 namespace {
 constexpr uint16_t kSmallPayloadBytes = 64;
-constexpr uint16_t kMediumPayloadBytes = 128;
+constexpr uint16_t kMediumPayloadBytes =
+    BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES;
 constexpr uint8_t can_reserve() {
   return BOARD_UPLINK_POOL_LARGE_CAN_RESERVE > BOARD_UPLINK_POOL_LARGE_BLOCKS
              ? BOARD_UPLINK_POOL_LARGE_BLOCKS
