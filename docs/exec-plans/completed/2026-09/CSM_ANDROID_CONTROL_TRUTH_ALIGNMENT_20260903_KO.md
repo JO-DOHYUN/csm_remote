@@ -37,4 +37,3 @@ transport, and vehicle wire semantics do not change.
   Observer/Service-HIL APK builds: PASS
 - runtime motion/wire semantic diff: zero
 - upload/device/HIL: NOT RUN (outside this software closure)
-
