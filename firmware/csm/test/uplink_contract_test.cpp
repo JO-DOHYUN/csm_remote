@@ -1127,6 +1127,21 @@ void transport_diagnostic_is_single_bounded_wire_record() {
   CHECK(admission.poolLargeUsed() == 0);
 }
 
+void control_path_diagnostic_is_admissible_without_borrowing_reserves() {
+  RecordAdmission admission;
+  admission.begin();
+  uint8_t payload[csm::kControlPathDiagnosticPayloadLen] = {};
+  CHECK(csm::kControlPathDiagnosticPayloadLen >
+        BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES);
+  CHECK(admission.enqueue(
+      RecordType::ControlPathDiagnostic, payload, sizeof(payload),
+      csm::board::uplink::default_priority_for_record(
+          RecordType::ControlPathDiagnostic), 0));
+  CHECK(admission.poolLargeUsed() == 1);
+  CHECK(admission.poolLargeCanReserveUsed() == 0);
+  CHECK(admission.poolLargeCriticalReserveUsed() == 0);
+}
+
 void service_hil_failure_latch_survives_normal_accept_poll() {
   using csm::board::uplink::WifiWorkerCallPhase;
   using csm::board::uplink::WifiWorkerFailureLatch;
@@ -1219,6 +1234,7 @@ int main() {
   wifi_mailbox_wakes_only_on_actionable_transitions();
   runtime_diagnostic_layout_is_fixed_and_bounded();
   transport_diagnostic_is_single_bounded_wire_record();
+  control_path_diagnostic_is_admissible_without_borrowing_reserves();
   service_hil_failure_latch_survives_normal_accept_poll();
   can_segment_batches_with_bounded_latency();
   wifi_queue_snapshot_supports_product_descriptor_capacity();

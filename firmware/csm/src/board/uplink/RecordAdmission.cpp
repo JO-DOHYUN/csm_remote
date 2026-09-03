@@ -233,8 +233,11 @@ bool RecordAdmission::allocate(UplinkPriority priority, uint16_t length, Payload
     return priority == UplinkPriority::Critical &&
         allocateLarge(length, priority, ref);
   }
-  return priority != UplinkPriority::Diagnostic &&
-      allocateLarge(length, priority, ref);
+  // Oversize diagnostic records may use only the unreserved large-payload
+  // capacity. allocateLarge() preserves both the CAN and Critical reserves,
+  // so evidence loss remains bounded without making a valid diagnostic
+  // structurally impossible even when every pool is empty.
+  return allocateLarge(length, priority, ref);
 }
 
 bool RecordAdmission::allocateSmall(uint16_t length, PayloadRef& ref) {
