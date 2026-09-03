@@ -111,7 +111,7 @@ class WifiSocketWorker final {
   bool refreshAdmissionSnapshotForSettlement();
   bool applyPendingConsume();
   void closeClient(WifiCloseReason reason);
-  void closeControlClient();
+  void closeControlClient(uint32_t reason = 5u, int32_t result = 0);
   void closeSocket(TCPSocket*& socket, WifiWorkerCallPhase close_phase);
   void applyAbortRequest();
   void noteSocketError(nsapi_error_t error);

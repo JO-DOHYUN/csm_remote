@@ -21,6 +21,7 @@ UplinkPriority default_priority_for_record(csm::RecordType type) {
     case csm::RecordType::RuntimeDiagnostic:
     case csm::RecordType::TransportDiagnostic:
     case csm::RecordType::LinkReliabilityDiagnostic:
+    case csm::RecordType::ControlPathDiagnostic:
       return UplinkPriority::Diagnostic;
     default:
       return UplinkPriority::Normal;

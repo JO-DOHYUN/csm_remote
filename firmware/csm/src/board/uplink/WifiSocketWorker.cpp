@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <new>
+#include "protocol/TypedRecords.h"
 
 namespace csm::board::uplink {
 
@@ -687,18 +688,19 @@ void WifiSocketWorker::serviceControlReceive() {
   const nsapi_size_or_error_t received =
       control_client_->recv(control_rx_buffer_, sizeof(control_rx_buffer_));
   endCall(received);
+  control_mailbox_.noteReceive(received, millis());
   if (received > 0) {
     if (!control_mailbox_.pushRx(control_rx_buffer_,
                                  static_cast<uint16_t>(received))) {
-      closeControlClient();
+      closeControlClient(3u, received);
     }
     return;
   }
   if (received == 0) {
-    closeControlClient();
+    closeControlClient(1u, received);
   } else if (received != NSAPI_ERROR_WOULD_BLOCK) {
     noteSocketError(static_cast<nsapi_error_t>(received));
-    closeControlClient();
+    closeControlClient(2u, received);
   }
 }
 
@@ -727,8 +729,15 @@ void WifiSocketWorker::serviceControlTransmit(uint32_t now_ms) {
   beginCall(WifiWorkerCallPhase::SendControl);
   const nsapi_size_or_error_t sent =
       control_client_->send(control_tx_buffer_ + offset, length - offset);
-  endCall(sent);
+  const uint32_t duration_us = endCall(sent);
   const uint32_t completed_ms = millis();
+  // Socket acceptance is evidence of ACK TX only, never remote receipt.
+  const uint32_t ack_id = control_anchor_pending_ ? 0u :
+      csm::rd_u32_le(control_tx_buffer_ + 9u + csm::kControlAckCommandIdOffset);
+  control_mailbox_.noteSend(sent, completed_ms, duration_us, ack_id,
+      static_cast<uint16_t>(offset + (sent > 0 ? sent : 0)),
+      sent > 0 && static_cast<uint32_t>(offset) + sent >= length,
+      sent == NSAPI_ERROR_WOULD_BLOCK);
   if (sent > 0) {
     const uint16_t remaining = static_cast<uint16_t>(length - offset);
     const uint16_t progressed =
@@ -751,14 +760,14 @@ void WifiSocketWorker::serviceControlTransmit(uint32_t now_ms) {
   }
   if (sent < 0 && sent != NSAPI_ERROR_WOULD_BLOCK) {
     noteSocketError(static_cast<nsapi_error_t>(sent));
-    closeControlClient();
+    closeControlClient(4u, sent);
     return;
   }
   const WifiTxProgressObservation progress =
       control_tx_progress_.observe(completed_ms, false, 300);
   if (progress.close_no_progress ||
       static_cast<uint32_t>(completed_ms - now_ms) > 300u) {
-    closeControlClient();
+    closeControlClient(6u, sent);
   }
 }
 
@@ -1075,8 +1084,9 @@ void WifiSocketWorker::closeClient(WifiCloseReason reason) {
   closeSocket(closing, WifiWorkerCallPhase::CloseClient);
 }
 
-void WifiSocketWorker::closeControlClient() {
+void WifiSocketWorker::closeControlClient(uint32_t reason, int32_t result) {
   TCPSocket* closing = control_client_;
+  if (closing != nullptr) control_mailbox_.noteClose(reason, result, millis());
   control_client_ = nullptr;
   control_mailbox_.deactivate();
   control_anchor_pending_ = false;

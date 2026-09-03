@@ -10,6 +10,7 @@
 #include "board/uplink/FixedFrameQueue.h"
 #include "board/uplink/FixedFrameByteQueue.h"
 #include "board/uplink/RecordAdmission.h"
+#include "board/uplink/UplinkPriorityPolicy.h"
 #include "board/uplink/UsbCdcSink.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 #include "board/uplink/WifiWorkerMailbox.h"
@@ -1189,6 +1190,10 @@ void wifi_queue_snapshot_supports_product_descriptor_capacity() {
 }  // namespace
 
 int main() {
+  CHECK(csm::board::uplink::default_priority_for_record(RecordType::ControlPathDiagnostic) ==
+        UplinkPriority::Diagnostic);
+  CHECK(csm::board::uplink::default_delivery_for_record(RecordType::ControlPathDiagnostic) ==
+        csm::board::uplink::UplinkDeliveryClass::Batchable);
   usb_short_write_commits_completed_frame_evidence();
   session_is_identical_before_fanout();
   missed_session_anchor_is_one_shot_until_a_new_epoch();

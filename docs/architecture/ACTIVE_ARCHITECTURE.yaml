@@ -91,6 +91,10 @@ profiles:
 evidence:
   admission_equals_physical_success: false
   physical_success_requires_hardware_evidence: true
+  control_island_runtime_ready_owner: csm_m7_local_predicate
+  android_telemetry_age: observation_only_after_active
+  service_hil_control_path_diagnostic: {record: 27, bytes: 340, max_hz: 1}
+  first_failure_retention: m7_and_control_transport_first_observation_until_boot
 qualification:
   threshold_state: exploratory
   production_authority: false

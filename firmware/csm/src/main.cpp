@@ -18,6 +18,7 @@
 #include "board/control/HostControlSession.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
+#include "board/control_island/ControlPathDiagnostics.h"
 #include "board/control_island/ControlSourceManager.h"
 #include "board/remote/RemoteSharedMemory.h"
 #include "board/diagnostics/BootProgress.h"
@@ -971,6 +972,16 @@ static uint16_t control_island_health_last_reject_detail = 0;
 static uint32_t control_island_boot_request_count = 0;
 static uint32_t control_island_selected_source = 0;
 static uint32_t control_island_permit_mask = 0;
+// Service/HIL observability: M7 foreground owns the first failure snapshot.
+// Reconnect/DISARM never erase evidence. These values do not grant permission.
+static csm::board::control_island::ControlPathFirstFailure control_path_first;
+static bool control_path_observing = false;
+static uint32_t control_service_last_ms = 0;
+static uint32_t control_service_gap_ms = 0;
+static uint32_t control_service_gap_max_ms = 0;
+static uint32_t control_heartbeat_id = 0;
+static uint32_t control_heartbeat_rx_ms = 0;
+static uint32_t control_heartbeat_ack_ref = 0;
 
 static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
@@ -1651,6 +1662,7 @@ static void discard_can_queue_for_session_quarantine();
 static void set_can_observe_mode_for_session(bool enabled, bool force = false);
 static bool init_can_backend();
 static bool control_island_runtime_ready(uint32_t now_ms);
+static uint8_t control_island_local_ready_reason(uint32_t now_ms);
 
 static uint8_t vehicle_impact_state() {
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
@@ -3379,6 +3391,8 @@ static void emit_control_island_health() {
   wr_u64_le(&payload[csm::kControlIslandHealthMonoUsOffset], mono64_us());
   payload[csm::kControlIslandHealthSchemaOffset] =
       csm::kControlIslandHealthSchema;
+  payload[csm::kControlIslandHealthLocalReadyReasonOffset] =
+      control_island_local_ready_reason(millis());
   wr_u16_le(&payload[csm::kControlIslandHealthPayloadLenOffset],
             csm::kControlIslandHealthPayloadLen);
   wr_u32_le(&payload[csm::kControlIslandHealthSchemaIdOffset],
@@ -4291,27 +4305,224 @@ static void poll_control_island_health(uint32_t now_ms) {
 #endif
 }
 
-static bool control_island_runtime_ready(uint32_t now_ms) {
+static uint8_t control_island_local_ready_reason(uint32_t now_ms) {
 #if BOARD_ENABLE_CONTROL_ISLAND
-  if (!control_island_health_valid ||
-      BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS == 0UL ||
-      static_cast<uint32_t>(now_ms - control_island_health_seen_ms) >
-          BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS) {
-    return false;
-  }
-  const uint32_t flags = control_island_health.flags;
-  const uint32_t required =
-      csm::board::control_island::kHealthFlagReady |
-      csm::board::control_island::kHealthFlagClockContractOk |
-      csm::board::control_island::kHealthFlagM7Fresh;
-  const uint32_t forbidden =
-      csm::board::control_island::kHealthFlagBusOff |
-      csm::board::control_island::kHealthFlagErrorPassive |
-      csm::board::control_island::kHealthFlagTrackingFault;
-  return (flags & required) == required && (flags & forbidden) == 0u;
+  return csm::board::control_island::localReadyReason(
+      control_island_health_valid, now_ms - control_island_health_seen_ms,
+      BOARD_CONTROL_ISLAND_HEALTH_TIMEOUT_MS, control_island_health.flags);
 #else
   (void)now_ms;
-  return false;
+  return 1u;
+#endif
+}
+
+static bool control_island_runtime_ready(uint32_t now_ms) {
+  return control_island_local_ready_reason(now_ms) == 0u;
+}
+
+static void record_control_path_failure(uint32_t reason, uint32_t now_ms) {
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY && BOARD_ENABLE_WIFI_UPLINK
+  if (!control_path_observing || control_path_first.reason != 0u) return;
+  const auto transport = wifi_tcp_sink.controlEvidence();
+  const auto call = wifi_tcp_sink.workerCallSnapshot();
+  const uint32_t context[18] = {
+      control_island_local_ready_reason(now_ms), control_island_health.flags,
+      control_island_health_valid ? now_ms - control_island_health_seen_ms : UINT32_MAX,
+      control_island_health_sequence, control_island_health.tim4_tick_total,
+      control_island_health.lanes[1].tx_success,
+      (now_ms - control_service_last_ms > control_service_gap_ms)
+          ? now_ms - control_service_last_ms : control_service_gap_ms,
+      wifi_tcp_sink.controlConnectionEpoch(), control_heartbeat_id,
+      transport.ack_generated_id, transport.ack_sent_id, transport.rx_bytes,
+      wifi_tcp_sink.workerHeartbeatAgeMs(now_ms), static_cast<uint32_t>(call.phase),
+      control_island_bringup.health_published,
+      control_island_bringup.health_publish_failures,
+      control_island_health_reject_total, host_control_session.activationEpoch()};
+  (void)control_path_first.record(reason, now_ms, context);
+#else
+  (void)reason; (void)now_ms;
+#endif
+}
+
+
+static void emit_control_path_diagnostic(uint32_t now_ms) {
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY && BOARD_ENABLE_WIFI_UPLINK
+  static uint32_t last_emit_ms = 0;
+  if (now_ms - last_emit_ms < 1000u) return;
+  last_emit_ms = now_ms;  // Evidence loss never creates retry/catch-up.
+  const auto t = wifi_tcp_sink.controlEvidence();
+  const auto w = wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
+  uint8_t payload[csm::kControlPathDiagnosticPayloadLen] = {};
+  wr_u64_le(payload, mono64_us());
+  payload[csm::kControlPathDiagnosticSchemaOffset] = csm::kControlPathDiagnosticSchema;
+  wr_u32_le(payload + csm::kControlPathDiagnosticLocalReadyReasonOffset,
+            control_island_local_ready_reason(now_ms));
+  wr_u32_le(payload + csm::kControlPathDiagnosticServiceGapMaxMsOffset,
+            control_service_gap_max_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4HealthAttemptsOffset,
+            control_island_bringup.health_attempts);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4HealthPublishedOffset,
+            control_island_bringup.health_published);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4HealthPublishFailuresOffset,
+            control_island_bringup.health_publish_failures);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4TraceSequenceOffset,
+            control_island_bringup_sequence);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7ReadAttemptsOffset,
+            control_island_health_read_attempts);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7ReadRejectsOffset,
+            control_island_health_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7HealthAgeMsOffset,
+            control_island_health_valid ? now_ms - control_island_health_seen_ms : UINT32_MAX);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTim4TickOffset,
+            control_island_health.tim4_tick_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticSteeringTxOffset,
+            control_island_health.lanes[1].tx_success);
+  wr_u32_le(payload + csm::kControlPathDiagnosticHealthFlagsOffset,
+            control_island_health.flags);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlEpochOffset,
+            wifi_tcp_sink.controlConnectionEpoch());
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlRxBytesOffset,
+            t.rx_bytes);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlRxReadBytesOffset,
+            t.rx_read_bytes);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlRxLastMsOffset,
+            t.rx_last_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlRxHighWaterOffset,
+            t.rx_high_water);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlRxOverflowOffset,
+            t.rx_overflow);
+  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatIdOffset,
+            control_heartbeat_id);
+  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatRxMsOffset,
+            control_heartbeat_rx_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatAckRefOffset,
+            control_heartbeat_ack_ref);
+  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatProcessedTotalOffset,
+            host_heartbeat_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticProofTimeoutTotalOffset,
+            host_command_freshness.proofTimeoutTotal());
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckGeneratedIdOffset,
+            t.ack_generated_id);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckGeneratedMsOffset,
+            t.ack_generated_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckOfferedTotalOffset,
+            t.ack_offered);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckAdmittedTotalOffset,
+            t.ack_admitted);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckRejectedTotalOffset,
+            t.ack_rejected);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckQueuedOffset,
+            t.queued);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckQueueHighWaterOffset,
+            t.ack_high_water);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckSentIdOffset,
+            t.ack_sent_id);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckSentMsOffset,
+            t.ack_sent_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticAckSentTotalOffset,
+            t.ack_sent_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlTxBytesOffset,
+            t.tx_bytes);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlWouldBlockOffset,
+            t.would_block);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlSendMaxUsOffset,
+            t.send_max_us);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlCloseTotalOffset,
+            t.close_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlCloseReasonOffset,
+            t.close_reason);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlCloseMsOffset,
+            t.close_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlCloseResultOffset,
+            t.close_result);
+  wr_u32_le(payload + csm::kControlPathDiagnosticWorkerAgeMsOffset,
+            w.worker_heartbeat_age_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticWorkerCallPhaseOffset,
+            w.current_call_phase);
+  wr_u32_le(payload + csm::kControlPathDiagnosticWorkerCallFlagsOffset,
+            w.current_call_flags);
+  wr_u32_le(payload + csm::kControlPathDiagnosticWorkerCallStartedMsOffset,
+            w.current_call_started_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTelemetryEpochOffset,
+            w.connection_epoch);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTelemetryBytesOffset,
+            w.socket_bytes_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTelemetryCloseOffset,
+            w.close_reason);
+  wr_u32_le(payload + csm::kControlPathDiagnosticArenaUsedOffset,
+            w.socket_arena_used);
+  wr_u32_le(payload + csm::kControlPathDiagnosticArenaHighWaterOffset,
+            w.socket_arena_high_water);
+  wr_u32_le(payload + csm::kControlPathDiagnosticArenaFailuresOffset,
+            w.socket_arena_allocation_failures);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstReasonOffset,
+            control_path_first.reason);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstMsOffset,
+            control_path_first.observed_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstReadyReasonOffset,
+            control_path_first.context[0]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstFlagsOffset,
+            control_path_first.context[1]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstHealthAgeOffset,
+            control_path_first.context[2]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstHealthSequenceOffset,
+            control_path_first.context[3]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstTim4TickOffset,
+            control_path_first.context[4]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstSteeringTxOffset,
+            control_path_first.context[5]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstServiceGapOffset,
+            control_path_first.context[6]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstControlEpochOffset,
+            control_path_first.context[7]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstHeartbeatIdOffset,
+            control_path_first.context[8]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstAckGenIdOffset,
+            control_path_first.context[9]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstAckSentIdOffset,
+            control_path_first.context[10]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstRxBytesOffset,
+            control_path_first.context[11]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstWorkerAgeOffset,
+            control_path_first.context[12]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstWorkerPhaseOffset,
+            control_path_first.context[13]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstM4PublishedOffset,
+            control_path_first.context[14]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstM4PublishFailOffset,
+            control_path_first.context[15]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstReadRejectsOffset,
+            control_path_first.context[16]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstActivationEpochOffset,
+            control_path_first.context[17]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstReasonOffset,
+            t.first[0]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstMsOffset,
+            t.first[1]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstEpochOffset,
+            t.first[2]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstRxBytesOffset,
+            t.first[3]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstAckGenIdOffset,
+            t.first[4]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstAckSentIdOffset,
+            t.first[5]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstTxBytesOffset,
+            t.first[6]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticTransportFirstResultOffset,
+            t.first[7]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4SnapshotRejectsOffset,
+            control_island_bringup.health_attempts - control_island_bringup.health_published -
+                control_island_bringup.health_publish_failures);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlTxPendingIdOffset,
+            t.pending_id);
+  wr_u32_le(payload + csm::kControlPathDiagnosticControlTxOffsetOffset,
+            t.tx_offset);
+  wr_u32_le(payload + csm::kControlPathDiagnosticM4TraceTim4TickOffset,
+            control_island_bringup.executor_tick);
+  emit_record(RecordType::ControlPathDiagnostic, payload, sizeof(payload));
+#else
+  (void)now_ms;
 #endif
 }
 
@@ -4364,6 +4575,11 @@ static bool host_freshness_requires_close(
 
 static void close_host_control_epoch(
     csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
+  using csm::board::control::HostControlCloseReason;
+  if (reason != HostControlCloseReason::HostDisarm &&
+      reason != HostControlCloseReason::AuthorityPreempted)
+    record_control_path_failure(0x100u + static_cast<uint32_t>(reason), now_ms);
+  control_path_observing = false;
   host_authority_gate.beginClose(reason, 0u);
   host_control_session.invalidate(now_ms);
   control_source_manager.clearHost();
@@ -4384,7 +4600,10 @@ static void service_host_authority_boundary(uint32_t now_ms) {
 
 static void update_host_control_session() {
   const uint32_t now_ms = millis();
+  const uint32_t timeouts = host_command_freshness.proofTimeoutTotal();
   host_command_freshness.update(now_ms);
+  if (host_command_freshness.proofTimeoutTotal() != timeouts)
+    record_control_path_failure(2u, now_ms);
   host_control_session.update(now_ms);
   service_host_authority_boundary(now_ms);
 }
@@ -4393,7 +4612,16 @@ static void service_control_island() {
 #if BOARD_ENABLE_CONTROL_ISLAND
   const uint32_t now_ms = millis();
   ++control_island_service_cycles;
+  if (control_island_service_cycles > 1u) {
+    control_service_gap_ms = now_ms - control_service_last_ms;
+    if (control_service_gap_ms > control_service_gap_max_ms)
+      control_service_gap_max_ms = control_service_gap_ms;
+  }
+  control_service_last_ms = now_ms;
   poll_control_island_health(now_ms);
+  if (!control_island_runtime_ready(now_ms))
+    record_control_path_failure(1u, now_ms);
+  emit_control_path_diagnostic(now_ms);
   service_host_authority_boundary(now_ms);
   csm::board::control::RemoteControlRuntimeOutput output;
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -5290,6 +5518,9 @@ static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t
       rd_u32_le(&payload[csm::kHostHeartbeatMonoMsOffset]);
   const uint32_t ack_ref =
       rd_u32_le(&payload[csm::kHostHeartbeatAckRefOffset]);
+  control_heartbeat_id = command_id;
+  control_heartbeat_rx_ms = now_ms;
+  control_heartbeat_ack_ref = ack_ref;
   const csm::board::control::HostFreshnessResult freshness =
       host_command_freshness.acceptHeartbeat(
           command_id, ack_ref, host_mono_ms, now_ms);
@@ -5414,6 +5645,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
           host_control_session.disarm(now_ms);
           reason = ControlReasonTxBusy;
         } else if (reason == ControlReasonOk) {
+          control_path_observing = true;
           ++host_control_lease_sequence;
           if (host_control_lease_sequence == 0u) {
             host_control_lease_sequence = 1u;

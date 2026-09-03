@@ -100,5 +100,11 @@ static_assert(kProductEnabledRecordsPerSecond == 1095,
               "enabled product record-rate regression");
 static_assert(kProductEnabledWireBytesPerSecond == 131617,
               "enabled product wire-rate regression");
+// Additive Service/HIL-only evidence budget; queues and product traffic rates
+// are unchanged. Diagnostic loss is reported by the existing publisher.
+static constexpr uint32_t kServiceHilControlPathWireBytesPerSecond =
+    productTypedRecordWireBytes(csm::kControlPathDiagnosticPayloadLen, 1u);
+static_assert(kServiceHilControlPathWireBytesPerSecond == 351u,
+              "bounded control-path evidence rate drift");
 
 }  // namespace csm::board::uplink

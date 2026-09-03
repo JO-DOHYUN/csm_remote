@@ -6,7 +6,7 @@
 namespace csm::board::control_island {
 
 // Frozen REV.B cross-image identity and fixed SRAM4 ownership.
-static constexpr uint32_t kControlIslandSchemaId = 0x43495343u;   // "CISC"
+static constexpr uint32_t kControlIslandSchemaId = 0x43495344u;   // "CISD"
 static constexpr uint32_t kHno1WireContractId = 0x484E4F31u;     // "HNO1"
 static constexpr uint32_t kControlMemoryLayoutId = 0xD3A8B800u;
 static constexpr uintptr_t kControlIpcAddress = 0x3800A800u;
@@ -277,7 +277,12 @@ struct BringupTracePayload {
   uint16_t stage = static_cast<uint16_t>(BringupStage::None);
   uint16_t failure = static_cast<uint16_t>(BringupFailure::None);
   uint32_t failure_detail = 0;
-  uint32_t flags = 0;
+  uint32_t executor_tick = 0; // Existing TIM4 counter, not another heartbeat.
+  // Foreground publication evidence in the existing padded trace slot. The
+  // trace still advances if normal executor snapshot/publication fails.
+  uint32_t health_attempts = 0;
+  uint32_t health_published = 0;
+  uint32_t health_publish_failures = 0;
 };
 
 struct alignas(32) BringupTraceSlot {

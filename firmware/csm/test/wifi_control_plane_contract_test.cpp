@@ -40,6 +40,21 @@ void activationAnchorsIdentityAndAckSequence() {
   CHECK(csm::rd_u32_le(&frame[9 + csm::kControlAckCommandIdOffset]) == 77);
   mailbox.consumeTx();
   CHECK(mailbox.queuedRecords() == 0);
+  mailbox.noteReceive(13, 100);
+  mailbox.noteSend(8, 110, 10, 77, 8, false);
+  CHECK(mailbox.evidence().ack_sent_id == 0); // Partial send is not terminal TX.
+  mailbox.noteSend(31, 111, 12, 77, 39, true);
+  CHECK(mailbox.evidence().ack_sent_id == 77);
+  CHECK(mailbox.evidence().ack_admitted == 1);
+  mailbox.noteClose(6, -3001, 400);
+  mailbox.deactivate();
+  CHECK(mailbox.activate(500000));
+  mailbox.noteClose(1, 0, 600);
+  const auto retained = mailbox.evidence();
+  CHECK(retained.first[0] == 6 && retained.first[1] == 400);
+  CHECK(retained.first[3] == 13 && retained.first[5] == 77);
+  CHECK(retained.close_reason == 1 && retained.close_total == 2);
+  CHECK(retained.first[7] == static_cast<uint32_t>(-3001));
 }
 
 void overflowClosesEpochAndReconnectDoesNotReplay() {

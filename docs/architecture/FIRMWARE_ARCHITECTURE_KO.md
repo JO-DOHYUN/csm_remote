@@ -137,6 +137,19 @@ Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.
 TIM4 configured와 실제 tick은 분리 보고되며 FDCAN begin 실패에도 static due truth가
 누적된다. FDCAN request는 Add/Enable/Abort reconciliation 결과를 명시한다. 정상 `Accepted`와
 Enable 실패 뒤 hardware pending이 확인되어 bounded abort를 요청한 상태는 모두 executor가
-terminal까지 추적하되 admission을 physical success로 세지 않는다. schema-4 Control-Island health는 independent M4 bring-up identity,
+terminal까지 추적하되 admission을 physical success로 세지 않는다. schema-5 Control-Island health는 independent M4 bring-up identity,
 TIM4/FDCAN/IRQ/callback, per-lane due→request→terminal, M7 coordinator/read reject를 함께 싣고
 normal M4 health가 아직 없을 때도 진단 record 자체를 폐기하지 않는다.
+
+M7 `localReadyReason`은 기존 local watchdog/flag predicate의 단일 owner다. record 26
+byte 9는 이 결과이며 Android arrival age로 재계산하지 않는다. M4의 기존 64-byte
+bring-up trace padding에 health attempt/published/publish-failure와 기존 TIM4 counter를
+싣는다. 정상 health snapshot 실패와 publication/IPC 실패를 구분하며 새 timer는 없다.
+
+Service/HIL record 27은 기존 publisher/USB/Wi-Fi fanout의 Diagnostic 우선순위,
+batchable 1 Hz, 340-byte bounded
+진단이다. M7 최초 active failure와 control mailbox 최초 transport failure를 boot까지
+보존하며 DISARM/reconnect가 지우지 않는다. 두 latch는 관측 시각이지 실제 물리 고장
+시각이 아니다. Worker counter는 개별 atomic observation이며 동시 합계의 원자성을
+주장하지 않는다. 기존 call/arena/telemetry evidence를 함께 보존하고 queue/retry,
+watchdog, CAN owner/schedule은 변경하지 않는다. 새 진단 값은 permission에 사용하지 않는다.

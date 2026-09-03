@@ -14,7 +14,7 @@ from verify_typed_stream import GapTracker, describe, i16, i32, parse_frame, u32
 
 HOST_QUERY_CAPABILITY = 14
 DEFAULT_VISIBLE_TYPES = {6, 7, 8, 9, 17}
-RATE_LIMITED_DEBUG_TYPES = {2, 18, 19}
+RATE_LIMITED_DEBUG_TYPES = {2, 18, 19, 26, 27}
 
 
 def compact_describe(frame: dict) -> str:

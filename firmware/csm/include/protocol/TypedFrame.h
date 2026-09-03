@@ -48,6 +48,7 @@ enum class RecordType : uint8_t {
   HostControlStateV2 = 24,
   HostControlNShot = 25,
   ControlIslandHealth = 26,
+  ControlPathDiagnostic = 27,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

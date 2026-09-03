@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "board/control_island/ControlIslandSharedMemory.h"
+#include "board/control_island/ControlPathDiagnostics.h"
 #include "board/control_island/ControlSourceManager.h"
 #include "board/control_island/M4StaticCyclicExecutor.h"
 #include "board/control/HostCommandFreshness.h"
@@ -20,6 +21,28 @@
 using namespace csm::board::control_island;
 
 namespace {
+void testLocalReadyTruthAndFirstFailureRetention() {
+  const uint32_t required = kHealthFlagReady | kHealthFlagClockContractOk | kHealthFlagM7Fresh;
+  const uint32_t forbidden = kHealthFlagBusOff | kHealthFlagErrorPassive | kHealthFlagTrackingFault;
+  // Exhaustively prove the refactor preserves the existing local predicate.
+  for (uint32_t flags = 0; flags < 4096; ++flags) {
+    assert((localReadyReason(true, 500, 500, flags) == 0) ==
+           ((flags & required) == required && (flags & forbidden) == 0));
+    assert(localReadyReason(true, 501, 500, flags) == 3);
+    assert(localReadyReason(false, 0, 500, flags) == 1);
+  }
+  assert(localReadyReason(true, 0, 0, required) == 2);
+  assert(localReadyReason(true, 0, 500, required | kHealthFlagBusOff) == 4);
+  assert(localReadyReason(true, 0, 500, required | kHealthFlagErrorPassive) == 5);
+  assert(localReadyReason(true, 0, 500, required | kHealthFlagTrackingFault) == 6);
+  ControlPathFirstFailure first;
+  uint32_t context[18] = {123, 456};
+  assert(first.record(1, 0xFFFFFFF0u, context));
+  context[0] = 999;
+  assert(!first.record(2, 20, context)); // reconnect/secondary failure cannot replace it
+  assert(first.reason == 1 && first.observed_ms == 0xFFFFFFF0u && first.context[0] == 123);
+  static_assert(sizeof(BringupTraceSlot) == 64, "trace padding must absorb evidence, not move IPC slots");
+}
 static_assert(kControlIslandSchemaId == csm::kControlIslandHealthSchemaId);
 static_assert(kHno1WireContractId == csm::kControlIslandHealthWireContractId);
 static_assert(kControlMemoryLayoutId == csm::kControlIslandHealthMemoryLayoutId);
@@ -763,6 +786,7 @@ void testHostSessionCausalAckProofAndConsumedWatermark() {
 }  // namespace
 
 int main() {
+  testLocalReadyTruthAndFirstFailureRetention();
   testHostSessionCausalAckProofAndConsumedWatermark();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfForegroundBudgetIsByteTimeAndWrapBounded();

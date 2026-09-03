@@ -309,11 +309,14 @@ void serviceControlIngress() {
 void publishControlIslandHealth(uint32_t now_ms) {
   if (now_ms - last_control_health_ms < 20u) return;
   last_control_health_ms = now_ms;
+  ++bringup_trace.health_attempts;
+  bringup_trace.executor_tick = control_executor.diagnosticTickTotal();
   ControlHealthPayload health;
   if (!control_executor.healthSnapshot(micros(), &health)) {
     if (health_snapshot_reject_total != UINT32_MAX) {
       ++health_snapshot_reject_total;
     }
+    (void)publishBringupTrace(bringup_trace);
     return;
   }
   health.health_snapshot_reject_total = health_snapshot_reject_total;
@@ -325,7 +328,9 @@ void publishControlIslandHealth(uint32_t now_ms) {
   health.raw_ring_drop = UINT32_MAX - region->raw_drop_count < hardware_drop
       ? UINT32_MAX
       : region->raw_drop_count + hardware_drop;
-  (void)publishControlHealth(health);
+  if (publishControlHealth(health)) ++bringup_trace.health_published;
+  else ++bringup_trace.health_publish_failures;
+  (void)publishBringupTrace(bringup_trace);
 }
 
 void recordBringup(BringupStage stage,

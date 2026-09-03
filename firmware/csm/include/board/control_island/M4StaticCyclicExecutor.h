@@ -35,6 +35,11 @@ class M4StaticCyclicExecutor {
   void markTimebaseConfigured(bool configured) { timebase_configured_ = configured; }
 
   const ControlHealthPayload& health() const { return health_; }
+  uint32_t diagnosticTickTotal() const {
+    // Aligned single-word read: TIM4 remains the sole writer.
+    const volatile uint32_t* tick = &health_.tim4_tick_total;
+    return *tick;
+  }
   bool healthSnapshot(uint32_t now_us, ControlHealthPayload* result) const;
   bool hasActiveControl() const { return active_valid_; }
 

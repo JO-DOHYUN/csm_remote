@@ -132,6 +132,9 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   Stream* controlDownlinkStream();
   bool offerControlAck(const uint8_t* payload, uint16_t length);
   bool controlConnected() const { return control_mailbox_.connected(); }
+  ControlTransportEvidence controlEvidence() const {
+    return control_mailbox_.evidence();
+  }
   uint32_t controlConnectionEpoch() const {
     return control_mailbox_.connectionEpoch();
   }

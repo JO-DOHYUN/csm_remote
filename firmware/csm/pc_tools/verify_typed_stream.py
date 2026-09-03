@@ -4,10 +4,13 @@ import struct
 import time
 
 import serial
+from control_path_diagnostic import decode_control_path_diagnostic
 
 
 SOF = b"\xA5\x5A"
 TYPE_NAMES = {
+    26: "CONTROL_ISLAND_HEALTH",
+    27: "CONTROL_PATH_DIAGNOSTIC",
     1: "CAN_RX_RAW",
     2: "CAN_TX_RAW",
     3: "ENC_EDGE_RAW",
@@ -806,6 +809,12 @@ def describe(frame):
                 return tail
         return base
 
+    if rtype == 27:
+        return f"[{name}] seq={seq} {decode_control_path_diagnostic(payload)}"
+    if rtype == 26 and len(payload) == 512:
+        return (f"[{name}] seq={seq} schema={payload[8]} local_ready_reason={payload[9]} "
+                f"m4_seq={struct.unpack_from('<I', payload, 28)[0]} "
+                f"m7_health_age_ms={struct.unpack_from('<I', payload, 504)[0]}")
     if rtype == 20:
         diagnostic = decode_transport_diagnostic(payload)
         if diagnostic is None:

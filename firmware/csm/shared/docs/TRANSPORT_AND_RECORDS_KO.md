@@ -585,9 +585,9 @@ active REV.B profile.
 - `18..19 successful_tx_count u16`, `1..255`
 - `20..27 data[8]`
 
-`CONTROL_ISLAND_HEALTH` schema 4 payload, 512 bytes:
+`CONTROL_ISLAND_HEALTH` schema 5 payload, 512 bytes:
 - `0..7 mono_us u64`, M7 observation time
-- `8 schema u8`, `10..11 payload_len u16`
+- `8 schema u8`, `9 CSM-local ready reason u8`, `10..11 payload_len u16`
 - `12..31 schema/wire/memory identity, M4 boot id, health sequence`
 - `32..51 flags, M7 publish sequence/age in M4 local time, source epoch/source`
 - `52..83 IPC stale/integrity, FDCAN error, raw-ring fill/high-water/drop counters`
@@ -610,6 +610,35 @@ M7 fresh, control active, TIM4 configured/ticking and tracking fault. The record
 is emitted periodically even before normal M4 health exists; zero boot/health
 sequence is explicit diagnostic truth, while the independent bring-up trace can
 still identify the last completed or failed boot stage.
+
+Local ready reason: `0 READY`, `1 no health`, `2 timeout contract disabled`,
+`3 M7-local health stale`, `4 bus-off`, `5 error-passive`, `6 tracking fault`,
+`7 clock contract`, `8 M7 source stale at M4`, `9 M4 not ready`.
+This preserves the prior M7 predicate; it is not a new permission gate.
+IPC/schema identity is `0x43495344`; the trace slot remains 64 bytes.
+
+`CONTROL_PATH_DIAGNOSTIC` record 27, schema 1, 340 bytes, Service/HIL only:
+`0..7 M7 mono_us`, `8 schema`, `9..11 reserved zero`; every remaining field is
+u32 LE at its canonical `kControlPathDiagnostic*Offset` in `TypedRecords.h`.
+`12..211` current local readiness, M4 health generation/publication, M7 read,
+control RX/heartbeat/ACK generation-admission-socket TX, call/telemetry/arena;
+`212..291` retained M7 first failure and its local/transport context;
+`292..323` retained first control-transport failure; `324..339` M4 snapshot
+rejects, staged TX command/offset and independent trace TIM4 counter.
+Unused/reserved fields never assert PASS. Diagnostic priority, batchable delivery,
+at most one record/1000 ms; extra
+Service/HIL wire budget is 351 B/s with unchanged 512-byte maximum and queues.
+
+M7 first reason `1 local M4 not-ready`, `2 causal proof expired`, `0x100 +
+HostControlCloseReason` for other unexpected authority closures. Explicit ARM
+starts observation but never clears the retained first failure. Transport reason
+`1 peer closed`, `2 RX error`, `3 RX overflow`, `4 TX error`, `5 local close`,
+`6 TX no-progress`, `7 ACK queue admission loss`. First context survives
+reconnection, normal DISARM and subsequent errors; boot resets it.
+All `*Ms` are M7-local modulo-u32 times. ACK socket acceptance is not Android
+receipt. `ControlTxPendingId/Offset` retain the last staged send including a
+completed frame (compare AckSentId); RX/TX counters are independent atomic
+observations, not a transactional conservation snapshot.
 
 `REMOTE_CONTROL_STATE` schema 4 is RC frontend/candidate evidence only. It owns
 CRSF/mailbox/normalization/semantic-candidate counters and no global authority,

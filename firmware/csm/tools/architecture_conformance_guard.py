@@ -463,7 +463,9 @@ for required in (
         fail(f"M4 executor missing {required}")
 for required in (
     "kControlIslandHealthPayloadLen = 512",
-    "kControlIslandHealthSchema = 4",
+    "kControlIslandHealthSchema = 5",
+    "kControlIslandHealthLocalReadyReasonOffset = 9",
+    "kControlPathDiagnosticPayloadLen = 340",
     "kRemoteControlStatePayloadLen = 232",
     "kRemoteControlStateSchema = 4",
     "kRemoteControlStateRejectedAddressOffset",
@@ -474,7 +476,7 @@ for required in (
     "kControlIslandHealthAuthorityWordOffset",
 ):
     if required not in typed_records:
-        fail(f"schema-4 observability contract missing {required}")
+        fail(f"canonical observability contract missing {required}")
 for required in (
     "kRemoteSharedMemoryVersion = 4",
     "foreground_budget_hits",
@@ -507,6 +509,18 @@ for obsolete_tool in (
         fail(f"obsolete HostCanTxRequest tool remains: {obsolete_tool}")
 if executor.count("driver_->cancel(lane)") != 1:
     fail("cancellation must remain one bounded request until terminal closure")
+for token in (
+    "return control_island_local_ready_reason(now_ms) == 0u;",
+    "record_control_path_failure(1u, now_ms)",
+    "record_control_path_failure(2u, now_ms)",
+    "BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY && BOARD_ENABLE_WIFI_UPLINK",
+    "now_ms - last_emit_ms < 1000u",
+):
+    if token not in main: fail(f"control attribution boundary missing {token}")
+if "testLocalReadyTruthAndFirstFailureRetention" not in control_test:
+    fail("local predicate equivalence/first failure regression missing")
+for token in ("health_attempts", "health_published", "health_publish_failures", "diagnosticTickTotal"):
+    if token not in m4_frontend: fail(f"M4 generation/publication evidence missing {token}")
 for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):
     if obsolete in executor:
         fail(f"obsolete executor race path remains: {obsolete}")
