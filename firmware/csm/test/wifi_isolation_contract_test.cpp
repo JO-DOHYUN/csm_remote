@@ -218,7 +218,7 @@ void testFreshAnchorPartialCompletionBoundary() {
 
 void testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds() {
   using namespace csm::board::uplink;
-  CHECK(kProductEnabledWireBytesPerSecond == 131577);
+  CHECK(kProductEnabledWireBytesPerSecond == 131617);
   CHECK(kProductEnabledRecordsPerSecond == 1095);
   CHECK(BOARD_WIFI_SINK_QUEUE_BYTES == 49152);
   CHECK(BOARD_WIFI_SINK_QUEUE_RECORDS == 256);
@@ -227,7 +227,7 @@ void testQueueEnvelopeUsesExactEnabledRateWithoutUnqualifiedThresholds() {
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_BYTES == 8192);
   CHECK(BOARD_WIFI_PRESSURE_HIGH_WATER_RECORDS == 192);
   CHECK(BOARD_WIFI_PRESSURE_LOW_WATER_RECORDS == 64);
-  CHECK(kWifiFallbackIngressBytes == 658);
+  CHECK(kWifiFallbackIngressBytes == 659);
   CHECK(kWifiTransientIngressBytes == 0);
   CHECK(kWifiFallbackIngressRecords == 6);
   CHECK(kWifiTransientIngressRecords == 0);

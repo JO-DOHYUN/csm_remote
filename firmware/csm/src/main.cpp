@@ -3559,6 +3559,16 @@ static void emit_remote_control_state() {
             status.semantic_updates);
   wr_u32_le(&payload[csm::kRemoteControlStateCandidateRejectsOffset],
             status.semantic_rejects);
+  wr_u32_le(&payload[csm::kRemoteControlStateRejectedAddressOffset],
+            diag.rejected_address);
+  const uint64_t malformed_total =
+      static_cast<uint64_t>(diag.rejected_address) + diag.rejected_length +
+      diag.rejected_crc + diag.inter_byte_resets;
+  wr_u32_le(&payload[csm::kRemoteControlStateMalformedTotalOffset],
+            malformed_total > UINT32_MAX ? UINT32_MAX
+                                         : static_cast<uint32_t>(malformed_total));
+  wr_u32_le(&payload[csm::kRemoteControlStateAdmissionResetsOffset],
+            diag.admission_resets);
   wr_u32_le(&payload[csm::kRemoteControlStateIpcRejectsOffset], status.ipc_rejects);
   payload[csm::kRemoteControlStateDecisionOffset] = static_cast<uint8_t>(status.last_decision);
   payload[csm::kRemoteControlStateLastAddressOffset] = diag.last_address;
@@ -3568,8 +3578,13 @@ static void emit_remote_control_state() {
       status.last_ipc_reject_detail;
   wr_u16_le(&payload[csm::kRemoteControlStateSemanticPeriodOffset],
             config.semantic_update_period_ms);
-  wr_u16_le(&payload[csm::kRemoteControlStateReserved116Offset], 0u);
-  wr_u16_le(&payload[csm::kRemoteControlStateReserved118Offset], 0u);
+  wr_u16_le(&payload[csm::kRemoteControlStateChannelValidMaskOffset],
+            diag.channel_valid_mask);
+  wr_u16_le(&payload[csm::kRemoteControlStateAdmissionRejectDetailOffset],
+            diag.last_admission_reject_detail);
+  payload[csm::kRemoteControlStateAdmissionStreakOffset] = diag.admission_streak;
+  payload[csm::kRemoteControlStateReceiverQualifiedOffset] =
+      diag.receiver_qualified;
   wr_u16_le(&payload[csm::kRemoteControlStateMaxForwardRpmOffset], config.max_forward_rpm);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxReverseRpmOffset], config.max_reverse_rpm);
   wr_u16_le(&payload[csm::kRemoteControlStateMaxSteeringOffset],
@@ -3609,6 +3624,10 @@ static void emit_remote_control_state() {
             diag.last_link_statistics_age_ms);
   wr_u16_le(&payload[csm::kRemoteControlStateLastNormalizeRejectDetailOffset],
             diag.last_normalize_reject_detail);
+  payload[csm::kRemoteControlStateLinkStatisticsTypeOffset] =
+      diag.link_statistics_type;
+  wr_u32_le(&payload[csm::kRemoteControlStateForegroundBudgetHitsOffset],
+            diag.foreground_budget_hits);
   emit_record(RecordType::RemoteControlState, payload, sizeof(payload));
 }
 #endif
@@ -5526,6 +5545,7 @@ static void service_host_downlink(int budget) {
         csm::board::control::HostControlCloseReason::TransportEpochClosed,
         millis());
     host_command_freshness.resetTransportEpoch();
+    control_source_manager.resetHostTransportEpoch();
     last_wifi_epoch = wifi_epoch;
   }
   Stream* stream = wifi_tcp_sink.controlDownlinkStream();

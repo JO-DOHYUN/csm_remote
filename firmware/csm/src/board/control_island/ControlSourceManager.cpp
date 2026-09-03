@@ -10,6 +10,8 @@ void ControlSourceManager::begin(uint32_t m7_boot_id) {
   active_source_ = ControlSource::None;
   host_ = {};
   remote_ = {};
+  last_host_transaction_id_ = 0u;
+  host_transaction_seen_ = false;
 }
 
 bool ControlSourceManager::acceptHostState(
@@ -43,8 +45,8 @@ bool ControlSourceManager::acceptHostNShot(
     uint32_t payload_generation, const uint8_t data[8]) {
   if (!host_.valid || transaction_id == 0u || lane >= kLaneCount ||
       successful_tx_count == 0u || payload_generation == 0u || data == nullptr ||
-      (host_.transaction.active != 0u &&
-       !sequenceNewer(transaction_id, host_.transaction.transaction_id))) {
+      (host_transaction_seen_ &&
+       !sequenceNewer(transaction_id, last_host_transaction_id_))) {
     return false;
   }
   host_.transaction = {};
@@ -54,7 +56,15 @@ bool ControlSourceManager::acceptHostNShot(
   host_.transaction.lane_index = lane;
   host_.transaction.active = 1u;
   memcpy(host_.transaction.data, data, 8u);
+  last_host_transaction_id_ = transaction_id;
+  host_transaction_seen_ = true;
   return true;
+}
+
+void ControlSourceManager::resetHostTransportEpoch() {
+  host_.transaction = {};
+  last_host_transaction_id_ = 0u;
+  host_transaction_seen_ = false;
 }
 
 void ControlSourceManager::renewHostLease(uint32_t lease_sequence) {

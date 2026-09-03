@@ -526,14 +526,12 @@ def decode_board_health(payload):
 
 
 def decode_remote_state(payload):
-    if len(payload) < 228:
+    if len(payload) < 232:
         return None
     return {
         "mono_us": u64(payload, 0),
         "schema": payload[8],
         "link_state": payload[9],
-        "authority_state": payload[10],
-        "active_source": payload[11],
         "flags": payload[12],
         "link_quality": payload[13],
         "m4_boot_id": u32(payload, 16),
@@ -545,14 +543,20 @@ def decode_remote_state(payload):
         "raw_ch4": u16(payload, 34),
         "rx_bytes": u32(payload, 40),
         "accepted_rc_frames": u32(payload, 208),
-        "control_cycles": u32(payload, 84),
-        "cycle_deadline_misses": u32(payload, 92),
-        "can_tx_success": u32(payload, 96),
-        "can_tx_failed": u32(payload, 100),
+        "candidate_updates": u32(payload, 84),
+        "candidate_rejects": u32(payload, 88),
+        "rejected_address": u32(payload, 92),
+        "malformed_total": u32(payload, 96),
+        "admission_resets": u32(payload, 100),
         "ipc_rejects": u32(payload, 104),
+        "channel_valid_mask": u16(payload, 114),
+        "admission_reject_detail": u16(payload, 116),
+        "admission_streak": payload[118],
+        "receiver_qualified": payload[119],
         "shared_publish_failures": u32(payload, 170),
         "last_rc_age_ms": u32(payload, 216),
         "last_link_statistics_age_ms": u32(payload, 220),
+        "foreground_budget_hits": u32(payload, 228),
     }
 
 
@@ -1174,8 +1178,18 @@ class Monitor:
                     self.fault("board_fault_event", decoded, host_ns)
         elif record_type == 18:
             decoded = decode_remote_state(payload)
-            if decoded is not None:
+            if decoded is None:
+                self.fault(
+                    "remote_control_state_bad_length",
+                    {"expected": 232, "actual": len(payload)}, host_ns,
+                )
+            else:
                 self.remote_records.append(decoded)
+                if decoded["schema"] != 4:
+                    self.fault(
+                        "remote_control_state_schema_mismatch",
+                        {"expected": 4, "actual": decoded["schema"]}, host_ns,
+                    )
                 m4_boot_id = decoded["m4_boot_id"]
                 if m4_boot_id != 0:
                     self.m4_boot_ids.add(m4_boot_id)
@@ -1188,8 +1202,7 @@ class Monitor:
                 if len(self.remote_records) >= 2:
                     previous = self.remote_records[-2]
                     for field in (
-                        "cycle_deadline_misses", "can_tx_failed", "ipc_rejects",
-                        "shared_publish_failures",
+                        "malformed_total", "ipc_rejects", "shared_publish_failures",
                     ):
                         delta = counter_delta(previous[field], decoded[field])
                         if delta:
@@ -2106,15 +2119,14 @@ class Monitor:
             first = self.remote_records[0]
             last = self.remote_records[-1]
             for field in (
-                "rx_bytes", "accepted_rc_frames", "control_cycles", "can_tx_success",
-                "cycle_deadline_misses", "can_tx_failed", "ipc_rejects",
-                "shared_publish_failures",
+                "rx_bytes", "accepted_rc_frames", "candidate_updates",
+                "candidate_rejects", "malformed_total", "admission_resets",
+                "foreground_budget_hits", "ipc_rejects", "shared_publish_failures",
             ):
                 remote_delta[field] = counter_delta(first[field], last[field])
             check(
                 "remote_runtime_integrity",
-                remote_delta["cycle_deadline_misses"] == 0
-                and remote_delta["can_tx_failed"] == 0
+                remote_delta["malformed_total"] == 0
                 and remote_delta["ipc_rejects"] == 0
                 and remote_delta["shared_publish_failures"] == 0,
                 remote_delta,

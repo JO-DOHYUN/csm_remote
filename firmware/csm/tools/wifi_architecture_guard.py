@@ -162,7 +162,7 @@ for token in (
         fail(f"worker recovery/evidence contract is missing {token!r}")
 
 for token in (
-    "kProductEnabledWireBytesPerSecond == 131577",
+    "kProductEnabledWireBytesPerSecond == 131617",
     "kProductEnabledRecordsPerSecond == 1095",
     "productSegmentWireBytesPerSecond",
     "csm::kControlAckPayloadLen",

@@ -8,7 +8,7 @@ import struct
 import time
 from datetime import datetime
 
-from send_host_can_tx_request import build_typed_frame
+from typed_frame import build_typed_frame
 from verify_typed_stream import GapTracker, describe, i16, i32, parse_frame, u32, u64
 
 
@@ -32,14 +32,17 @@ def compact_describe(frame: dict) -> str:
             f"socket_error={u32(payload, 360)} main_gap_us={u32(payload, 380)} "
             f"fault=0x{u32(payload, 48):08X} source=0x{u32(payload, 412):08X}"
         )
-    if record_type == 18 and len(payload) >= 228:
+    if record_type == 18 and len(payload) >= 232:
         return (
-            f"[RC] seq={seq} link={payload[9]} source={payload[11]} flags=0x{payload[12]:02X} "
+            f"[RC] seq={seq} schema={payload[8]} link={payload[9]} flags=0x{payload[12]:02X} "
             f"age_ms={u32(payload, 24)} steer={i16(payload, 30)} "
             f"ch5={i16(payload, 136)} ch10={i16(payload, 146)} ch11={i16(payload, 148)} "
-            f"valid={u32(payload, 44)} bad_crc={u32(payload, 60)} "
-            f"control={u32(payload, 84)} deadline={u32(payload, 92)} "
-            f"can_tx={u32(payload, 96)} can_fail={u32(payload, 100)}"
+            f"valid={u32(payload, 44)} malformed={u32(payload, 96)} "
+            f"bad_addr={u32(payload, 92)} bad_len={u32(payload, 56)} "
+            f"bad_crc={u32(payload, 60)} qualified={payload[119]} "
+            f"streak={payload[118]} admission_reason={payload[116] | payload[117] << 8} "
+            f"channel_mask=0x{payload[114] | payload[115] << 8:04X} "
+            f"budget_hits={u32(payload, 228)}"
         )
     if record_type == 19 and len(payload) >= 128:
         return (

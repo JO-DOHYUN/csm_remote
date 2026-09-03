@@ -33,7 +33,7 @@ active.
   encoded bytes. Four descriptors and 2,112 bytes are reserved for critical
   evidence, leaving a 252-record/47,040-byte normal envelope. It is a
   scheduling-jitter buffer, not a journal.
-- The enabled schema is generated exactly as 131,513 B/s and 1,095 records/s.
+- The enabled schema is generated exactly as 131,617 B/s and 1,095 records/s.
   Queue-coverage thresholds remain exploratory until measurement, constant
   freeze, and qualification HIL complete; no design-rate headroom is assumed.
 - 32,768 bytes or 192 records enters diagnostic pressure. Pressure recovers
@@ -296,12 +296,12 @@ another queue. A stable gate requires zero disconnect/overflow/socket/stall/
 queue-pressure-close delta, positive socket progress, and no sustained backlog
 growth beyond one 4 KiB pump budget.
 
-`REMOTE_CONTROL_STATE` schema 3 payload, 228 bytes:
+`REMOTE_CONTROL_STATE` schema 4 payload, 232 bytes:
 - `0..7 mono_us u64`
-- `8 schema u8`, currently `3`
+- `8 schema u8`, currently `4`
 - `9 remote_link_state u8`, `10..11 reserved`
 - `12 flags u8`: bit0 configured, bit1 M4 frontend alive, bit2 RC boundary
-  reserved, bit3 usable RC sample, bits4..6 reserved, bit7 service host allowed
+  reserved, bit3 usable RC sample, bit4 candidate image valid, bits5..7 reserved
 - `13 link_quality u8`, `14 RSSI dBm magnitude u8`, `15 last CRSF type u8`
 - `16..19 m4_boot_id u32`, `20..23 shared_sequence u32`
 - `24..27 mailbox_age_ms u32`: age of the last accepted M4 mailbox sequence;
@@ -312,14 +312,21 @@ growth beyond one 4 KiB pump budget.
   counters in this order: RX bytes, valid frames, decoded RC frames, link frames,
   rejected length, rejected CRC, inter-byte reset, mailbox publish, telemetry
   frames, telemetry bytes, serial write failures
-- `84..107` M7 control counters in this order: control cycles, neutral cycles,
-  cycle deadline misses, successful CAN writes, failed CAN writes, IPC rejects
+- `84..91 candidate_updates/candidate_rejects u32`
+- `92..103 rejected_address/malformed_total/admission_resets u32`.
+  `rejected_address` retains its specific parser meaning; `malformed_total` is
+  the saturating aggregate of address, length, CRC and inter-byte reset counts.
+- `104..107 ipc_rejects u32`
 - `108 last_decision u8`, `109 last CRSF address u8`, `110 sample_state u8`
 - `111 last_ipc_reject_detail u8`: `0` none, `1` bad shared header, `2` torn
   commit, `3` checksum mismatch
-- `112..127` cycle period, inter-frame gap, two reserved `u16`, max forward RPM,
-  max reverse RPM, max steering deci-degree,
-  and policy id as `u16` fields
+- `112..113 semantic_period_ms u16`
+- `114..115 channel_valid_mask u16`
+- `116..117 admission_reject_detail u16`: receiver-admission truth, independent
+  from normalization detail
+- `118 admission_streak u8`, `119 receiver_qualified u8`
+- `120..127` max forward RPM, max reverse RPM, max steering deci-degree and
+  policy id as `u16` fields
 - `128..159 normalized channel[16] i16`
 - `160 link_statistics_valid u8`; `161..169` exact CRSF uplink/downlink RSSI,
   SNR, antenna, RF profile, RF power, and downlink link quality fields
@@ -331,6 +338,9 @@ growth beyond one 4 KiB pump budget.
 - `216..219 last_rc_frame_age_ms u32`
 - `220..223 last_link_statistics_age_ms u32`
 - `224..225 last_normalize_reject_detail u16`
+- `226 link_statistics_type u8`, `227 reserved`
+- `228..231 foreground_budget_hits u32`: a CRSF UART backlog remained after a
+  byte/time-bounded foreground drain. The next control/health services still ran.
 
 `RUNTIME_DIAGNOSTIC` schema 2 payload is exactly 128 bytes and exists only in
 explicit `*_runtime_diag` firmware profiles. Production profiles neither emit
@@ -376,7 +386,7 @@ instead of being silently discarded. `write_result > 0` proves only that Mbed
 accepted the frame into the FDCAN FIFO. Actual transmission requires the same
 attempt's `TXBTO`, no `TXBCF/TXBRP`, and matching external Kvaser evidence.
 
-The M4-M7 shared-memory schema is version `3`. Product M4 and M7 artifacts must
+The M4-M7 shared-memory schema is version `4`. Product M4 and M7 artifacts must
 be deployed as a pair. The fixed 1 KiB SRAM4 window at `0x38000000` replaces the
 OpenAMP resource-table window, so RPC/OpenAMP is compile-time incompatible with
 the remote product profiles. The header, M4-to-M7 channel, and M7-to-M4 channel
@@ -601,7 +611,7 @@ is emitted periodically even before normal M4 health exists; zero boot/health
 sequence is explicit diagnostic truth, while the independent bring-up trace can
 still identify the last completed or failed boot stage.
 
-`REMOTE_CONTROL_STATE` schema 3 is RC frontend/candidate evidence only. It owns
+`REMOTE_CONTROL_STATE` schema 4 is RC frontend/candidate evidence only. It owns
 CRSF/mailbox/normalization/semantic-candidate counters and no global authority,
 physical cadence, request, terminal, or FDCAN success meaning.
 
@@ -1094,7 +1104,7 @@ State `0` is measurement-only and is not a release approval. Values move to
 state `1` only in the order exploratory measurement -> reviewed value decision
 -> product constant freeze -> qualification HIL. `120000 B/s` is retired and
 `135000 B/s` is not an approved envelope. The enabled steady schema computes
-1095 records/s and exactly 131577 B/s before qualification headroom is chosen.
+1095 records/s and exactly 131617 B/s before qualification headroom is chosen.
 
 The hardware fields above are advertised claims and artifact references. They
 do not by themselves prove vehicle-impact-free behavior. VSM may display them

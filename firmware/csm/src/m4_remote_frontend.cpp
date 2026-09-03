@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "board/remote/CrsfParser.h"
+#include "board/remote/CrsfForegroundBudget.h"
 #include "board/remote/M4RemoteMailboxWriter.h"
 #include "board/remote/RcNormalizer.h"
 #include "board/remote/ReceiverAdmission.h"
@@ -93,8 +94,7 @@ bool foreground_loop_entered = false;
 bool first_tick_reported = false;
 
 uint32_t frontendMalformedTotal() {
-  return diagnostics.rejected_length + diagnostics.rejected_crc +
-         diagnostics.inter_byte_resets;
+  return parser.malformedTotal() + diagnostics.inter_byte_resets;
 }
 
 void updateSampleState(uint32_t now_ms) {
@@ -125,6 +125,7 @@ void updateSampleState(uint32_t now_ms) {
   diagnostics.admission_streak = admission.consecutive_frames;
   diagnostics.receiver_qualified = admission.receiver_qualified ? 1u : 0u;
   diagnostics.channel_valid_mask = current_sample.channel_valid_mask;
+  diagnostics.last_admission_reject_detail = admission.last_reject_detail;
 
   if (!frontend_configured) {
     current_sample.sample_state = RcSampleState::ProtocolFault;
@@ -401,9 +402,11 @@ void loop() {
     recordBringup(BringupStage::FirstTim4Tick);
   }
   const uint32_t now_ms = millis();
-  while (Serial3.available() > 0) {
+  CrsfForegroundBudget crsf_budget(micros());
+  while (Serial3.available() > 0 && crsf_budget.mayConsume(micros())) {
     const int value = Serial3.read();
     if (value < 0) break;
+    crsf_budget.noteConsumed();
     const uint32_t now_us = micros();
     if (parser.bufferedBytes() != 0 &&
         now_us - last_byte_us > kCrsfInterByteTimeoutUs) {
@@ -424,6 +427,10 @@ void loop() {
                result.status == CrsfParseStatus::RejectedCrc) {
       receiver_admission.reset(ReceiverAdmissionRejectDetail::SequenceBroken);
     }
+  }
+  if (Serial3.available() > 0 &&
+      diagnostics.foreground_budget_hits != UINT32_MAX) {
+    ++diagnostics.foreground_budget_hits;
   }
 
   serviceTelemetry(now_ms);

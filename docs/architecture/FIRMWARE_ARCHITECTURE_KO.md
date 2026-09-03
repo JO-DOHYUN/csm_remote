@@ -90,7 +90,9 @@ transition overlap은 없으며 별도 sleep으로 공백을 만들지 않는다
 
 N-shot은 continuous state와 분리된 transaction이다. `TXBTO` terminal만 successful count를
 증가시키며 N번째 성공 직후 추가 release를 차단한다. cancelled/faulted transaction은
-complete로 보고하지 않는다.
+complete로 보고하지 않는다. accepted transaction ID watermark는 coherent state 교체,
+completion/cancel, DISARM, 같은 source re-ARM에도 유지되며 M7 boot 또는 새 Host control
+transport epoch에서만 초기화된다.
 
 ## D3 shared memory
 
@@ -127,6 +129,9 @@ control backlog가 되지 않는다.
 transport/timing, M4↔M7 liveness, safe-wire contract qualification은 측정 evidence이며 runtime
 permission이 아니다. 초기 M4→M7 freshness timeout은 300 ms이고 publish age/max gap/timeout count를
 보고한다.
+M4 foreground CRSF drain은 한 turn당 64 bytes 또는 500 us로 제한한다. budget hit는
+`REMOTE_CONTROL_STATE` evidence이며 UART backlog가 control IPC/health publication을 무기한
+지연시키지 않는다.
 Build/test 성공은 device/HIL 또는 physical timing/ACK 증거가 아니다.
 
 TIM4 configured와 실제 tick은 분리 보고되며 FDCAN begin 실패에도 static due truth가

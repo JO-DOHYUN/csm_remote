@@ -199,15 +199,19 @@ Fail branch:
 Goal: prove the CSM is a control gateway, not just a smoke transmitter.
 
 Pass evidence:
-- host sends `HOST_CAN_TX_REQUEST`
+- Service/HIL host establishes the dedicated control epoch, causal heartbeat,
+  explicit ARM and one coherent `HOST_CONTROL_STATE_V2`
 - board emits `CONTROL_ACK status=1`
-- board emits matching `CAN_TX_RAW failed=0`
-- PCAN sees the same CAN id and data
+- `CONTROL_ISLAND_HEALTH` shows the matching value generation and advancing M4
+  terminal success counter
+- PCAN/Kvaser sees the same CAN id and data
 
 Fail branch:
 - if `CONTROL_ACK` rejects, inspect policy.
-- if `CONTROL_ACK` accepts but no `CAN_TX_RAW`, inspect TX lane.
-- if `CAN_TX_RAW` appears but PCAN does not see it, inspect physical CAN.
+- if `CONTROL_ACK` accepts but the M4 value generation/terminal counter does not
+  advance, inspect the Control-Island IPC and dedicated-buffer lane.
+- if M4 terminal success advances but PCAN/Kvaser does not see it, preserve the
+  exact capture and inspect the physical CAN evidence contradiction.
 
 ## MCP2515 Fast Path
 For the current Mid Carrier MCP2515 CSM setup, use this order:
@@ -220,7 +224,8 @@ For the current Mid Carrier MCP2515 CSM setup, use this order:
 6. Confirm MCP init at `MCP_8MHZ`, `CAN_500KBPS`.
 7. Confirm PCAN at 500 kbps with termination.
 8. Confirm `CAN_RX_RAW bus=0`.
-9. Confirm host-command TX audit on `bus=0`.
+9. Confirm current Service/HIL coherent-state execution and M4 terminal evidence
+   on `bus=0`.
 
 ## Required Final Report
 A hardware bring-up report must include:

@@ -263,7 +263,7 @@ def calculate() -> dict:
     legacy_can_queue_total = 2 * 4096 * can_item_bytes
 
     require(compact_rx == 88874, "aggregate CAN wire calculation regression")
-    require(compact_total == 131577, "enabled product wire calculation regression")
+    require(compact_total == 131617, "enabled product wire calculation regression")
     require(enabled_records == 1095, "enabled product record calculation regression")
     require(dtcm_storage == 53248, "DTCM live FIFO calculation regression")
     require(

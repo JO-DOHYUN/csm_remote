@@ -8,6 +8,7 @@
 #include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlSession.h"
 #include "board/remote/CrsfParser.h"
+#include "board/remote/CrsfForegroundBudget.h"
 #include "board/remote/R16smReceiverProfile.h"
 #include "board/remote/RcNormalizer.h"
 #include "board/remote/ReceiverAdmission.h"
@@ -206,6 +207,29 @@ void testSourceManagerOwnershipAndEpochs() {
   assert(!rc.lanes[kLane364].valid);
 }
 
+void testHostNShotTransactionWatermarkSurvivesLifecycle() {
+  ControlSourceManager manager;
+  manager.begin(9u);
+  uint8_t a[8] = {1}, b[8] = {2}, c[8] = {3}, pulse[8] = {4};
+  assert(manager.acceptHostState(100u, kAllLanePermitMask, a, b, c, 1u));
+  assert(manager.acceptHostNShot(100u, kLane364, 2u, 100u, pulse));
+
+  // A newer coherent state cancels the active event but cannot reopen an old
+  // transaction ID, even when the command/state generation itself is newer.
+  assert(manager.acceptHostState(101u, kAllLanePermitMask, a, b, c, 2u));
+  assert(!manager.acceptHostNShot(50u, kLane364, 2u, 101u, pulse));
+
+  manager.clearHost();  // DISARM / authority close.
+  assert(manager.acceptHostState(102u, kAllLanePermitMask, a, b, c, 3u));
+  assert(!manager.acceptHostNShot(50u, kLane364, 2u, 102u, pulse));
+  assert(manager.acceptHostNShot(101u, kLane364, 2u, 102u, pulse));
+
+  manager.resetHostTransportEpoch();
+  manager.clearHost();
+  assert(manager.acceptHostState(1u, kAllLanePermitMask, a, b, c, 1u));
+  assert(manager.acceptHostNShot(50u, kLane364, 2u, 1u, pulse));
+}
+
 void testReceiverQualifiedAdmissionAndOptionalStatistics() {
   using namespace csm::board::remote;
   ReceiverAdmission admission;
@@ -235,6 +259,23 @@ void testReceiverQualifiedAdmissionAndOptionalStatistics() {
   assert(!admission.usable(200u, false, kRemoteMetricUnknown, UINT32_MAX));
   assert(!admission.observeRcFrame(201u, kR16smCrsfAddress,
                                    kR16smRequiredControlChannelMask));
+}
+
+void testCrsfForegroundBudgetIsByteTimeAndWrapBounded() {
+  using namespace csm::board::remote;
+  CrsfForegroundBudget bytes(100u);
+  for (uint16_t i = 0; i < kCrsfForegroundByteBudget; ++i) {
+    assert(bytes.mayConsume(100u));
+    bytes.noteConsumed();
+  }
+  assert(!bytes.mayConsume(100u));
+
+  CrsfForegroundBudget time(100u);
+  assert(time.mayConsume(100u + kCrsfForegroundTimeBudgetUs - 1u));
+  assert(!time.mayConsume(100u + kCrsfForegroundTimeBudgetUs));
+
+  CrsfForegroundBudget wrap(0xFFFFFFF0u);
+  assert(wrap.mayConsume(0x00000010u));
 }
 
 void testCrsfStreamResynchronizationAndR16smFixture() {
@@ -724,10 +765,12 @@ void testHostSessionCausalAckProofAndConsumedWatermark() {
 int main() {
   testHostSessionCausalAckProofAndConsumedWatermark();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
+  testCrsfForegroundBudgetIsByteTimeAndWrapBounded();
   testCrsfStreamResynchronizationAndR16smFixture();
   testCrsfModernFramesAndChannelValidity();
   testTransmitterOffOnAndHostToRcTakeover();
   testSourceManagerOwnershipAndEpochs();
+  testHostNShotTransactionWatermarkSurvivesLifecycle();
   testSharedMemoryIntegrityAndBoundedRing();
   testLongSafeCyclicAndRepeatedSafeStaging();
   testTerminalCancelRaceAndNoTransitionSkip();

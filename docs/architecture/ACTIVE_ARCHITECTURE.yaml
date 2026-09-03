@@ -46,6 +46,7 @@ control:
     optional_function_channels: [CH5_auxiliary, CH10_steering_overlay, CH11_momentary_overlay]
     consecutive_fresh_frames: 3
     link_statistics: optional_when_absent_zero_or_stale_veto_when_observed
+    foreground_drain_budget: {bytes: 64, time_us: 500, evidence: budget_hit_counter}
   authority_handoff: quiescent_cancel_terminal_then_activate
   mutable_executor_state_writer: csm_m4_tim4_only
   foreground_ingress: latest_validated_snapshot_or_event_depth_1
@@ -65,6 +66,7 @@ control:
     0x007: 1
     0x364: 2
   strict_n_shot_owner: csm_m4_generic_success_budget
+  strict_n_transaction_watermark: m7_boot_or_new_host_control_transport_epoch_only
   state_split:
     physical_transport_readiness: m4_fdcan1_transport_only
     active_motion_permission: fresh_coherent_source_owned_lane_permit_explicit_arm

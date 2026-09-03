@@ -832,25 +832,28 @@ def describe(frame):
             f"heartbeat_age_ms={diagnostic['worker_heartbeat_age_ms']}"
         )
 
-    if rtype == 18 and len(payload) >= 208:
+    if rtype == 18 and (len(payload) < 232 or payload[8] != 4):
+        schema = payload[8] if len(payload) > 8 else "missing"
+        return f"[{name}] seq={seq} unsupported schema={schema} payload_len={len(payload)}"
+
+    if rtype == 18 and len(payload) >= 232:
         flags = payload[12]
         channels = [i16(payload, 128 + index * 2) for index in range(16)]
         raw_channels = [u16(payload, 176 + index * 2) for index in range(16)]
-        frontend_tail = ""
-        if len(payload) >= 228:
-            frontend_tail = (
-                f" accepted_rc={u32(payload, 208)}"
-                f" normalize_reject={u32(payload, 212)}"
-                f" rc_age_ms={u32(payload, 216)}"
-                f" link_age_ms={u32(payload, 220)}"
-                f" normalize_detail={u16(payload, 224)}"
-            )
+        frontend_tail = (
+            f" accepted_rc={u32(payload, 208)}"
+            f" normalize_reject={u32(payload, 212)}"
+            f" rc_age_ms={u32(payload, 216)}"
+            f" link_age_ms={u32(payload, 220)}"
+            f" normalize_detail={u16(payload, 224)}"
+            f" link_stats_type={payload[226]}"
+            f" budget_hits={u32(payload, 228)}"
+        )
         return (
             f"[{name}] seq={seq} mono_us={u64(payload, 0)} schema={payload[8]} "
-            f"link={payload[9]} authority={payload[10]} source={payload[11]} "
+            f"link={payload[9]} "
             f"flags=0x{flags:02X} frontend={(flags >> 1) & 1} reserved={(flags >> 2) & 1} "
-            f"valid={(flags >> 3) & 1} neutral={(flags >> 4) & 1} "
-            f"qualified={(flags >> 5) & 1} released={(flags >> 6) & 1} "
+            f"valid={(flags >> 3) & 1} candidate={(flags >> 4) & 1} "
             f"lq={payload[13]} rssi=-{payload[14]}dBm crsf_type=0x{payload[15]:02X} "
             f"m4_boot=0x{u32(payload, 16):08X} shared_seq={u32(payload, 20)} "
             f"age_ms={u32(payload, 24)} drive={i16(payload, 28)} steer={i16(payload, 30)} "
@@ -860,13 +863,14 @@ def describe(frame):
             f"bad_len={u32(payload, 56)} bad_crc={u32(payload, 60)} "
             f"gap_reset={u32(payload, 64)} publish={u32(payload, 68)} "
             f"telem_frames={u32(payload, 72)} telem_bytes={u32(payload, 76)} "
-            f"telem_fail={u32(payload, 80)} control_cycles={u32(payload, 84)} "
-            f"neutral_cycles={u32(payload, 88)} deadline_miss={u32(payload, 92)} "
-            f"can_tx={u32(payload, 96)} can_fail={u32(payload, 100)} "
+            f"telem_fail={u32(payload, 80)} candidate_updates={u32(payload, 84)} "
+            f"candidate_rejects={u32(payload, 88)} bad_addr={u32(payload, 92)} "
+            f"malformed={u32(payload, 96)} admission_resets={u32(payload, 100)} "
             f"ipc_reject={u32(payload, 104)} ipc_detail={payload[111]} "
             f"decision={payload[108]} "
-            f"sample_state={payload[110]} cycle_ms={u16(payload, 112)} "
-            f"frame_gap_ms={u16(payload, 114)} ch={channels} "
+            f"sample_state={payload[110]} semantic_ms={u16(payload, 112)} "
+            f"channel_mask=0x{u16(payload, 114):04X} admission_reason={u16(payload, 116)} "
+            f"streak={payload[118]} receiver_qualified={payload[119]} ch={channels} "
             f"link_stats_valid={payload[160]} rssi1=-{payload[161]}dBm "
             f"rssi2=-{payload[162]}dBm snr={struct.unpack_from('<b', payload, 163)[0]}dB "
             f"antenna={payload[164]} rf_profile={payload[165]} rf_power={payload[166]} "

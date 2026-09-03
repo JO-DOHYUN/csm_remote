@@ -37,6 +37,10 @@ R16SM이 Link Statistics를 보내지 않는 것은 ProtocolFault가 아니다. 
 관측된 경우에만 LQ=0 또는 500 ms stale이 추가 veto다. Qualification/HIL evidence는 runtime
 permission을 대신하지 않는다.
 
+UART foreground는 한 turn에 최대 64 bytes 또는 500 us만 drain한 뒤 control ingress와
+health/sample publication을 반드시 서비스한다. 남은 UART backlog는 다음 turn에 이어서
+처리하며 queue/replay를 추가하지 않고 budget-hit counter로만 관측한다.
+
 ## Evidence boundary
 
 2026-07-21 typed capture는 address `0xC8`, type `0x16`, 16 decoded raw channels,

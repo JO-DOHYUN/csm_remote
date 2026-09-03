@@ -68,7 +68,7 @@ J4 FDCAN CAN1 ----------------/                  |
 
 USB는 `192 descriptors / 40,960 encoded bytes`의 byte-ring FIFO를 사용한다.
 기존 8-record queue처럼 모든 slot에 최대 frame 크기를 고정 할당하지 않는다.
-현재 enabled schema 계산은 `131,513 B/s / 1,095 records/s`지만 transient
+현재 enabled schema 계산은 `131,617 B/s / 1,095 records/s`지만 transient
 coverage threshold는 exploratory 상태이며 product interval로 동결되지 않았다.
 USB host backpressure는 CAN ingest, canonical publisher와 Wi-Fi sink를 막지 않는다.
 실제 overflow는 `BOARD_HEALTH.usb_overflow`, canonical sequence gap과 sink

@@ -98,7 +98,7 @@ static_assert(kProductCanRxWireBytesPerSecond == 88874,
               "enabled product CAN wire-rate regression");
 static_assert(kProductEnabledRecordsPerSecond == 1095,
               "enabled product record-rate regression");
-static_assert(kProductEnabledWireBytesPerSecond == 131577,
+static_assert(kProductEnabledWireBytesPerSecond == 131617,
               "enabled product wire-rate regression");
 
 }  // namespace csm::board::uplink

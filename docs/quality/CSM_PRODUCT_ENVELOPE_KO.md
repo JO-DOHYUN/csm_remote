@@ -10,7 +10,7 @@ guards/tests가 소유한다. 이 문서는 계산값을 release qualification�
 | Item | Source-derived value | Meaning |
 |---|---:|---|
 | enabled records | 1,095 records/s | current schema calculation |
-| enabled wire | 131,513 B/s | current schema calculation |
+| enabled wire | 131,617 B/s | current schema calculation |
 | transient thresholds | exploratory | product constant not frozen |
 
 Queue capacities, reserve, pressure and close behavior는 platformio.ini와 L2 uplink architecture가

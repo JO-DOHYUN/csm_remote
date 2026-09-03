@@ -28,6 +28,18 @@ fdcan = (
     project / "src/board/control_island/M4Fdcan1Owner.cpp"
 ).read_text(encoding="utf-8")
 m4_frontend = (project / "src/m4_remote_frontend.cpp").read_text(encoding="utf-8")
+control_source_header = (
+    project / "include/board/control_island/ControlSourceManager.h"
+).read_text(encoding="utf-8")
+control_source = (
+    project / "src/board/control_island/ControlSourceManager.cpp"
+).read_text(encoding="utf-8")
+crsf_budget = (
+    project / "include/board/remote/CrsfForegroundBudget.h"
+).read_text(encoding="utf-8")
+remote_shared_header = (
+    project / "include/board/remote/RemoteSharedMemory.h"
+).read_text(encoding="utf-8")
 remote_types = (
     project / "include/board/remote/RemoteTypes.h"
 ).read_text(encoding="utf-8")
@@ -84,6 +96,8 @@ for required in (
     "latest_state_depth: 1",
     "raw_can_ring_capacity: 512",
     "strict_n_shot_owner: csm_m4_generic_success_budget",
+    "strict_n_transaction_watermark: m7_boot_or_new_host_control_transport_epoch_only",
+    "foreground_drain_budget: {bytes: 64, time_us: 500, evidence: budget_hit_counter}",
     "physical_transport_readiness: m4_fdcan1_transport_only",
     "active_motion_permission: fresh_coherent_source_owned_lane_permit_explicit_arm",
     "mutable_executor_state_writer: csm_m4_tim4_only",
@@ -163,6 +177,21 @@ for obsolete in (
         fail(f"obsolete cross-clock Host gate remains: {obsolete}")
 if "host_command_freshness.resetTransportEpoch();" not in main:
     fail("Host command watermark lacks explicit transport-epoch reset")
+if "control_source_manager.resetHostTransportEpoch();" not in main:
+    fail("Host N-shot watermark lacks explicit transport-epoch reset")
+for required in (
+    "last_host_transaction_id_",
+    "host_transaction_seen_",
+    "sequenceNewer(transaction_id, last_host_transaction_id_)",
+    "void ControlSourceManager::resetHostTransportEpoch()",
+):
+    if required not in control_source_header + control_source:
+        fail(f"persistent Host N-shot watermark missing {required}")
+if "last_host_transaction_id_ = 0u" in control_source[
+    control_source.find("void ControlSourceManager::clearHost"):
+    control_source.find("void ControlSourceManager::updateRemote")
+]:
+    fail("ordinary Host clear resets the N-shot transaction watermark")
 for required in (
     "wifi_tcp_sink.offerControlAck(payload, sizeof(payload))",
     "wifi_tcp_sink.controlConnectionEpoch()",
@@ -393,6 +422,22 @@ for required in (
         fail(f"focused RC/FDCAN regression missing {required}")
 if "BOARD_M4_REMOTE_BAUD=420000" in platformio or "420000" in m4_frontend:
     fail("alternate R16SM runtime baud remains")
+for required in (
+    "kCrsfForegroundByteBudget = 64u",
+    "kCrsfForegroundTimeBudgetUs = 500u",
+    "class CrsfForegroundBudget",
+):
+    if required not in crsf_budget:
+        fail(f"bounded M4 CRSF foreground budget missing {required}")
+for required in (
+    "CrsfForegroundBudget crsf_budget(micros())",
+    "crsf_budget.mayConsume(micros())",
+    "diagnostics.foreground_budget_hits",
+    "serviceControlIngress();",
+    "publishControlIslandHealth(now_ms);",
+):
+    if required not in m4_frontend:
+        fail(f"M4 foreground service ordering/budget missing {required}")
 
 for required in (
     "if (next_slot_ == 0u)",
@@ -419,12 +464,47 @@ for required in (
 for required in (
     "kControlIslandHealthPayloadLen = 512",
     "kControlIslandHealthSchema = 4",
-    "kRemoteControlStateSchema = 3",
+    "kRemoteControlStatePayloadLen = 232",
+    "kRemoteControlStateSchema = 4",
+    "kRemoteControlStateRejectedAddressOffset",
+    "kRemoteControlStateMalformedTotalOffset",
+    "kRemoteControlStateAdmissionRejectDetailOffset",
+    "kRemoteControlStateForegroundBudgetHitsOffset",
     "kControlIslandHealthBringupStageOffset",
     "kControlIslandHealthAuthorityWordOffset",
 ):
     if required not in typed_records:
         fail(f"schema-4 observability contract missing {required}")
+for required in (
+    "kRemoteSharedMemoryVersion = 4",
+    "foreground_budget_hits",
+    "last_admission_reject_detail",
+    "receiver_qualified",
+):
+    if required not in remote_shared_header:
+        fail(f"M4/M7 RC observability bridge missing {required}")
+for required in (
+    "kRemoteControlStateRejectedAddressOffset",
+    "kRemoteControlStateMalformedTotalOffset",
+    "kRemoteControlStateAdmissionRejectDetailOffset",
+    "kRemoteControlStateForegroundBudgetHitsOffset",
+):
+    if required not in main:
+        fail(f"REMOTE_CONTROL_STATE producer omits {required}")
+for required in (
+    "testHostNShotTransactionWatermarkSurvivesLifecycle",
+    "testCrsfForegroundBudgetIsByteTimeAndWrapBounded",
+):
+    if required not in control_test:
+        fail(f"control lifecycle/budget regression missing {required}")
+
+for obsolete_tool in (
+    "pc_tools/send_host_can_tx_request.py",
+    "pc_tools/exercise_host_can_tx_request.py",
+    "pc_tools/hil_csm_dual_safety_gate.py",
+):
+    if (project / obsolete_tool).exists():
+        fail(f"obsolete HostCanTxRequest tool remains: {obsolete_tool}")
 if executor.count("driver_->cancel(lane)") != 1:
     fail("cancellation must remain one bounded request until terminal closure")
 for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):

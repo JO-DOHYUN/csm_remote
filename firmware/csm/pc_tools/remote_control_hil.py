@@ -26,13 +26,11 @@ def percentile(values, ratio):
 
 
 def remote_state(payload):
-    if len(payload) < 228:
+    if len(payload) < 232:
         return None
     return {
         "schema": payload[8],
         "link_state": payload[9],
-        "authority_state": payload[10],
-        "active_source": payload[11],
         "flags": payload[12],
         "link_quality": payload[13],
         "rssi_dbm_magnitude": payload[14],
@@ -56,18 +54,21 @@ def remote_state(payload):
         "telemetry_tx_frames": u32(payload, 72),
         "telemetry_tx_bytes": u32(payload, 76),
         "serial_write_failures": u32(payload, 80),
-        "control_cycles": u32(payload, 84),
-        "neutral_cycles": u32(payload, 88),
-        "cycle_deadline_misses": u32(payload, 92),
-        "can_tx_success": u32(payload, 96),
-        "can_tx_failed": u32(payload, 100),
+        "candidate_updates": u32(payload, 84),
+        "candidate_rejects": u32(payload, 88),
+        "rejected_address": u32(payload, 92),
+        "malformed_total": u32(payload, 96),
+        "admission_resets": u32(payload, 100),
         "ipc_rejects": u32(payload, 104),
         "decision": payload[108],
         "last_address": payload[109],
         "sample_state": payload[110],
         "last_ipc_reject_detail": payload[111],
-        "cycle_period_ms": u16(payload, 112),
-        "frame_gap_ms": u16(payload, 114),
+        "semantic_period_ms": u16(payload, 112),
+        "channel_valid_mask": u16(payload, 114),
+        "admission_reject_detail": u16(payload, 116),
+        "admission_streak": payload[118],
+        "receiver_qualified": payload[119],
         "channels_permille": [i16(payload, 128 + i * 2) for i in range(16)],
         "link_statistics_valid": payload[160],
         "uplink_rssi_ant1": payload[161],
@@ -86,6 +87,8 @@ def remote_state(payload):
         "last_rc_age_ms": u32(payload, 216),
         "last_link_statistics_age_ms": u32(payload, 220),
         "last_normalize_reject_detail": u16(payload, 224),
+        "link_statistics_type": payload[226],
+        "foreground_budget_hits": u32(payload, 228),
     }
 
 
@@ -298,7 +301,7 @@ def main():
             "ch2": {"min": min(ch2_values), "max": max(ch2_values)},
             "ch4": {"min": min(ch4_values), "max": max(ch4_values)},
         }
-        add_check(checks, "remote_schema", last["schema"] == 3,
+        add_check(checks, "remote_schema", last["schema"] == 4,
                   f"schema={last['schema']}")
         add_check(checks, "configured_crsf_baud", last["uart_baud"] == 416666,
                   f"configured_baud={last['uart_baud']} physical_bit_time=NOT_MEASURED")
@@ -310,8 +313,10 @@ def main():
         add_check(checks, "crsf_integrity",
                   counter_delta(first, last, "rejected_length") == 0 and
                   counter_delta(first, last, "rejected_crc") == 0 and
+                  counter_delta(first, last, "rejected_address") == 0 and
                   counter_delta(first, last, "inter_byte_resets") == 0 and
                   counter_delta(first, last, "normalization_rejects") == 0,
+                  f"address={counter_delta(first, last, 'rejected_address')} "
                   f"len={counter_delta(first, last, 'rejected_length')} "
                   f"crc={counter_delta(first, last, 'rejected_crc')} "
                   f"gap={counter_delta(first, last, 'inter_byte_resets')} "
@@ -324,6 +329,12 @@ def main():
         add_check(checks, "remote_live", (flags & 0x0A) == 0x0A,
                   f"flags=0x{flags:02X} link={last['link_state']} "
                   f"sample={last['sample_state']} rc_age={last['last_rc_age_ms']}")
+        add_check(checks, "receiver_qualified",
+                  last["receiver_qualified"] == 1,
+                  f"qualified={last['receiver_qualified']} "
+                  f"streak={last['admission_streak']} "
+                  f"reason={last['admission_reject_detail']} "
+                  f"mask=0x{last['channel_valid_mask']:04X}")
         link_statistics_observed = last["link_frames"] > 0
         link_statistics_ok = (
             not link_statistics_observed or
@@ -344,15 +355,14 @@ def main():
         add_check(checks, "m4_stable", len(m4_boot_ids) == 1,
                   f"m4_boot_ids={len(m4_boot_ids)}")
         add_check(checks, "runtime_integrity",
-                  counter_delta(first, last, "cycle_deadline_misses") == 0 and
-                  counter_delta(first, last, "can_tx_failed") == 0 and
                   counter_delta(first, last, "ipc_rejects") == 0 and
                   counter_delta(first, last, "shared_publish_failures") == 0,
-                  f"deadline={counter_delta(first, last, 'cycle_deadline_misses')} "
-                  f"can_fail={counter_delta(first, last, 'can_tx_failed')} "
                   f"ipc={counter_delta(first, last, 'ipc_rejects')} "
                   f"ipc_detail={last['last_ipc_reject_detail']} "
                   f"publish_fail={counter_delta(first, last, 'shared_publish_failures')}")
+        add_check(checks, "foreground_budget_not_saturated",
+                  counter_delta(first, last, "foreground_budget_hits") == 0,
+                  f"budget_hits={counter_delta(first, last, 'foreground_budget_hits')}")
         if args.require_motion:
             ch2_span = max(ch2_values) - min(ch2_values)
             ch4_span = max(ch4_values) - min(ch4_values)

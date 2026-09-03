@@ -23,6 +23,10 @@ class ControlSourceManager {
   bool acceptHostNShot(uint32_t transaction_id, uint8_t lane,
                        uint16_t successful_tx_count,
                        uint32_t payload_generation, const uint8_t data[8]);
+  // Only a new Host transport epoch (or begin/M7 boot) may reopen the
+  // transaction-id domain. Ordinary state replacement, DISARM and re-ARM do
+  // not make an already consumed transaction reusable.
+  void resetHostTransportEpoch();
   void renewHostLease(uint32_t lease_sequence);
   void clearHost();
   void updateRemote(uint32_t image_generation, uint32_t lease_sequence,
@@ -45,6 +49,8 @@ class ControlSourceManager {
   ControlSource active_source_ = ControlSource::None;
   SourceImage host_ = {};
   SourceImage remote_ = {};
+  uint32_t last_host_transaction_id_ = 0;
+  bool host_transaction_seen_ = false;
 };
 
 }  // namespace csm::board::control_island

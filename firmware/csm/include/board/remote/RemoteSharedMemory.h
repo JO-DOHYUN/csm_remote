@@ -13,7 +13,7 @@ namespace csm::board::remote {
 static constexpr uintptr_t kRemoteSharedMemoryAddress = 0x38000000u;
 static constexpr size_t kRemoteSharedMemoryReservedBytes = 0x0400u;
 static constexpr uint32_t kRemoteSharedMemoryMagic = 0x5243534Du;  // "MSCR".
-static constexpr uint16_t kRemoteSharedMemoryVersion = 3;
+static constexpr uint16_t kRemoteSharedMemoryVersion = 4;
 
 struct RemoteFrontendDiagnostics {
   uint32_t uart_baud = 0;
@@ -35,6 +35,7 @@ struct RemoteFrontendDiagnostics {
   uint32_t last_rc_age_ms = 0xFFFFFFFFu;
   uint32_t last_link_statistics_age_ms = 0xFFFFFFFFu;
   uint32_t admission_resets = 0;
+  uint32_t foreground_budget_hits = 0;
   uint32_t subset_rc_frames = 0;
   uint16_t raw_ch2 = 0;
   uint16_t raw_ch4 = 0;
@@ -52,6 +53,7 @@ struct RemoteFrontendDiagnostics {
   uint8_t downlink_link_quality = 0xFF;
   int8_t downlink_snr = 0;
   uint16_t last_normalize_reject_detail = 0;
+  uint16_t last_admission_reject_detail = 0;
   uint16_t channel_valid_mask = 0;
   uint8_t admission_streak = 0;
   uint8_t receiver_qualified = 0;
