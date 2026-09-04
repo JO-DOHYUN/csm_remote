@@ -334,11 +334,11 @@ WifiTransportDiagnosticSnapshot WifiTcpSink::diagnosticSnapshot(
 #ifdef MBED_CONF_LWIP_TCP_SERVER_MAX
   snapshot.configured_tcp_server_max = MBED_CONF_LWIP_TCP_SERVER_MAX;
 #endif
-  // Two listeners plus one accepted client for each independent lane.
-  snapshot.required_application_sockets = 4;
+  // Two listeners, one accepted client per TCP lane, and realtime UDP.
+  snapshot.required_application_sockets = 5;
   // Cold HIL proves one AP-internal arena owner remains live in addition to
-  // the four application sockets. Evidence only; never a runtime gate.
-  snapshot.required_total_socket_arena = 5;
+  // the five application sockets. Evidence only; never a runtime gate.
+  snapshot.required_total_socket_arena = 6;
   csm_lwip_socket_arena_snapshot(
       &snapshot.socket_arena_capacity, &snapshot.socket_arena_used,
       &snapshot.socket_arena_high_water,

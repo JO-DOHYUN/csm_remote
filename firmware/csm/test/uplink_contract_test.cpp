@@ -1022,11 +1022,11 @@ void transport_diagnostic_is_single_bounded_wire_record() {
   snapshot.worker_heartbeat_age_ms = 4;
   snapshot.control_connection_epoch = 9;
   snapshot.control_flags = csm::kTransportDiagnosticControlFlagConnected;
-  snapshot.configured_socket_max = 5;
+  snapshot.configured_socket_max = 6;
   snapshot.configured_tcp_socket_max = 4;
   snapshot.configured_tcp_server_max = 4;
-  snapshot.required_application_sockets = 4;
-  snapshot.required_total_socket_arena = 5;
+  snapshot.required_application_sockets = 5;
+  snapshot.required_total_socket_arena = 6;
   snapshot.socket_arena_capacity = 5;
   snapshot.socket_arena_used = 3;
   snapshot.socket_arena_high_water = 4;
@@ -1103,11 +1103,11 @@ void transport_diagnostic_is_single_bounded_wire_record() {
         snapshot.control_connection_epoch);
   CHECK(payload[csm::kTransportDiagnosticControlFlagsOffset] ==
         snapshot.control_flags);
-  CHECK(payload[csm::kTransportDiagnosticConfiguredSocketMaxOffset] == 5);
+  CHECK(payload[csm::kTransportDiagnosticConfiguredSocketMaxOffset] == 6);
   CHECK(payload[csm::kTransportDiagnosticConfiguredTcpSocketMaxOffset] == 4);
   CHECK(payload[csm::kTransportDiagnosticConfiguredTcpServerMaxOffset] == 4);
-  CHECK(payload[csm::kTransportDiagnosticRequiredApplicationSocketsOffset] == 4);
-  CHECK(payload[csm::kTransportDiagnosticRequiredTotalSocketArenaOffset] == 5);
+  CHECK(payload[csm::kTransportDiagnosticRequiredApplicationSocketsOffset] == 5);
+  CHECK(payload[csm::kTransportDiagnosticRequiredTotalSocketArenaOffset] == 6);
   CHECK(csm::rd_u32_le(
             &payload[csm::kTransportDiagnosticSocketArenaCapacityOffset]) == 5);
   CHECK(csm::rd_u32_le(

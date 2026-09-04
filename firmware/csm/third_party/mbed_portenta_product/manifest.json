@@ -29,7 +29,7 @@
     "mem_size": 40960,
     "pbuf_pool_size": 5,
     "tcpip_thread_stacksize": 4096,
-    "socket_max": 5,
+    "socket_max": 6,
     "tcp_socket_max": 4,
     "tcp_server_max": 4,
     "derived": {

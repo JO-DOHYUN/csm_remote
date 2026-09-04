@@ -70,12 +70,18 @@ typed_records = (project / "include/protocol/TypedRecords.h").read_text(
 host_commands = (project / "include/protocol/HostCommands.h").read_text(
     encoding="utf-8"
 )
-freshness_header = (
-    project / "include/board/control/HostCommandFreshness.h"
+realtime_authority_header = (
+    project / "include/board/control/HostRealtimeAuthority.h"
 ).read_text(encoding="utf-8")
-freshness_source = (
-    project / "src/board/control/HostCommandFreshness.cpp"
+realtime_authority_source = (
+    project / "src/board/control/HostRealtimeAuthority.cpp"
 ).read_text(encoding="utf-8")
+realtime_protocol = (project / "src/protocol/RealtimeControl.cpp").read_text(
+    encoding="utf-8"
+)
+realtime_worker = (project / "src/board/uplink/WifiRealtimeWorker.cpp").read_text(
+    encoding="utf-8"
+)
 m7_linker = (project / "linker/portenta_h7_m7_product.ld").read_text(
     encoding="utf-8"
 )
@@ -105,7 +111,14 @@ for required in (
     "idle_safe: FixedSafeFrame_AA02000000000000",
     "idle_safe: FixedSafeFrame_8200000000000000",
     "evidence_only: true",
-    "host_liveness_owner: csm_m7_receiver_local_causal_ack_proof",
+    "host_liveness_owner: csm_m7_receiver_local_udp_bidirectional_proof",
+    "port: 3335",
+    "period_ms: 20",
+    "state_payload_bytes: 64",
+    "proof_payload_bytes: 36",
+    "prearm_challenge: fresh_after_boot_disarm_expiry_or_inactive_tcp_epoch",
+    "application_sockets: 5",
+    "total_with_ap_internal_owner: 6",
     "host_command_id_reset: m7_boot_or_new_tcp_epoch_only",
     "host_mono_runtime_gate: false",
     "command_ack_tcp_port: 3334",
@@ -135,7 +148,7 @@ for linker, name in ((m7_linker, "M7"), (m4_linker, "M4")):
 
 for required in (
     "initializeControlIpcForM7",
-    "control_source_manager.acceptHostState",
+    "control_source_manager.acceptHostRealtimeState",
     "control_source_manager.acceptHostNShot",
     "control_source_manager.updateRemote",
     "publishFinalControlSnapshot",
@@ -146,37 +159,22 @@ for required in (
 ):
     if required not in main:
         fail(f"M7 integration missing {required}")
-heartbeat_handler = main[
-    main.find("static void handle_host_heartbeat"):
-    main.find("static void handle_host_control_session")
-]
-for required in (
-    "HostFreshnessResult::BootstrapAccepted",
-    "kHostHeartbeatAckRefOffset",
-    "host_command_freshness.acceptHeartbeat(\n          command_id, ack_ref",
-    "emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk",
-):
-    if required not in heartbeat_handler:
-        fail(f"Host heartbeat admission evidence missing {required}")
 for source, required in (
-    (host_commands, "kHostHeartbeatAckRefOffset = 8"),
-    (typed_records, "kHostControlSchema = 3"),
-    (freshness_source, "ack_ref != pending_heartbeat_id_"),
-    (freshness_source, "consumeCommand(command_id)"),
-    (freshness_source, "now_ms - last_proof_ms_ <= config_.proof_timeout_ms"),
+    (typed_records, "kHostRealtimeStateV1PayloadLen = 64"),
+    (typed_records, "kRealtimeProofV1PayloadLen = 36"),
+    (realtime_protocol, "decode_host_realtime_datagram"),
+    (realtime_authority_source, "resetPreArmSequenceDomain()"),
+    (realtime_authority_source, "prearm_challenge_required_"),
+    (realtime_authority_source, "consumeTransactionCommand"),
+    (realtime_worker, "kRxDatagramsPerTurn"),
 ):
     if required not in source:
-        fail(f"Host causal-proof contract missing {required}")
-for obsolete in (
-    "heartbeat_max_extra_lag_ms",
-    "command_max_age_ms",
-    "clock_future_tolerance_ms",
-    "estimated_host_now",
-):
-    if obsolete in freshness_header or obsolete in freshness_source:
-        fail(f"obsolete cross-clock Host gate remains: {obsolete}")
-if "host_command_freshness.resetTransportEpoch();" not in main:
-    fail("Host command watermark lacks explicit transport-epoch reset")
+        fail(f"Host realtime contract missing {required}")
+for obsolete in ("HostCommandFreshness", "handle_host_heartbeat"):
+    if obsolete in main or obsolete in realtime_authority_header + realtime_authority_source:
+        fail(f"retired TCP liveness path remains: {obsolete}")
+if "host_realtime_authority.resetTransactionEpoch();" not in main:
+    fail("Host transaction watermark lacks explicit transport-epoch reset")
 if "control_source_manager.resetHostTransportEpoch();" not in main:
     fail("Host N-shot watermark lacks explicit transport-epoch reset")
 for required in (
@@ -211,12 +209,12 @@ if "RecordType::HostQueryCapability" not in observer_handler:
 for forbidden in ("dispatch_host_frame", "HostControlSession", "HostControlStateV2"):
     if forbidden in observer_handler:
         fail(f"telemetry downlink can dispatch Host control: {forbidden}")
-close_handler = main[
-    main.find("static void close_host_control_epoch"):
-    main.find("static void service_host_authority_boundary")
+tcp_epoch_handler = main[
+    main.find("static void service_host_downlink(int budget)"):
+    main.find("#else", main.find("static void service_host_downlink(int budget)"))
 ]
-if "host_command_freshness" in close_handler:
-    fail("ordinary Host close resets causal proof or command watermark")
+if "host_realtime_authority.disarm" in tcp_epoch_handler:
+    fail("ordinary Host TCP close revokes live UDP authority")
 for required in (
     "initializeControlIpcForM7",
     "initializeRemoteSharedMemoryForM7",
@@ -465,7 +463,7 @@ for required in (
     "kControlIslandHealthPayloadLen = 512",
     "kControlIslandHealthSchema = 5",
     "kControlIslandHealthLocalReadyReasonOffset = 9",
-    "kControlPathDiagnosticPayloadLen = 340",
+    "kControlPathDiagnosticPayloadLen = 496",
     "kRemoteControlStatePayloadLen = 232",
     "kRemoteControlStateSchema = 4",
     "kRemoteControlStateRejectedAddressOffset",

@@ -29,6 +29,8 @@ bool HostRealtimeAuthority::begin(uint64_t boot_session_id,
   last_echoed_proof_ = 0u;
   prearm_proof_valid_ = false;
   prearm_proof_ms_ = 0u;
+  prearm_challenge_required_ = true;
+  prearm_challenge_sequence_ = 0u;
   active_forward_valid_ = false;
   active_forward_ms_ = 0u;
   active_proof_valid_ = false;
@@ -51,13 +53,13 @@ void HostRealtimeAuthority::resetTransactionEpoch() {
   last_transaction_command_id_ = 0u;
   // A disconnected transaction lane cannot reset live UDP sequence truth.
   // While inactive, a new anchored TCP client may establish a new sender
-  // sequence domain for PRE-ARM qualification.
+  // sequence and activation domain for PRE-ARM qualification. Fresh proof
+  // still prevents an old ACTIVE image from resuming motion.
   if (!active_) {
-    realtime_sequence_seen_ = false;
-    highest_rx_sequence_ = 0u;
-    prearm_proof_valid_ = false;
-    prearm_proof_ms_ = 0u;
+    activation_seen_ = false;
+    last_activation_epoch_ = 0u;
     last_echoed_proof_ = 0u;
+    resetPreArmSequenceDomain();
   }
 }
 
@@ -99,6 +101,10 @@ bool HostRealtimeAuthority::arm(uint32_t authority_epoch, uint32_t now_ms,
     active_proof_ms_ = now_ms;
     last_applied_generation_ = 0u;
     last_state_applied_ = false;
+    prearm_proof_valid_ = false;
+    prearm_proof_ms_ = 0u;
+    prearm_challenge_required_ = false;
+    prearm_challenge_sequence_ = 0u;
     proof_status_ = csm::kRealtimeProofStatusActive;
     proof_reason_ = csm::kRealtimeProofReasonOk;
   }
@@ -113,6 +119,7 @@ void HostRealtimeAuthority::disarm() {
   active_proof_valid_ = false;
   last_applied_generation_ = 0u;
   last_state_applied_ = false;
+  resetPreArmSequenceDomain();
   proof_status_ = csm::kRealtimeProofStatusPreArm;
   proof_reason_ = csm::kRealtimeProofReasonOk;
 }
@@ -132,6 +139,7 @@ bool HostRealtimeAuthority::update(uint32_t now_ms) {
   active_forward_valid_ = false;
   active_proof_valid_ = false;
   last_state_applied_ = false;
+  resetPreArmSequenceDomain();
   incrementSaturating(&timeout_total_);
   proof_status_ = csm::kRealtimeProofStatusExpired;
   proof_reason_ = csm::kRealtimeProofReasonLivenessExpired;
@@ -146,16 +154,6 @@ HostRealtimeAdmission HostRealtimeAuthority::accept(
                csm::kRealtimeProofReasonBootMismatch);
     return HostRealtimeAdmission::BootMismatch;
   }
-  if (state.realtime_sequence == 0u ||
-      (realtime_sequence_seen_ &&
-       !newer(highest_rx_sequence_, state.realtime_sequence))) {
-    incrementSaturating(&replay_total_);
-    proof_reason_ = csm::kRealtimeProofReasonSequence;
-    return HostRealtimeAdmission::DuplicateOrReordered;
-  }
-  realtime_sequence_seen_ = true;
-  highest_rx_sequence_ = state.realtime_sequence;
-
   if (state.control_contract_id != csm::kHostControlStateContractId) {
     issueProof(csm::kRealtimeProofStatusRejected,
                csm::kRealtimeProofReasonContract);
@@ -183,7 +181,26 @@ HostRealtimeAdmission HostRealtimeAuthority::accept(
     return HostRealtimeAdmission::AuthorityMismatch;
   }
 
+  if (state.realtime_sequence == 0u ||
+      (realtime_sequence_seen_ &&
+       !newer(highest_rx_sequence_, state.realtime_sequence))) {
+    incrementSaturating(&replay_total_);
+    proof_reason_ = csm::kRealtimeProofReasonSequence;
+    return HostRealtimeAdmission::DuplicateOrReordered;
+  }
+  realtime_sequence_seen_ = true;
+  highest_rx_sequence_ = state.realtime_sequence;
+
   proof_reason_ = csm::kRealtimeProofReasonOk;
+  if (prearm_packet && prearm_challenge_required_) {
+    // First packet after boot/DISARM/expiry/transaction reset only creates a
+    // new challenge. It can never reuse a proof observed before that boundary.
+    issueProof(csm::kRealtimeProofStatusPreArm,
+               csm::kRealtimeProofReasonOk);
+    prearm_challenge_required_ = false;
+    prearm_challenge_sequence_ = proof_sequence_;
+    return HostRealtimeAdmission::AcceptedPreArm;
+  }
   observeProofRef(state.proof_ref, arrival_ms, active_packet);
   if (active_packet) {
     if (active_forward_valid_) {
@@ -270,6 +287,13 @@ void HostRealtimeAuthority::observeProofRef(uint32_t proof_ref,
     }
     return;
   }
+  if (!active_path && prearm_challenge_sequence_ != 0u &&
+      proof_ref != prearm_challenge_sequence_ &&
+      !newer(prearm_challenge_sequence_, proof_ref)) {
+    incrementSaturating(&proof_mismatch_total_);
+    proof_reason_ = csm::kRealtimeProofReasonProofRef;
+    return;
+  }
   if (active_path) {
     if (active_proof_valid_) {
       const uint32_t gap = now_ms - active_proof_ms_;
@@ -280,6 +304,7 @@ void HostRealtimeAuthority::observeProofRef(uint32_t proof_ref,
   } else {
     prearm_proof_valid_ = true;
     prearm_proof_ms_ = now_ms;
+    prearm_challenge_sequence_ = 0u;
   }
   last_echoed_proof_ = proof_ref;
   incrementSaturating(&proof_ok_total_);
@@ -293,6 +318,19 @@ void HostRealtimeAuthority::issueProof(uint8_t status, uint8_t reason) {
       reason != csm::kRealtimeProofReasonOk) {
     proof_reason_ = reason;
   }
+}
+
+void HostRealtimeAuthority::requireNewPreArmChallenge() {
+  prearm_proof_valid_ = false;
+  prearm_proof_ms_ = 0u;
+  prearm_challenge_required_ = true;
+  prearm_challenge_sequence_ = 0u;
+}
+
+void HostRealtimeAuthority::resetPreArmSequenceDomain() {
+  realtime_sequence_seen_ = false;
+  highest_rx_sequence_ = 0u;
+  requireNewPreArmChallenge();
 }
 
 }  // namespace csm::board::control

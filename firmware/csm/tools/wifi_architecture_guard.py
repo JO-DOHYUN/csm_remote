@@ -47,6 +47,18 @@ control_mailbox_source = (
 record_admission_header = (
     ROOT / "include" / "board" / "uplink" / "RecordAdmission.h"
 ).read_text(encoding="utf-8")
+realtime_worker = (ROOT / "src/board/uplink/WifiRealtimeWorker.cpp").read_text(
+    encoding="utf-8"
+)
+realtime_mailbox = (ROOT / "src/board/uplink/WifiRealtimeMailbox.cpp").read_text(
+    encoding="utf-8"
+)
+mbed_profile = (ROOT / "third_party/mbed_portenta_product/mbed_app.product.json").read_text(
+    encoding="utf-8"
+)
+mbed_config = (ROOT / "third_party/mbed_portenta_product/artifact/PORTENTA_H7_M7/mbed_config.h").read_text(
+    encoding="utf-8"
+)
 
 
 def env_section(name: str) -> str:
@@ -56,6 +68,20 @@ def env_section(name: str) -> str:
         fail(f"PlatformIO environment is missing {name!r}")
     end = platformio.find("\n[env:", start + len(marker))
     return platformio[start:] if end < 0 else platformio[start:end]
+
+
+for source, token in (
+    (mbed_profile, '"lwip.socket-max": 6'),
+    (mbed_config, "#define MBED_CONF_LWIP_SOCKET_MAX 6"),
+    (sink, "snapshot.required_application_sockets = 5"),
+    (sink, "snapshot.required_total_socket_arena = 6"),
+    (realtime_worker, "kRxDatagramsPerTurn"),
+    (realtime_worker, "sendto("),
+    (realtime_mailbox, "takeLatestRx"),
+    (realtime_mailbox, "stageProof"),
+):
+    if token not in source:
+        fail(f"realtime/socket-arena contract missing {token!r}")
 
 for token in (
     "WiFi.",
@@ -162,11 +188,10 @@ for token in (
         fail(f"worker recovery/evidence contract is missing {token!r}")
 
 for token in (
-    "kProductEnabledWireBytesPerSecond == 131617",
-    "kProductEnabledRecordsPerSecond == 1095",
+    "kProductEnabledWireBytesPerSecond == 109556",
+    "kProductEnabledRecordsPerSecond == 496",
     "productSegmentWireBytesPerSecond",
-    "csm::kControlAckPayloadLen",
-    "csm::kControlTxEvidencePayloadLen",
+    "csm::kControlIslandHealthPayloadLen",
 ):
     if token not in product_envelope:
         fail(f"schema-derived product envelope is missing {token!r}")
@@ -475,7 +500,7 @@ for token in (
         fail(f"runtime-mode contract is missing {token!r}")
 
 disabled_guard = "if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;"
-worker_construction = "static WifiSocketWorker socket_worker(mailbox_, control_mailbox_);"
+worker_construction = "static WifiSocketWorker socket_worker(mailbox_, control_mailbox_,"
 if disabled_guard not in sink or sink.index(disabled_guard) > sink.index(worker_construction):
     fail("Disabled mode is not rejected before worker construction/start")
 

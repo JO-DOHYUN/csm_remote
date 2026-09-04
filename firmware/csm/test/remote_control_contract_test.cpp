@@ -786,11 +786,63 @@ void testRealtimeWireAndBidirectionalAuthority() {
   state.proof_ref = authority.proofSequence();
   assert(authority.accept(state, 500u) ==
          HostRealtimeAdmission::AcceptedPreArm);
-  assert(authority.preArmQualified(500u));
-  assert(!authority.arm(100u, 501u, true, true, &reason));
+  assert(!authority.preArmQualified(500u));
+  const uint32_t post_timeout_challenge = authority.proofSequence();
+  state.realtime_sequence = 6u;
+  state.proof_ref = post_timeout_challenge;
+  assert(authority.accept(state, 520u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.preArmQualified(520u));
+  assert(!authority.arm(100u, 521u, true, true, &reason));
   assert(reason == csm::ControlReasonReplay);
-  assert(authority.arm(101u, 501u, true, true, &reason));
-  assert(authority.update(802u));  // no first ACTIVE state arrived
+  assert(authority.arm(101u, 521u, true, true, &reason));
+
+  // DISARM resets only the inactive sender sequence domain. Delayed ACTIVE
+  // from the retired epoch cannot poison the next PRE-ARM baseline, and an
+  // old proof cannot satisfy the newly issued challenge.
+  state.mode = csm::kHostRealtimeModeActive;
+  state.authority_epoch = 101u;
+  state.realtime_sequence = 7u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 530u) ==
+         HostRealtimeAdmission::AcceptedActive);
+  authority.disarm();
+  state.realtime_sequence = 100u;
+  assert(authority.accept(state, 540u) ==
+         HostRealtimeAdmission::AuthorityMismatch);
+  state.mode = csm::kHostRealtimeModePreArm;
+  state.authority_epoch = 0u;
+  state.realtime_sequence = 1u;
+  const uint32_t retired_proof = authority.proofSequence();
+  state.proof_ref = retired_proof;
+  assert(authority.accept(state, 550u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(!authority.preArmQualified(550u));
+  state.realtime_sequence = 2u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 570u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.preArmQualified(570u));
+  assert(authority.arm(102u, 571u, true, true, &reason));
+  assert(authority.update(872u));  // no first ACTIVE state arrived
+
+  // A new inactive TCP epoch also requires a proof issued after the reset.
+  authority.resetTransactionEpoch();
+  state.realtime_sequence = 1u;
+  state.proof_ref = retired_proof;
+  assert(authority.accept(state, 900u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(!authority.preArmQualified(900u));
+  state.realtime_sequence = 2u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 920u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.preArmQualified(920u));
+  // A replacement Host process restarts its command domain at the inactive
+  // TCP epoch. It still needs the new two-packet PRE-ARM proof above.
+  assert(authority.arm(1u, 921u, true, true, &reason));
+  assert(reason == csm::ControlReasonOk);
+  authority.disarm();
 
   // TCP transaction commands use a separate replay domain and wrap safely.
   assert(authority.consumeTransactionCommand(0xFFFFFFFEu));

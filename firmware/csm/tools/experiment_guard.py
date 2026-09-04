@@ -56,9 +56,8 @@ for token in (
 firmware = ROOT / "firmware" / "csm"
 for relative in (
     "src/board/ControlPolicy.cpp",
-    "src/board/control/HostCommandFreshness.cpp",
     "src/board/control/HostControlAuthorityGate.cpp",
-    "src/board/control/HostControlSession.cpp",
+    "src/board/control/HostRealtimeAuthority.cpp",
     "src/board/control/RemoteControlRuntime.cpp",
     "src/board/control_island/ControlSourceManager.cpp",
     "src/board/control_island/M4StaticCyclicExecutor.cpp",

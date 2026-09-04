@@ -14,13 +14,9 @@ static constexpr uint32_t kProductCanBusCount = 2;
 static constexpr uint32_t kProductCanRxFramesPerSecondPerBus = 2000;
 // 0x005 at 200 Hz plus 0x007/0x364 at 50 Hz each. Keep the envelope tied to
 // every enabled Service/HIL release lane, not the pre-EHB two-lane profile.
-static constexpr uint32_t kProductControlCommandsPerSecond = 300;
-// Android renews the 1 s Host lease every 300 ms. Round up to four renewals
-// per wall-clock second. Every renewal produces one ACK and one BOARD_EVENT;
-// the 10 Hz heartbeat produces its sampled BOARD_EVENT at most once/second.
-static constexpr uint32_t kProductLeaseRenewalsPerSecond = 4;
-static constexpr uint32_t kProductHeartbeatEventsPerSecond = 1;
+static constexpr uint32_t kProductCanTxObservationsPerSecond = 300;
 static constexpr uint32_t kProductRemoteStateRecordsPerSecond = 10;
+static constexpr uint32_t kProductControlIslandHealthRecordsPerSecond = 10;
 static constexpr uint32_t kProductBoardHealthRecordsPerSecond = 1;
 static constexpr uint32_t kProductTransportDiagnosticRecordsPerSecond = 1;
 
@@ -63,30 +59,19 @@ static constexpr uint32_t kProductCanRxWireBytesPerSecond =
     productSegmentWireBytesPerSecond(kProductCanRxFramesPerSecond);
 static constexpr uint32_t kProductEnabledRecordsPerSecond =
     kProductCanRxSegmentRecordsPerSecond +
-    kProductControlCommandsPerSecond +  // CAN_TX_RAW
-    kProductControlCommandsPerSecond +  // CONTROL_ACK
-    kProductControlCommandsPerSecond +  // CONTROL_TX_EVIDENCE
-    kProductLeaseRenewalsPerSecond +  // lease CONTROL_ACK
-    kProductLeaseRenewalsPerSecond +  // lease BOARD_EVENT
-    kProductHeartbeatEventsPerSecond +  // sampled heartbeat BOARD_EVENT
+    kProductCanTxObservationsPerSecond +  // CAN_TX_RAW
     kProductRemoteStateRecordsPerSecond +
+    kProductControlIslandHealthRecordsPerSecond +
     kProductBoardHealthRecordsPerSecond +
     kProductTransportDiagnosticRecordsPerSecond;
 static constexpr uint32_t kProductEnabledWireBytesPerSecond =
     kProductCanRxWireBytesPerSecond +
     productTypedRecordWireBytes(csm::kCanRawPayloadLen,
-                                kProductControlCommandsPerSecond) +
-    productTypedRecordWireBytes(csm::kControlAckPayloadLen,
-                                kProductControlCommandsPerSecond) +
-    productTypedRecordWireBytes(csm::kControlTxEvidencePayloadLen,
-                                kProductControlCommandsPerSecond) +
-    productTypedRecordWireBytes(csm::kControlAckPayloadLen,
-                                kProductLeaseRenewalsPerSecond) +
-    productTypedRecordWireBytes(
-        csm::kBoardEventPayloadLen,
-        kProductLeaseRenewalsPerSecond + kProductHeartbeatEventsPerSecond) +
+                                kProductCanTxObservationsPerSecond) +
     productTypedRecordWireBytes(csm::kRemoteControlStatePayloadLen,
                                 kProductRemoteStateRecordsPerSecond) +
+    productTypedRecordWireBytes(csm::kControlIslandHealthPayloadLen,
+                                kProductControlIslandHealthRecordsPerSecond) +
     productTypedRecordWireBytes(csm::kBoardHealthV13PayloadLen,
                                 kProductBoardHealthRecordsPerSecond) +
     productTypedRecordWireBytes(csm::kTransportDiagnosticPayloadLen,
@@ -96,9 +81,9 @@ static_assert(kProductCanRxSegmentRecordsPerSecond == 174,
               "enabled product CAN segment record-rate regression");
 static_assert(kProductCanRxWireBytesPerSecond == 88874,
               "enabled product CAN wire-rate regression");
-static_assert(kProductEnabledRecordsPerSecond == 1095,
+static_assert(kProductEnabledRecordsPerSecond == 496,
               "enabled product record-rate regression");
-static_assert(kProductEnabledWireBytesPerSecond == 131617,
+static_assert(kProductEnabledWireBytesPerSecond == 109556,
               "enabled product wire-rate regression");
 // Additive Service/HIL-only evidence budget; queues and product traffic rates
 // are unchanged. Diagnostic loss is reported by the existing publisher.

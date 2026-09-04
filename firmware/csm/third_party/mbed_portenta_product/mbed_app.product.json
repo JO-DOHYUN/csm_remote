@@ -31,7 +31,7 @@
       "lwip.mem-size": 40960,
       "lwip.pbuf-pool-size": 5,
       "lwip.tcpip-thread-stacksize": 4096,
-      "lwip.socket-max": 5,
+      "lwip.socket-max": 6,
       "lwip.tcp-socket-max": 4,
       "lwip.tcp-server-max": 4,
       "target.macros_add": [

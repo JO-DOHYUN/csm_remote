@@ -19,13 +19,14 @@ source/authority/transaction 재사용은 허용하지 않는다.
 ### Android VSM
 
 - Service/HIL Host vehicle semantics와 최종 `0x005/0x007/0x364` 3×8 byte image
-- coherent latest-state generation과 lease/session command
+- coherent latest-state generation과 explicit ARM/DISARM transaction
 - 필요할 때 source-agnostic `HostControlNShot` transaction 요청
 - physical cadence, retry, queue, CAN controller ownership 없음
 
 ### M7
 
-- 독립 Host control TCP `3334`의 heartbeat causal-ACK proof/ARM/lease와 전역 consumed command-ID 검증, M4 RC mailbox 검증
+- UDP `3335` bidirectional realtime proof/receiver-local liveness, TCP `3334`
+  ARM/DISARM/N-shot transaction watermark와 M4 RC mailbox 검증
 - RC channel semantics, limiter, HNO1 payload mapping
 - Host/RC 전역 단일 source authority와 coherent final snapshot
 - canonical typed evidence, feeder bus, bounded USB/Wi-Fi sinks
@@ -57,14 +58,11 @@ M4 -> TIM4 static slots -> FDCAN1 dedicated buffers -> terminal truth
                        bounded raw CAN1 ring <────────┘ -> M7 canonical evidence
 ```
 
-Host control transport는 bulk canonical telemetry와 분리된다. TCP `3334`는 fresh
-`STREAM_SESSION` anchor 뒤 Host 명령과 `CONTROL_ACK`만 전달하고 자체 connection epoch와
-publish sequence를 가진다. 16×64-byte bounded ACK FIFO가 full이거나 300 ms 동안 positive
-send progress가 없으면 해당 control epoch를 닫고 old bytes를 폐기한다. TCP `3333`의
-canonical `CONTROL_ACK` mirror는 capture/diagnostic evidence이며 Host causal proof를 열지
-않는다. 두 socket은 같은 bounded nonblocking Wi-Fi worker를 사용하되 매 turn control을 먼저
-서비스한다. `3333` downlink는 observer `HOST_QUERY_CAPABILITY`만 허용하고 motion/session
-record는 dispatch하지 않는다. reconnect replay와 telemetry backlog에 의한 control gating은 없다.
+Network transport의 canonical 경계는 `NETWORK_TRANSPORT_ARCHITECTURE_KO.md`가 소유한다.
+TCP `3333`은 telemetry/evidence, TCP `3334`는 ARM/DISARM/N-shot/query transaction,
+UDP `3335`는 20 ms latest-only state와 cumulative proof다. TCP reconnect나 telemetry
+backlog는 healthy UDP ACTIVE를 revoke하지 않는다. UDP liveness expiry는 M7에서 Host
+ACTIVE를 revoke하며 새 PRE-ARM challenge와 더 최신 activation epoch 없이는 재개하지 않는다.
 
 Source 우선순위는 `RC > Host > None`이며 이 active profile에는 autonomy source가 없다.
 RC source admission은 R16SM profile의 `0xC8` address, CRC, 지원 RC frame(`0x16`, bounded

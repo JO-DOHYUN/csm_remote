@@ -232,8 +232,8 @@ Record types:
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
 - `10 HOST_CAN_TX_REQUEST` legacy decode-only; never active control admission
-- `11 HOST_HEARTBEAT` host-to-board downlink only
-- `12 HOST_CONTROL_SESSION` host-to-board downlink only
+- `11 HOST_HEARTBEAT` retired/reserved; not admitted by current runtime
+- `12 HOST_CONTROL_SESSION` ARM/DISARM transaction downlink only
 - `13 HOST_SET_CONTROL_POLICY` host-to-board downlink only, reserved
 - `14 HOST_QUERY_CAPABILITY` host-to-board downlink only
 - `16 CAN_RX_SEGMENT`
@@ -245,9 +245,11 @@ Record types:
 - `22 LINK_RELIABILITY_DIAGNOSTIC` legacy schema 1 decode-only; not currently
   published
 - `23 CONTROL_TX_EVIDENCE` terminal Service/HIL command-to-driver evidence
-- `24 HOST_CONTROL_STATE_V2` coherent Host 3-lane state, downlink only
+- `24 HOST_CONTROL_STATE_V2` retired TCP state; not admitted by current runtime
 - `25 HOST_CONTROL_NSHOT` generic successful-TX budget, downlink only
 - `26 CONTROL_ISLAND_HEALTH` M4 terminal/transport/IPC evidence
+- `28 HOST_REALTIME_STATE_V1` UDP `3335` latest Host 3-lane state, downlink only
+- `29 REALTIME_PROOF_V1` UDP `3335` cumulative receiver proof, uplink only
 
 Maximum payload length is `512` bytes for the current CSM rebuild. Hosts must
 parse by `payload_len` and skip unknown trailing bytes.
@@ -507,9 +509,9 @@ Legacy Mid Carrier MCP2515 profile compatibility (HISTORY, not an active build r
 - `20..23 counter u32`: accepted counter or request counter depending on status
 - `24..27 rejected_total u32`
 
-`CONTROL_ACK` is state/session/transaction admission evidence, not physical CAN
-success. `HOST_CONTROL_STATE_V2 Accepted` means the coherent latest image replaced
-the previous Host image. `HOST_CONTROL_NSHOT Accepted` means M4 may observe the
+`CONTROL_ACK` is session/transaction admission evidence, not physical CAN
+success. Realtime state acceptance is reported by `REALTIME_PROOF_V1`.
+`HOST_CONTROL_NSHOT Accepted` means M4 may observe the
 transaction through the next control snapshot. Actual terminal truth is M4
 `TXBRP/TXBTO/TXBCF` projected through `CONTROL_ISLAND_HEALTH`; only `TXBTO`
 increments successful-TX counters. Host software must never infer actual send from
@@ -546,10 +548,10 @@ Current `CONTROL_ACK` reasons:
 - `7` CAN write failed
 - `8` bad protocol version
 - `9` safety not armed
-- `10` host heartbeat timeout
-- `11` control lease expired
-- `12` Host causal proof required
-- `13` Host heartbeat ACK reference mismatch
+- `10` Host realtime liveness timeout
+- `11` retired lease reason (reserved)
+- `12` Host realtime proof required
+- `13` Host realtime proof reference mismatch
 - `14` replayed/non-forward Host command ID
 - `16` queue full
 - `17` TX busy
@@ -565,7 +567,7 @@ Current `CONTROL_ACK` reasons:
 `HOST_CAN_TX_REQUEST` record 10 is legacy decode-only and is never admitted by the
 active REV.B profile.
 
-`HOST_CONTROL_STATE_V2` payload, 40 bytes, host-to-board:
+Retired `HOST_CONTROL_STATE_V2` payload, 40 bytes, decode compatibility only:
 - `0..3 command_id u32`
 - `4..7 state_generation u32`, strictly newer within the Host image epoch
 - `8..11 contract_id u32`, fixed `0x484E4F31` (`HNO1`)
@@ -731,7 +733,7 @@ Current active Service/HIL Host policy:
   the queue's atomic producer/consumer cursors directly; it does not maintain a
   second cached snapshot that either side could overwrite out of order.
   Descriptor and byte capacity are independent compile/link-time gates. With
-  the current enabled records the mix is 1095 records/s; the previous 250 ms /
+  the current enabled periodic mix is 496 records/s; the previous 250 ms /
   197-record claim is invalid. Exploratory builds advertise transient coverage
   `0` and cannot qualify. A nonzero coverage interval is frozen only after
   measurement, at which point compile-time guards must prove both descriptor
@@ -740,20 +742,25 @@ Current active Service/HIL Host policy:
   observer records carry physical terminal truth.
 
 Host control session:
-- `HOST_HEARTBEAT` payload, 12 bytes:
-  - `0..3 command_id u32`
-  - `4..7 host_mono_ms u32`: diagnostic only; never a hard admission clock
-  - `8..11 ack_ref u32`: previous heartbeat command ID whose Accepted ACK was
-    observed by Android; `0` is allowed only for bootstrap
 - `HOST_CONTROL_SESSION` payload, 24 bytes:
   - `0..3 command_id u32`
-  - `4 action u8`: `0` disarm, `1` arm, `2` renew lease, `3` install neutral profile reserved
+  - `4 action u8`: `0` disarm, `1` arm; other values are reserved/unsupported
   - `5 requested_bus u8`: physical bus id or `0xFF` for any configured control backend
   - `6..7 flags u16`
-  - `8..9 lease_ms u16`: `0` means board default 500 ms, max 2000 ms
+  - `8..9` reserved compatibility bytes
   - `10..11 reserved u16`
   - `12..15 host_mono_ms u32`: diagnostic only
-  - `16 control_schema u8`: `3` for causal-proof ARM/renew; DISARM remains fail-safe
+  - `16 control_schema u8`: `4`; DISARM remains fail-safe
+
+`HOST_REALTIME_STATE_V1` is one exact 64-byte payload per UDP `3335` datagram.
+It carries schema/mode, boot and activation identity, process-scoped realtime
+sequence, coherent state generation, cumulative proof reference, diagnostic
+host monotonic time, contract/valid mask and exact 005/007/364 bytes.
+
+`REALTIME_PROOF_V1` is one exact 36-byte payload per UDP `3335` datagram. It
+carries CSM monotonic time, boot/activation identity, proof sequence, highest
+accepted realtime sequence, applied generation and status/reason/flags. Both
+directions retain only the newest item; no TCP fallback, retry, replay or catch-up.
   - `17..23 reserved`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
   It is the only downlink record accepted on telemetry TCP `3333`, so
@@ -1133,7 +1140,7 @@ State `0` is measurement-only and is not a release approval. Values move to
 state `1` only in the order exploratory measurement -> reviewed value decision
 -> product constant freeze -> qualification HIL. `120000 B/s` is retired and
 `135000 B/s` is not an approved envelope. The enabled steady schema computes
-1095 records/s and exactly 131617 B/s before qualification headroom is chosen.
+496 records/s and exactly 109556 B/s before qualification headroom is chosen.
 
 The hardware fields above are advertised claims and artifact references. They
 do not by themselves prove vehicle-impact-free behavior. VSM may display them
@@ -1463,9 +1470,10 @@ RP2040 feeder successor profile major `4`:
 - `8 BOARD_HEALTH`
 - `9 CAPABILITY`
 - `23 CONTROL_TX_EVIDENCE`
-- `24 HOST_CONTROL_STATE_V2`
 - `25 HOST_CONTROL_NSHOT`
 - `26 CONTROL_ISLAND_HEALTH`
+- `28 HOST_REALTIME_STATE_V1`
+- `29 REALTIME_PROOF_V1`
 
 ## 금지
 - board direct sensor 값을 가짜 CAN frame으로 위장

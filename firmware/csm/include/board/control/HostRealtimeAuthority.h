@@ -63,6 +63,8 @@ class HostRealtimeAuthority {
   bool validProofRef(uint32_t proof_ref) const;
   void observeProofRef(uint32_t proof_ref, uint32_t now_ms, bool active_path);
   void issueProof(uint8_t status, uint8_t reason);
+  void requireNewPreArmChallenge();
+  void resetPreArmSequenceDomain();
 
   uint64_t boot_session_id_ = 0;
   uint32_t timeout_ms_ = 0;
@@ -80,6 +82,8 @@ class HostRealtimeAuthority {
   uint32_t last_echoed_proof_ = 0;
   bool prearm_proof_valid_ = false;
   uint32_t prearm_proof_ms_ = 0;
+  bool prearm_challenge_required_ = true;
+  uint32_t prearm_challenge_sequence_ = 0;
   bool active_forward_valid_ = false;
   uint32_t active_forward_ms_ = 0;
   bool active_proof_valid_ = false;

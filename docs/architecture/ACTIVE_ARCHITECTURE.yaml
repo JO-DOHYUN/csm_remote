@@ -12,10 +12,17 @@ control:
   nominal_request_clock_owner: csm_m4_tim4
   fdcan1_owner: csm_m4_control_island
   host_execution_model: coherent_latest_state
-  host_liveness_owner: csm_m7_receiver_local_causal_ack_proof
-  host_heartbeat_wire: command_id_host_mono_diagnostic_ack_ref
-  host_heartbeat_outstanding: 1
-  host_initial_proof_timeout_ms: 300
+  host_liveness_owner: csm_m7_receiver_local_udp_bidirectional_proof
+  host_realtime_udp:
+    port: 3335
+    period_ms: 20
+    state_payload_bytes: 64
+    proof_payload_bytes: 36
+    latest_state_depth: 1
+    proof_model: cumulative_latest_only
+    initial_liveness_timeout_ms: 350
+    prearm_challenge: fresh_after_boot_disarm_expiry_or_inactive_tcp_epoch
+    sender_sequence_reset: process_restart_only
   host_control_transport:
     command_ack_tcp_port: 3334
     telemetry_evidence_tcp_port: 3333
@@ -26,6 +33,10 @@ control:
     tx_no_progress_close_ms: 300
     replay_across_epoch: false
     canonical_ack_mirror: evidence_only
+    purpose: arm_disarm_nshot_query_transactions_only
+  wifi_socket_arena:
+    application_sockets: 5
+    total_with_ap_internal_owner: 6
   host_command_id_policy: global_wrap_safe_consumed_watermark
   host_command_id_reset: m7_boot_or_new_tcp_epoch_only
   host_mono_runtime_gate: false

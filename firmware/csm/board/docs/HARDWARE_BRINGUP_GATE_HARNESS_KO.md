@@ -200,7 +200,7 @@ Goal: prove the CSM is a control gateway, not just a smoke transmitter.
 
 Pass evidence:
 - Service/HIL host establishes the dedicated control epoch, causal heartbeat,
-  explicit ARM and one coherent `HOST_CONTROL_STATE_V2`
+  fresh UDP PRE-ARM proof, explicit ARM and one coherent `HOST_REALTIME_STATE_V1`
 - board emits `CONTROL_ACK status=1`
 - `CONTROL_ISLAND_HEALTH` shows the matching value generation and advancing M4
   terminal success counter
