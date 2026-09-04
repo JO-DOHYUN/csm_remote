@@ -613,6 +613,28 @@ void testSameSourceRearmAndStale() {
   assert(executor.health().activation_epoch_seen == 11u);
 }
 
+void testActivationEpochWrapAfterRevoke() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 10000u, &driver);
+  auto active = makeSnapshot(1u, 5u, 0xFFFFFFFFu, ControlSource::Host, 1u);
+  stage(&executor, active, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  closeAll(&driver, &executor);
+  executor.onFiveMillisecondSlot(20000u);
+  assert(!executor.hasActiveControl());
+  active.publish_sequence = 2u;
+  stage(&executor, active, 20100u);
+  executor.onFiveMillisecondSlot(25000u);
+  assert(!executor.hasActiveControl());
+  active.publish_sequence = 3u;
+  active.activation_epoch = 1u;
+  stage(&executor, active, 25100u);
+  executor.onFiveMillisecondSlot(30000u);
+  assert(executor.hasActiveControl());
+  assert(executor.health().activation_epoch_seen == 1u);
+}
+
 void testErrorPassiveBusOffResetAndHealthPurity() {
   FakeDriver driver;
   M4StaticCyclicExecutor executor;
@@ -747,6 +769,8 @@ void testRealtimeWireAndBidirectionalAuthority() {
   uint8_t reason = 0xFFu;
   assert(authority.arm(100u, 121u, true, true, &reason));
   assert(reason == csm::ControlReasonOk && authority.authorityEpoch() == 100u);
+  authority.bindM4(7u);
+  assert(!authority.m4AuthorityRevoked(7u, 0u, false));
 
   state.mode = csm::kHostRealtimeModeActive;
   state.authority_epoch = 100u;
@@ -754,6 +778,9 @@ void testRealtimeWireAndBidirectionalAuthority() {
   state.proof_ref = 2u;
   assert(authority.accept(state, 130u) ==
          HostRealtimeAdmission::AcceptedActive);
+  assert(!authority.m4AuthorityRevoked(7u, 100u, true));
+  assert(authority.m4AuthorityRevoked(8u, 100u, true));
+  assert(authority.m4AuthorityRevoked(7u, 100u, false));
   authority.noteStateApplied(state.state_generation, true);
   assert(authority.healthy(130u));
   assert((authority.proofFlags(130u) &
@@ -777,6 +804,9 @@ void testRealtimeWireAndBidirectionalAuthority() {
          HostRealtimeAdmission::AcceptedActive);
   assert(authority.update(431u));
   assert(!authority.active() && authority.timeoutTotal() == 1u);
+  assert(authority.proofAuthorityEpoch() == 100u);
+  authority.disarm();
+  assert(authority.proofAuthorityEpoch() == 100u);
 
   // Timeout never reactivates old ACTIVE. PRE-ARM proof plus a strictly newer
   // explicit activation epoch is required, including for the same source.
@@ -786,6 +816,7 @@ void testRealtimeWireAndBidirectionalAuthority() {
   state.proof_ref = authority.proofSequence();
   assert(authority.accept(state, 500u) ==
          HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.proofAuthorityEpoch() == 0u);
   assert(!authority.preArmQualified(500u));
   const uint32_t post_timeout_challenge = authority.proofSequence();
   state.realtime_sequence = 6u;
@@ -903,6 +934,7 @@ int main() {
   testTerminalCancelRaceAndNoTransitionSkip();
   testHostAndRcLaneOwnership();
   testSameSourceRearmAndStale();
+  testActivationEpochWrapAfterRevoke();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
   testDedicatedBufferTerminalReconciliation();

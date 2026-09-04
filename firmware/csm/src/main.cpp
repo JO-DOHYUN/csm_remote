@@ -4663,6 +4663,14 @@ static void service_host_authority_boundary(uint32_t now_ms) {
   } else if (!host_realtime_authority.active()) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+  } else if (control_island_health_valid &&
+             host_realtime_authority.m4AuthorityRevoked(
+                 control_island_health.m4_boot_id,
+                 control_island_health.activation_epoch_seen,
+                 (control_island_health.flags &
+                  csm::board::control_island::kHealthFlagControlActive) != 0u)) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
   }
 }
 
@@ -5457,7 +5465,7 @@ static void stage_realtime_proof(uint32_t rx_token, uint32_t now_ms) {
   uint8_t frame[csm::board::uplink::kRealtimeProofFrameBytes] = {};
   const size_t length = csm::encode_realtime_proof_v1(
       frame, sizeof(frame), realtime_proof_frame_sequence++, mono64_us(),
-      product_boot_session_id, host_realtime_authority.authorityEpoch(),
+      product_boot_session_id, host_realtime_authority.proofAuthorityEpoch(),
       host_realtime_authority.proofSequence(),
       host_realtime_authority.highestRxSequence(),
       host_realtime_authority.lastAppliedGeneration(),
@@ -5660,6 +5668,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
           host_realtime_authority.disarm();
           reason = ControlReasonTxBusy;
         } else if (reason == ControlReasonOk) {
+          host_realtime_authority.bindM4(control_island_health.m4_boot_id);
           control_path_observing = true;
         }
       }

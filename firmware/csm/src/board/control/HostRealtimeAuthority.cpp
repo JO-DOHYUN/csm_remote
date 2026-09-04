@@ -22,6 +22,9 @@ bool HostRealtimeAuthority::begin(uint64_t boot_session_id,
   last_activation_epoch_ = 0u;
   active_ = false;
   authority_epoch_ = 0u;
+  proof_authority_epoch_ = 0u;
+  bound_m4_boot_id_ = 0u;
+  bound_m4_active_seen_ = false;
   arm_ms_ = 0u;
   realtime_sequence_seen_ = false;
   highest_rx_sequence_ = 0u;
@@ -92,6 +95,7 @@ bool HostRealtimeAuthority::arm(uint32_t authority_epoch, uint32_t now_ms,
   if (result == csm::ControlReasonOk) {
     active_ = true;
     authority_epoch_ = authority_epoch;
+    proof_authority_epoch_ = authority_epoch;
     activation_seen_ = true;
     last_activation_epoch_ = authority_epoch;
     arm_ms_ = now_ms;
@@ -112,16 +116,41 @@ bool HostRealtimeAuthority::arm(uint32_t authority_epoch, uint32_t now_ms,
   return result == csm::ControlReasonOk;
 }
 
+void HostRealtimeAuthority::bindM4(uint32_t m4_boot_id) {
+  bound_m4_boot_id_ = active_ ? m4_boot_id : 0u;
+  bound_m4_active_seen_ = false;
+}
+
+bool HostRealtimeAuthority::m4AuthorityRevoked(uint32_t m4_boot_id,
+                                               uint32_t activation_epoch,
+                                               bool control_active) {
+  if (!active_ || bound_m4_boot_id_ == 0u) return false;
+  if (m4_boot_id == 0u || m4_boot_id != bound_m4_boot_id_) return true;
+  if (control_active && activation_epoch == authority_epoch_) {
+    bound_m4_active_seen_ = true;
+    return false;
+  }
+  return bound_m4_active_seen_;
+}
+
 void HostRealtimeAuthority::disarm() {
+  const bool preserve_terminal =
+      proof_status_ == csm::kRealtimeProofStatusExpired ||
+      proof_status_ == csm::kRealtimeProofStatusRejected;
   active_ = false;
   authority_epoch_ = 0u;
+  bound_m4_boot_id_ = 0u;
+  bound_m4_active_seen_ = false;
   active_forward_valid_ = false;
   active_proof_valid_ = false;
   last_applied_generation_ = 0u;
   last_state_applied_ = false;
   resetPreArmSequenceDomain();
-  proof_status_ = csm::kRealtimeProofStatusPreArm;
-  proof_reason_ = csm::kRealtimeProofReasonOk;
+  if (!preserve_terminal) {
+    proof_authority_epoch_ = 0u;
+    proof_status_ = csm::kRealtimeProofStatusPreArm;
+    proof_reason_ = csm::kRealtimeProofReasonOk;
+  }
 }
 
 bool HostRealtimeAuthority::update(uint32_t now_ms) {
@@ -134,6 +163,7 @@ bool HostRealtimeAuthority::update(uint32_t now_ms) {
       ? now_ms - active_proof_ms_ > timeout_ms_
       : now_ms - arm_ms_ > timeout_ms_;
   if (!first_packet_expired && !forward_expired && !proof_expired) return false;
+  proof_authority_epoch_ = authority_epoch_;
   active_ = false;
   authority_epoch_ = 0u;
   active_forward_valid_ = false;
@@ -190,6 +220,7 @@ HostRealtimeAdmission HostRealtimeAuthority::accept(
   }
   realtime_sequence_seen_ = true;
   highest_rx_sequence_ = state.realtime_sequence;
+  if (prearm_packet) proof_authority_epoch_ = 0u;
 
   proof_reason_ = csm::kRealtimeProofReasonOk;
   if (prearm_packet && prearm_challenge_required_) {

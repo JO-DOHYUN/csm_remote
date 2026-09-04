@@ -494,6 +494,8 @@ for required in (
 for required in (
     "testHostNShotTransactionWatermarkSurvivesLifecycle",
     "testCrsfForegroundBudgetIsByteTimeAndWrapBounded",
+    "testActivationEpochWrapAfterRevoke",
+    "proofAuthorityEpoch() == 100u",
 ):
     if required not in control_test:
         fail(f"control lifecycle/budget regression missing {required}")
@@ -524,6 +526,20 @@ for obsolete in ("CancelRequested", "cancelAllPending", "healthForPublish"):
         fail(f"obsolete executor race path remains: {obsolete}")
 if "while (" in executor or "for (;;" in executor:
     fail("M4 slot execution may not contain an unbounded loop")
+for required in (
+    "u32Newer(rejected_activation_epoch_, staged_.activation_epoch)",
+    "host_realtime_authority.m4AuthorityRevoked(",
+    "host_realtime_authority.bindM4(control_island_health.m4_boot_id)",
+    "host_realtime_authority.proofAuthorityEpoch()",
+):
+    if required not in executor and required not in main:
+        fail(f"activation retirement/terminal proof contract missing {required}")
+for obsolete in (
+    "staged_.activation_epoch <= rejected_activation_epoch_",
+    "staged_.activation_epoch > rejected",
+):
+    if obsolete in executor:
+        fail(f"activation epoch comparison is not wrap-safe: {obsolete}")
 
 for required in (
     "ControlSnapshotSlot slot",

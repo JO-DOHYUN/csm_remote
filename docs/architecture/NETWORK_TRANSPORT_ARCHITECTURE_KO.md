@@ -31,8 +31,19 @@ ARM→DISARM→ARM. CSM accepts a new inactive sender sequence domain only from 
 valid PRE-ARM packet. Boot, DISARM, liveness expiry and an inactive TCP epoch
 discard prior PRE-ARM proof and require a proof issued after that boundary.
 Delayed ACTIVE packets cannot establish or poison the new inactive domain.
-ACTIVE requires a strictly newer activation epoch; reset/recovery never resumes
-old motion automatically.
+Within one transport epoch ACTIVE requires a wrap-safe strictly newer
+activation epoch. An inactive new TCP epoch may establish a replacement Host
+activation namespace only after the new PRE-ARM challenge is returned. Each
+accepted Host ARM is bound to the current M4 boot identity; a later M4 boot or
+a locally observed M4 ACTIVE revoke retires the M7 Host authority. Recovery
+therefore requires fresh PRE-ARM plus explicit ARM and never resumes old motion.
+
+Operator stop first stages the neutral UDP image independently of TCP `3333`
+observer availability or either TCP epoch. Fresh `3333` evidence may confirm
+the physical neutral terminal and TCP `3334` may then carry DISARM, but neither
+may delay the realtime neutral transition. A receiver-local expiry proof keeps
+the retired authority epoch until Android consumes the terminal status; the
+next valid PRE-ARM packet starts authority zero again.
 
 Loss/reorder/invalid state or proof cannot refresh liveness. At the initial
 350 ms receiver-local boundary, M7 revokes Host ACTIVE and M4 falls back to its

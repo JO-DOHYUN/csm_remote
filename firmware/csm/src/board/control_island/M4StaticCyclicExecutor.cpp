@@ -3,6 +3,10 @@
 namespace csm::board::control_island {
 namespace {
 constexpr uint32_t laneBit(uint8_t lane) { return 1u << lane; }
+bool u32Newer(uint32_t previous, uint32_t current) {
+  const uint32_t delta = current - previous;
+  return delta != 0u && delta < 0x80000000u;
+}
 
 void atomicAdd(volatile uint32_t* value, uint32_t increment) {
 #if defined(_MSC_VER)
@@ -212,7 +216,7 @@ void M4StaticCyclicExecutor::applyStagedSnapshot(uint32_t) {
     return;
   }
   if (rearm_required_ &&
-      staged_.activation_epoch <= rejected_activation_epoch_) return;
+      !u32Newer(rejected_activation_epoch_, staged_.activation_epoch)) return;
   const bool source_change = active_valid_ &&
       (staged_.m7_boot_id != active_.m7_boot_id ||
        staged_.source_epoch != active_.source_epoch ||
@@ -227,7 +231,7 @@ void M4StaticCyclicExecutor::activateStaged() {
   }
   if (!snapshotHasActiveMotion(staged_) ||
       (rearm_required_ &&
-       staged_.activation_epoch <= rejected_activation_epoch_)) {
+       !u32Newer(rejected_activation_epoch_, staged_.activation_epoch))) {
     activation_pending_ = false;
     return;
   }
@@ -401,12 +405,15 @@ bool M4StaticCyclicExecutor::laneOwnedByActiveSource(uint8_t lane) const {
 
 void M4StaticCyclicExecutor::revokeActive(bool require_rearm) {
   uint32_t rejected = active_.activation_epoch;
-  if (activation_pending_ && staged_.activation_epoch > rejected) {
+  if (activation_pending_ && u32Newer(rejected, staged_.activation_epoch)) {
     rejected = staged_.activation_epoch;
   }
   if (require_rearm && rejected != 0u) {
     rearm_required_ = true;
-    if (rejected > rejected_activation_epoch_) rejected_activation_epoch_ = rejected;
+    if (rejected_activation_epoch_ == 0u ||
+        u32Newer(rejected_activation_epoch_, rejected)) {
+      rejected_activation_epoch_ = rejected;
+    }
   }
   active_valid_ = false;
   activation_pending_ = false;

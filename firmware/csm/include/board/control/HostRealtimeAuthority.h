@@ -30,6 +30,10 @@ class HostRealtimeAuthority {
 
   bool arm(uint32_t authority_epoch, uint32_t now_ms,
            bool backend_ready, bool authority_allowed, uint8_t* reason);
+  void bindM4(uint32_t m4_boot_id);
+  bool m4AuthorityRevoked(uint32_t m4_boot_id,
+                          uint32_t activation_epoch,
+                          bool control_active);
   void disarm();
   bool update(uint32_t now_ms);
 
@@ -41,6 +45,7 @@ class HostRealtimeAuthority {
   bool healthy(uint32_t now_ms) const;
   bool preArmQualified(uint32_t now_ms) const;
   uint32_t authorityEpoch() const { return active_ ? authority_epoch_ : 0u; }
+  uint32_t proofAuthorityEpoch() const { return proof_authority_epoch_; }
   uint32_t proofSequence() const { return proof_sequence_; }
   uint32_t lastProofRef() const { return last_echoed_proof_; }
   uint32_t highestRxSequence() const { return highest_rx_sequence_; }
@@ -75,6 +80,9 @@ class HostRealtimeAuthority {
   uint32_t last_activation_epoch_ = 0;
   bool active_ = false;
   uint32_t authority_epoch_ = 0;
+  uint32_t proof_authority_epoch_ = 0;
+  uint32_t bound_m4_boot_id_ = 0;
+  bool bound_m4_active_seen_ = false;
   uint32_t arm_ms_ = 0;
   bool realtime_sequence_seen_ = false;
   uint32_t highest_rx_sequence_ = 0;
