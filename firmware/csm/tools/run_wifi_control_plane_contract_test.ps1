@@ -13,7 +13,8 @@ $stubs = Join-Path $project "test\native_stubs"
 $sources = @(
   (Join-Path $project "test\wifi_control_plane_contract_test.cpp"),
   (Join-Path $project "src\protocol\TypedFrame.cpp"),
-  (Join-Path $project "src\board\uplink\WifiControlPlaneMailbox.cpp")
+  (Join-Path $project "src\board\uplink\WifiControlPlaneMailbox.cpp"),
+  (Join-Path $project "src\board\uplink\WifiRealtimeMailbox.cpp")
 )
 $quotedSources = ($sources | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $compile = "call `"$vsDevCmd`" -no_logo -arch=x64 && cl /nologo /std:c++17 /EHsc /DCSM_TYPED_FRAME_NATIVE=1 /I`"$stubs`" /I`"$include`" $quotedSources /Fe:`"$output`""

@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "board/uplink/WifiControlPlaneMailbox.h"
+#include "board/uplink/WifiRealtimeMailbox.h"
 #include "protocol/TypedRecords.h"
 
 namespace {
@@ -92,12 +93,58 @@ void rxIsBoundedAndClearedAcrossEpochs() {
   CHECK(mailbox.available() == 0);
   CHECK(!mailbox.pushRx(bytes, sizeof(bytes)));
 }
+
+void realtimeHandoffsAreDepthOneAndNeverReplay() {
+  csm::board::uplink::WifiRealtimeMailbox mailbox;
+  mailbox.reset();
+  const uint8_t first[] = {1, 2, 3};
+  const uint8_t latest[] = {7, 8, 9, 10};
+  uint32_t first_token = 0;
+  uint32_t latest_token = 0;
+  CHECK(mailbox.publishRx(first, sizeof(first), 100, &first_token));
+  CHECK(mailbox.publishRx(latest, sizeof(latest), 120, &latest_token));
+  CHECK(first_token != 0 && latest_token != first_token);
+  csm::board::uplink::WifiRealtimeDatagram datagram;
+  CHECK(mailbox.takeLatestRx(&datagram));
+  CHECK(datagram.token == latest_token && datagram.length == sizeof(latest));
+  CHECK(std::memcmp(datagram.bytes, latest, sizeof(latest)) == 0);
+  CHECK(!mailbox.takeLatestRx(&datagram));
+  CHECK(mailbox.evidence().rx_datagrams == 2);
+  CHECK(mailbox.evidence().rx_overwrite == 1);
+  CHECK(mailbox.evidence().rx_max_gap_ms == 20);
+
+  uint8_t proof[csm::board::uplink::kRealtimeProofFrameBytes] = {};
+  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 1, 121));
+  csm::board::uplink::WifiRealtimeProof first_proof;
+  CHECK(mailbox.peekProof(&first_proof));
+  proof[0] = 0x55;
+  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 2, 122));
+  csm::board::uplink::WifiRealtimeProof latest_proof;
+  CHECK(mailbox.peekProof(&latest_proof));
+  CHECK(latest_proof.token != first_proof.token && latest_proof.bytes[0] == 0x55);
+  mailbox.consumeProof(first_proof.token);
+  CHECK(mailbox.peekProof(&latest_proof));
+  mailbox.consumeProof(latest_proof.token);
+  CHECK(!mailbox.peekProof(&latest_proof));
+
+  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 3, 123));
+  mailbox.discardProof();
+  CHECK(!mailbox.peekProof(&latest_proof));
+  mailbox.noteSocketReady(true, 9);
+  mailbox.noteProofSend(-3001, 3, 124, true);
+  mailbox.noteProofSend(sizeof(proof), 3, 125, false);
+  const auto evidence = mailbox.evidence();
+  CHECK(evidence.network_epoch == 9 && evidence.socket_ready);
+  CHECK(evidence.proof_staged == 3 && evidence.proof_would_block == 1);
+  CHECK(evidence.proof_sent == 1 && evidence.proof_last_sequence == 3);
+}
 }  // namespace
 
 int main() {
   activationAnchorsIdentityAndAckSequence();
   overflowClosesEpochAndReconnectDoesNotReplay();
   rxIsBoundedAndClearedAcrossEpochs();
+  realtimeHandoffsAreDepthOneAndNeverReplay();
   if (failures != 0) return 1;
   std::cout << "Wi-Fi control-plane contract PASS\n";
   return 0;

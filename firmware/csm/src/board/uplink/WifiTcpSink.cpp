@@ -40,7 +40,9 @@ bool WifiTcpSink::begin(const WifiTcpSinkConfig& config) {
 #if BOARD_ENABLE_WIFI_UPLINK
   if (!wifiRuntimeModeStartsWorker(config_.runtime_mode)) return false;
   control_mailbox_.configure(config_.boot_session_id);
-  static WifiSocketWorker socket_worker(mailbox_, control_mailbox_);
+  realtime_mailbox_.reset();
+  static WifiSocketWorker socket_worker(mailbox_, control_mailbox_,
+                                        realtime_mailbox_);
   worker_ = &socket_worker;
   enabled_ = worker_->start(config_);
   if (!enabled_) {

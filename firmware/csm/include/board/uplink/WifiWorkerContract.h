@@ -211,6 +211,7 @@ struct WifiTcpSinkConfig {
   const char* ap_passphrase = nullptr;
   uint16_t port = 3333;
   uint16_t control_port = 3334;
+  uint16_t realtime_port = 3335;
   uint8_t channel = 6;
   uint8_t ip[4] = {192, 168, 4, 1};
   uint64_t boot_session_id = 0;

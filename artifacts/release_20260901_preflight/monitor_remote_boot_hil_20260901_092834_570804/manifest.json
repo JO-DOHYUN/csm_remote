@@ -1,0 +1,88 @@
+{
+  "arguments": {
+    "baud": 115200,
+    "channel": 0,
+    "cold_enumeration": false,
+    "continue_after_fault": true,
+    "correlation_window_ms": 250.0,
+    "enumeration_timeout": 60.0,
+    "expect_env": "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi",
+    "fdcan_write_budget_us": 2000,
+    "output_root": "artifacts\\release_20260901_preflight",
+    "pid": 603,
+    "require_motion": false,
+    "seconds": 10.0,
+    "serial": "002F00203033510234323437",
+    "vid": 9025
+  },
+  "artifacts": {
+    "evidence": "evidence.jsonl",
+    "hashes": "SHA256SUMS.txt",
+    "kvaser": "kvaser.jsonl",
+    "summary": "summary.json",
+    "timeline": "timeline.jsonl"
+  },
+  "command": [
+    "firmware\\csm\\pc_tools\\monitor_remote_boot_hil.py",
+    "--seconds",
+    "10",
+    "--channel",
+    "0",
+    "--vid",
+    "0x2341",
+    "--pid",
+    "0x025B",
+    "--serial",
+    "002F00203033510234323437",
+    "--baud",
+    "115200",
+    "--output-root",
+    "artifacts\\release_20260901_preflight",
+    "--expect-env",
+    "portenta_h7_m7_mid_feeder_uart_j4_remote_service_hil_wifi",
+    "--continue-after-fault"
+  ],
+  "ended_utc": "2026-09-01T00:28:44.841+00:00",
+  "host": {
+    "machine": "AMD64",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.13.0 (tags/v3.13.0:60403a5, Oct  7 2024, 09:38:07) [MSC v.1941 64 bit (AMD64)]"
+  },
+  "kvaser": {
+    "accept_virtual": false,
+    "bitrate": 500000,
+    "bus_on_before_usb": true,
+    "bus_on_monotonic_ns": 67568875811200,
+    "channel": 0,
+    "channel_count": 3,
+    "channel_name": "Kvaser Leaf Light v2 #0 (Channel 0)"
+  },
+  "schema": 1,
+  "started_monotonic_ns": 67568707888800,
+  "started_utc": "2026-09-01T00:28:34.573+00:00",
+  "tool": "monitor_remote_boot_hil.py",
+  "usb_epoch_artifacts": [
+    "usb_epoch_001_COM7.typed.bin"
+  ],
+  "usb_match": {
+    "initial_matches": [
+      {
+        "description": "USB 직렬 장치(COM7)",
+        "device": "COM7",
+        "hwid": "USB VID:PID=2341:025B SER=002F00203033510234323437 LOCATION=1-4:x.0",
+        "interface": null,
+        "location": "1-4:x.0",
+        "manufacturer": "Microsoft",
+        "pid": 603,
+        "product": null,
+        "serial_number": "002F00203033510234323437",
+        "vid": 9025
+      }
+    ],
+    "input_buffer_reset": false,
+    "pid": "0x025B",
+    "serial_number": "002F00203033510234323437",
+    "vid": "0x2341"
+  },
+  "verdict": "FAIL"
+}

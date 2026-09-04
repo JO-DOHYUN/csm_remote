@@ -1,0 +1,311 @@
+{
+  "captured_at": "20260831_101221",
+  "port": "COM7",
+  "seconds": 20.0,
+  "raw_artifact": "C:\\WORKS\\VS\\csm_remote_vsm_wifi\\artifacts\\remote_hil\\remote_hil_20260831_101221.typed.bin",
+  "record_counts": {
+    "9": 2,
+    "8": 20,
+    "7": 218,
+    "26": 193,
+    "18": 193,
+    "16": 500,
+    "20": 19
+  },
+  "bad_crc": 0,
+  "typed_seq_gaps": 0,
+  "board_boot_events": 0,
+  "boot_session_ids": [],
+  "m4_boot_ids": [
+    "0x00000001"
+  ],
+  "capability": {
+    "firmware_dirty": 0,
+    "firmware_profile": 2,
+    "host_command_rx": 1,
+    "control_path": 3
+  },
+  "can": {
+    "0x7": {
+      "count": 0,
+      "last": null,
+      "period_median_ms": null,
+      "period_p95_ms": null,
+      "period_max_ms": null
+    }
+  },
+  "checks": [
+    {
+      "name": "typed_crc",
+      "pass": true,
+      "detail": "bad_crc=0"
+    },
+    {
+      "name": "typed_sequence",
+      "pass": true,
+      "detail": "typed_seq_gaps=0"
+    },
+    {
+      "name": "remote_records",
+      "pass": true,
+      "detail": "records=193"
+    },
+    {
+      "name": "remote_schema",
+      "pass": true,
+      "detail": "schema=3"
+    },
+    {
+      "name": "configured_crsf_baud",
+      "pass": true,
+      "detail": "configured_baud=416666 physical_bit_time=NOT_MEASURED"
+    },
+    {
+      "name": "crsf_rx_progress",
+      "pass": true,
+      "detail": "rx_delta=22828 accepted_delta=878"
+    },
+    {
+      "name": "crsf_integrity",
+      "pass": true,
+      "detail": "len=0 crc=0 gap=0 normalize=0"
+    },
+    {
+      "name": "r16sm_address",
+      "pass": true,
+      "detail": "address=0xC8 last_type=0x16"
+    },
+    {
+      "name": "remote_live",
+      "pass": true,
+      "detail": "flags=0x1F link=3 sample=1 rc_age=4"
+    },
+    {
+      "name": "optional_link_statistics_veto",
+      "pass": true,
+      "detail": "observed=False valid=0 lq=255 age=4294967295 rssi=-255dBm"
+    },
+    {
+      "name": "crsf_telemetry_tx",
+      "pass": true,
+      "detail": "frames=58 fail=0"
+    },
+    {
+      "name": "m4_stable",
+      "pass": true,
+      "detail": "m4_boot_ids=1"
+    },
+    {
+      "name": "runtime_integrity",
+      "pass": true,
+      "detail": "deadline=0 can_fail=0 ipc=0 ipc_detail=0 publish_fail=0"
+    },
+    {
+      "name": "can_0x7_period",
+      "pass": false,
+      "detail": "count=0 median=None p95=None max=None"
+    },
+    {
+      "name": "remote_can_identity",
+      "pass": false,
+      "detail": "0x007=None"
+    }
+  ],
+  "first_remote_state": {
+    "schema": 3,
+    "link_state": 4,
+    "authority_state": 0,
+    "active_source": 0,
+    "flags": 3,
+    "link_quality": 255,
+    "rssi_dbm_magnitude": 255,
+    "last_crsf_type": 22,
+    "m4_boot_id": 1,
+    "shared_sequence": 8326,
+    "mailbox_age_ms": 4,
+    "drive_permille": -4,
+    "steering_permille": 3,
+    "raw_ch2": 995,
+    "raw_ch4": 988,
+    "uart_baud": 416666,
+    "rx_bytes": 91315,
+    "valid_frames": 3512,
+    "rc_frames": 3512,
+    "link_frames": 0,
+    "rejected_length": 0,
+    "rejected_crc": 1,
+    "inter_byte_resets": 0,
+    "mailbox_publishes": 4163,
+    "telemetry_tx_frames": 249,
+    "telemetry_tx_bytes": 2725,
+    "serial_write_failures": 0,
+    "control_cycles": 6786,
+    "neutral_cycles": 0,
+    "cycle_deadline_misses": 0,
+    "can_tx_success": 0,
+    "can_tx_failed": 0,
+    "ipc_rejects": 0,
+    "decision": 0,
+    "last_address": 200,
+    "sample_state": 3,
+    "last_ipc_reject_detail": 0,
+    "cycle_period_ms": 5,
+    "frame_gap_ms": 0,
+    "channels_permille": [
+      0,
+      3,
+      -2,
+      -4,
+      0,
+      0,
+      -812,
+      -812,
+      0,
+      0,
+      -812,
+      -812,
+      -812,
+      0,
+      0,
+      0
+    ],
+    "link_statistics_valid": 0,
+    "uplink_rssi_ant1": 255,
+    "uplink_rssi_ant2": 255,
+    "uplink_snr": 0,
+    "active_antenna": 255,
+    "rf_profile": 255,
+    "uplink_rf_power": 255,
+    "downlink_rssi": 255,
+    "downlink_link_quality": 255,
+    "downlink_snr": 0,
+    "shared_publish_failures": 0,
+    "raw_channels": [
+      992,
+      995,
+      990,
+      988,
+      992,
+      992,
+      326,
+      326,
+      992,
+      992,
+      326,
+      326,
+      326,
+      992,
+      992,
+      992
+    ],
+    "accepted_rc_frames": 3511,
+    "normalization_rejects": 1,
+    "last_rc_age_ms": 26081,
+    "last_link_statistics_age_ms": 4294967295,
+    "last_normalize_reject_detail": 0
+  },
+  "last_remote_state": {
+    "schema": 3,
+    "link_state": 3,
+    "authority_state": 0,
+    "active_source": 0,
+    "flags": 31,
+    "link_quality": 255,
+    "rssi_dbm_magnitude": 255,
+    "last_crsf_type": 22,
+    "m4_boot_id": 1,
+    "shared_sequence": 10292,
+    "mailbox_age_ms": 5,
+    "drive_permille": -4,
+    "steering_permille": 6,
+    "raw_ch2": 997,
+    "raw_ch4": 988,
+    "uart_baud": 416666,
+    "rx_bytes": 114143,
+    "valid_frames": 4390,
+    "rc_frames": 4390,
+    "link_frames": 0,
+    "rejected_length": 0,
+    "rejected_crc": 1,
+    "inter_byte_resets": 0,
+    "mailbox_publishes": 5146,
+    "telemetry_tx_frames": 307,
+    "telemetry_tx_bytes": 3363,
+    "serial_write_failures": 0,
+    "control_cycles": 8475,
+    "neutral_cycles": 0,
+    "cycle_deadline_misses": 0,
+    "can_tx_success": 0,
+    "can_tx_failed": 0,
+    "ipc_rejects": 0,
+    "decision": 0,
+    "last_address": 200,
+    "sample_state": 1,
+    "last_ipc_reject_detail": 0,
+    "cycle_period_ms": 5,
+    "frame_gap_ms": 0,
+    "channels_permille": [
+      0,
+      6,
+      -3,
+      -4,
+      0,
+      0,
+      -812,
+      -812,
+      0,
+      0,
+      -812,
+      -812,
+      -812,
+      0,
+      0,
+      0
+    ],
+    "link_statistics_valid": 0,
+    "uplink_rssi_ant1": 255,
+    "uplink_rssi_ant2": 255,
+    "uplink_snr": 0,
+    "active_antenna": 255,
+    "rf_profile": 255,
+    "uplink_rf_power": 255,
+    "downlink_rssi": 255,
+    "downlink_link_quality": 255,
+    "downlink_snr": 0,
+    "shared_publish_failures": 0,
+    "raw_channels": [
+      992,
+      997,
+      989,
+      988,
+      992,
+      992,
+      326,
+      326,
+      992,
+      992,
+      326,
+      326,
+      326,
+      992,
+      992,
+      992
+    ],
+    "accepted_rc_frames": 4389,
+    "normalization_rejects": 1,
+    "last_rc_age_ms": 4,
+    "last_link_statistics_age_ms": 4294967295,
+    "last_normalize_reject_detail": 0
+  },
+  "channel_ranges": {
+    "ch2": {
+      "min": 326,
+      "max": 1648
+    },
+    "ch4": {
+      "min": 326,
+      "max": 1651
+    }
+  },
+  "pass": false
+}

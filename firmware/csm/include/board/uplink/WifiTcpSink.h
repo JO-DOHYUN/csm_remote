@@ -18,6 +18,7 @@
 
 #include "board/uplink/WifiWorkerContract.h"
 #include "board/uplink/WifiControlPlaneMailbox.h"
+#include "board/uplink/WifiRealtimeMailbox.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 #include "board/uplink/WifiTransportDiagnostic.h"
 
@@ -138,6 +139,18 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   uint32_t controlConnectionEpoch() const {
     return control_mailbox_.connectionEpoch();
   }
+  bool takeRealtimeDatagram(WifiRealtimeDatagram* datagram) {
+    return realtime_mailbox_.takeLatestRx(datagram);
+  }
+  bool offerRealtimeProof(const uint8_t* bytes, uint16_t length,
+                          uint32_t rx_token, uint32_t proof_sequence,
+                          uint32_t now_ms) {
+    return realtime_mailbox_.stageProof(bytes, length, rx_token,
+                                        proof_sequence, now_ms);
+  }
+  WifiRealtimeEvidence realtimeEvidence() const {
+    return realtime_mailbox_.evidence();
+  }
 
   int available() override;
   int read() override;
@@ -166,6 +179,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
  private:
   WifiWorkerMailbox mailbox_;
   WifiControlPlaneMailbox control_mailbox_;
+  WifiRealtimeMailbox realtime_mailbox_;
   WifiSocketWorker* worker_ = nullptr;
   WifiTcpSinkConfig config_;
   WifiTcpSinkCounters counters_;

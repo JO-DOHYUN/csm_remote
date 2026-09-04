@@ -1,0 +1,41 @@
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest:
+INSTRUMENTATION_STATUS: test=simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: ARM lost at 1915 ms: ServiceControlState(available=true, selectedBus=1, drivePermille=0, driveWireSpeed=0, driveWireDirection=0, steeringPermille=0, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Disarmed, stopOutcome=VerifiedNeutralDisarm, armRequested=false, armAcknowledged=false, gateReady=true, blockReason=ARM required, downlinkWrites=108, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=59A6BC6C460EC546, controlAckAgeMillis=1729, controlLastAckCommandId=108, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=4294, RxAtMs=5040476, AckCommandId=108, AckAtMs=5040476, AckCsmMonoUs=355542192, WriteCommandId=108, WriteEpoch=1, WriteStartedMs=5040471, WriteInProgress=0, WriteCompletedMs=5040474, WriteSuccess=1, HeartbeatWriteId=107, HeartbeatWriteStartedMs=5040431, HeartbeatWriteCompletedMs=5040432, HeartbeatWriteSuccess=1, WriteDurationUs=2576, WriteMaxUs=8605}, firstControlFailureEvidence=reason=control touch timeout atMs=5040055 epoch=1 boot=59A6BC6C460EC546 pendingHeartbeat=null lastHeartbeatMs=5040024 {RxBytes=3943, RxAtMs=5040031, AckCommandId=99, AckAtMs=5040031, AckCsmMonoUs=355095647, WriteCommandId=99, WriteEpoch=1, WriteStartedMs=5040024, WriteInProgress=0, WriteCompletedMs=5040025, WriteSuccess=1, HeartbeatWriteId=99, HeartbeatWriteStartedMs=5040024, HeartbeatWriteCompletedMs=5040025, HeartbeatWriteSuccess=1, WriteDurationUs=859, WriteMaxUs=8605}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:65)
+
+INSTRUMENTATION_STATUS: stream=
+Error in simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest):
+java.lang.AssertionError: ARM lost at 1915 ms: ServiceControlState(available=true, selectedBus=1, drivePermille=0, driveWireSpeed=0, driveWireDirection=0, steeringPermille=0, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Disarmed, stopOutcome=VerifiedNeutralDisarm, armRequested=false, armAcknowledged=false, gateReady=true, blockReason=ARM required, downlinkWrites=108, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=59A6BC6C460EC546, controlAckAgeMillis=1729, controlLastAckCommandId=108, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=4294, RxAtMs=5040476, AckCommandId=108, AckAtMs=5040476, AckCsmMonoUs=355542192, WriteCommandId=108, WriteEpoch=1, WriteStartedMs=5040471, WriteInProgress=0, WriteCompletedMs=5040474, WriteSuccess=1, HeartbeatWriteId=107, HeartbeatWriteStartedMs=5040431, HeartbeatWriteCompletedMs=5040432, HeartbeatWriteSuccess=1, WriteDurationUs=2576, WriteMaxUs=8605}, firstControlFailureEvidence=reason=control touch timeout atMs=5040055 epoch=1 boot=59A6BC6C460EC546 pendingHeartbeat=null lastHeartbeatMs=5040024 {RxBytes=3943, RxAtMs=5040031, AckCommandId=99, AckAtMs=5040031, AckCsmMonoUs=355095647, WriteCommandId=99, WriteEpoch=1, WriteStartedMs=5040024, WriteInProgress=0, WriteCompletedMs=5040025, WriteSuccess=1, HeartbeatWriteId=99, HeartbeatWriteStartedMs=5040024, HeartbeatWriteCompletedMs=5040025, HeartbeatWriteSuccess=1, WriteDurationUs=859, WriteMaxUs=8605}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:65)
+
+INSTRUMENTATION_STATUS: test=simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 41.78
+There was 1 failure:
+1) simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest)
+java.lang.AssertionError: ARM lost at 1915 ms: ServiceControlState(available=true, selectedBus=1, drivePermille=0, driveWireSpeed=0, driveWireDirection=0, steeringPermille=0, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Disarmed, stopOutcome=VerifiedNeutralDisarm, armRequested=false, armAcknowledged=false, gateReady=true, blockReason=ARM required, downlinkWrites=108, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=59A6BC6C460EC546, controlAckAgeMillis=1729, controlLastAckCommandId=108, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=4294, RxAtMs=5040476, AckCommandId=108, AckAtMs=5040476, AckCsmMonoUs=355542192, WriteCommandId=108, WriteEpoch=1, WriteStartedMs=5040471, WriteInProgress=0, WriteCompletedMs=5040474, WriteSuccess=1, HeartbeatWriteId=107, HeartbeatWriteStartedMs=5040431, HeartbeatWriteCompletedMs=5040432, HeartbeatWriteSuccess=1, WriteDurationUs=2576, WriteMaxUs=8605}, firstControlFailureEvidence=reason=control touch timeout atMs=5040055 epoch=1 boot=59A6BC6C460EC546 pendingHeartbeat=null lastHeartbeatMs=5040024 {RxBytes=3943, RxAtMs=5040031, AckCommandId=99, AckAtMs=5040031, AckCsmMonoUs=355095647, WriteCommandId=99, WriteEpoch=1, WriteStartedMs=5040024, WriteInProgress=0, WriteCompletedMs=5040025, WriteSuccess=1, HeartbeatWriteId=99, HeartbeatWriteStartedMs=5040024, HeartbeatWriteCompletedMs=5040025, HeartbeatWriteSuccess=1, WriteDurationUs=859, WriteMaxUs=8605}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:65)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

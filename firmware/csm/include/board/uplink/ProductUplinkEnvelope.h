@@ -104,7 +104,7 @@ static_assert(kProductEnabledWireBytesPerSecond == 131617,
 // are unchanged. Diagnostic loss is reported by the existing publisher.
 static constexpr uint32_t kServiceHilControlPathWireBytesPerSecond =
     productTypedRecordWireBytes(csm::kControlPathDiagnosticPayloadLen, 1u);
-static_assert(kServiceHilControlPathWireBytesPerSecond == 351u,
+static_assert(kServiceHilControlPathWireBytesPerSecond == 507u,
               "bounded control-path evidence rate drift");
 
 }  // namespace csm::board::uplink

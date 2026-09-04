@@ -5,6 +5,8 @@
 
 #include "board/uplink/WifiWorkerContract.h"
 #include "board/uplink/WifiControlPlaneMailbox.h"
+#include "board/uplink/WifiRealtimeMailbox.h"
+#include "board/uplink/WifiRealtimeWorker.h"
 #include "board/uplink/WifiWorkerMailbox.h"
 
 #if BOARD_ENABLE_WIFI_UPLINK
@@ -24,12 +26,16 @@ namespace csm::board::uplink {
 class WifiSocketWorker final {
  public:
   WifiSocketWorker(WifiWorkerMailbox& mailbox,
-                   WifiControlPlaneMailbox& control_mailbox);
+                   WifiControlPlaneMailbox& control_mailbox,
+                   WifiRealtimeMailbox& realtime_mailbox);
   bool start(const WifiTcpSinkConfig& config);
 
  private:
   WifiWorkerMailbox& mailbox_;
   WifiControlPlaneMailbox& control_mailbox_;
+  WifiRealtimeMailbox& realtime_mailbox_;
+  WifiRealtimeWorker realtime_worker_;
+  uint32_t network_epoch_ = 0;
   WifiTcpSinkConfig config_;
   WifiWorkerStateSnapshot state_;
   WhdSoftAPInterface* ap_interface_ = nullptr;

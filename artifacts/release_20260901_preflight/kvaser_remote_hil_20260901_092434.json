@@ -1,0 +1,52 @@
+{
+  "captured_at": "20260901_092434",
+  "channel": 1,
+  "seconds": 3.0,
+  "total_frames": 0,
+  "control_frames": 0,
+  "error_frames": 0,
+  "stats": {
+    "0x7": {
+      "count": 0,
+      "period_median_ms": null,
+      "period_p95_ms": null,
+      "period_max_ms": null,
+      "last_data": null
+    }
+  },
+  "motion": {
+    "steering_byte_min": null,
+    "steering_byte_max": null,
+    "auxiliary_values": []
+  },
+  "read_errors": [],
+  "checks": [
+    {
+      "name": "kvaser_read",
+      "pass": true,
+      "detail": "total=0 errors=[]"
+    },
+    {
+      "name": "can_error_frames",
+      "pass": true,
+      "detail": "count=0"
+    },
+    {
+      "name": "period_0x7",
+      "pass": false,
+      "detail": "count=0 median=None p95=None max=None"
+    },
+    {
+      "name": "dlc_0x7",
+      "pass": false,
+      "detail": "dlc=[]"
+    },
+    {
+      "name": "remote_payload_contract",
+      "pass": false,
+      "detail": "frames=0 steering=None..None aux=[]"
+    }
+  ],
+  "frames": [],
+  "pass": false
+}

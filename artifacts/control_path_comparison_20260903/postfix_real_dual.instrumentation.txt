@@ -1,0 +1,41 @@
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilRealTouchDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.hamt.vsm.android.ServiceHilRealTouchDeviceTest:
+INSTRUMENTATION_STATUS: test=simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilRealTouchDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: Both real pointer paths must remain held: ServiceControlState(available=true, selectedBus=1, drivePermille=99, driveWireSpeed=0, driveWireDirection=0, steeringPermille=186, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Stopping, stopOutcome=None, armRequested=false, armAcknowledged=true, gateReady=true, blockReason=heartbeat causal ACK timeout, downlinkWrites=10055, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=434, controlLastAckCommandId=10051, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10055, WriteEpoch=1, WriteStartedMs=7132787, WriteInProgress=0, WriteCompletedMs=7132788, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=522, WriteMaxUs=29807}, firstControlFailureEvidence=reason=heartbeat causal ACK timeout atMs=7132786 epoch=1 boot=BD5AC4F24CE5C107 pendingHeartbeat=10053 lastHeartbeatMs=7132433 {RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10054, WriteEpoch=1, WriteStartedMs=7132520, WriteInProgress=0, WriteCompletedMs=7132521, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=755, WriteMaxUs=29807}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilRealTouchDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilRealTouchDeviceTest.kt:83)
+
+INSTRUMENTATION_STATUS: stream=
+Error in simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilRealTouchDeviceTest):
+java.lang.AssertionError: Both real pointer paths must remain held: ServiceControlState(available=true, selectedBus=1, drivePermille=99, driveWireSpeed=0, driveWireDirection=0, steeringPermille=186, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Stopping, stopOutcome=None, armRequested=false, armAcknowledged=true, gateReady=true, blockReason=heartbeat causal ACK timeout, downlinkWrites=10055, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=434, controlLastAckCommandId=10051, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10055, WriteEpoch=1, WriteStartedMs=7132787, WriteInProgress=0, WriteCompletedMs=7132788, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=522, WriteMaxUs=29807}, firstControlFailureEvidence=reason=heartbeat causal ACK timeout atMs=7132786 epoch=1 boot=BD5AC4F24CE5C107 pendingHeartbeat=10053 lastHeartbeatMs=7132433 {RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10054, WriteEpoch=1, WriteStartedMs=7132520, WriteInProgress=0, WriteCompletedMs=7132521, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=755, WriteMaxUs=29807}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilRealTouchDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilRealTouchDeviceTest.kt:83)
+
+INSTRUMENTATION_STATUS: test=simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 458.055
+There was 1 failure:
+1) simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilRealTouchDeviceTest)
+java.lang.AssertionError: Both real pointer paths must remain held: ServiceControlState(available=true, selectedBus=1, drivePermille=99, driveWireSpeed=0, driveWireDirection=0, steeringPermille=186, steeringByte=130, driveHeld=false, steeringHeld=false, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=Stopping, stopOutcome=None, armRequested=false, armAcknowledged=true, gateReady=true, blockReason=heartbeat causal ACK timeout, downlinkWrites=10055, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=434, controlLastAckCommandId=10051, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10055, WriteEpoch=1, WriteStartedMs=7132787, WriteInProgress=0, WriteCompletedMs=7132788, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=522, WriteMaxUs=29807}, firstControlFailureEvidence=reason=heartbeat causal ACK timeout atMs=7132786 epoch=1 boot=BD5AC4F24CE5C107 pendingHeartbeat=10053 lastHeartbeatMs=7132433 {RxBytes=392071, RxAtMs=7132352, AckCommandId=10051, AckAtMs=7132352, AckCsmMonoUs=586883621, WriteCommandId=10054, WriteEpoch=1, WriteStartedMs=7132520, WriteInProgress=0, WriteCompletedMs=7132521, WriteSuccess=1, HeartbeatWriteId=10053, HeartbeatWriteStartedMs=7132433, HeartbeatWriteCompletedMs=7132434, HeartbeatWriteSuccess=1, WriteDurationUs=755, WriteMaxUs=29807}, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilRealTouchDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilRealTouchDeviceTest.kt:83)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1

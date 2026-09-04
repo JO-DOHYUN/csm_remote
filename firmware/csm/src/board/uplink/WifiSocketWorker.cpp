@@ -16,8 +16,11 @@ constexpr int kTcpNoDelayOption = 1;
 }  // namespace
 
 WifiSocketWorker::WifiSocketWorker(
-    WifiWorkerMailbox& mailbox, WifiControlPlaneMailbox& control_mailbox)
-    : mailbox_(mailbox), control_mailbox_(control_mailbox) {}
+    WifiWorkerMailbox& mailbox, WifiControlPlaneMailbox& control_mailbox,
+    WifiRealtimeMailbox& realtime_mailbox)
+    : mailbox_(mailbox), control_mailbox_(control_mailbox),
+      realtime_mailbox_(realtime_mailbox),
+      realtime_worker_(realtime_mailbox) {}
 
 bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
   if (thread_started_) {
@@ -38,7 +41,9 @@ bool WifiSocketWorker::start(const WifiTcpSinkConfig& config) {
       config_.ap_passphrase == nullptr ||
       (state_.tcp_enabled &&
        (config_.port == 0 || config_.control_port == 0 ||
-        config_.port == config_.control_port))) {
+        config_.realtime_port == 0 || config_.port == config_.control_port ||
+        config_.port == config_.realtime_port ||
+        config_.control_port == config_.realtime_port))) {
     state_.counters.worker_start_fail_total = 1;
     mailbox_.publishState(state_);
     return false;
@@ -338,6 +343,21 @@ bool WifiSocketWorker::initializeNetwork() {
       quarantineStartupFailure(state_.last_network_error);
     } else {
       state_.last_network_error = control_server_result;
+    }
+    return false;
+  }
+
+  ++network_epoch_;
+  if (network_epoch_ == 0u) ++network_epoch_;
+  if (!realtime_worker_.start(ap_interface_, config_.realtime_port,
+                              network_epoch_)) {
+    state_.counters.server_start_fail_total++;
+    state_.last_network_error = NSAPI_ERROR_NO_MEMORY;
+    const bool cleanup_confirmed = rollbackNetwork();
+    if (!wifiStartupRetryAllowed(
+            WifiStartupFailureBoundary::AfterApStarted,
+            cleanup_confirmed)) {
+      quarantineStartupFailure(state_.last_network_error);
     }
     return false;
   }

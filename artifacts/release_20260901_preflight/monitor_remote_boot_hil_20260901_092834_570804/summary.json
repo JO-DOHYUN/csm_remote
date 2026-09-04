@@ -1,0 +1,525 @@
+{
+  "board_health_counter_deltas": {
+    "builtin_tx_fail_total": 0,
+    "can_drop_total": 0,
+    "fifo_overflow_total": 0,
+    "mcp_error_flags_total": 0,
+    "mcp_spi_error_total": 0,
+    "mcp_tx_fail_total": 0,
+    "usb_forced_reset_count": 0,
+    "usb_offer_overflow_total": 0,
+    "usb_reconnect_count": 0,
+    "wifi_offer_overflow_total": 0,
+    "wifi_socket_error_total": 0
+  },
+  "can_evidence_correlation": {
+    "burst_order": {
+      "can_tx_raw": {
+        "candidates": 0,
+        "complete_count": 0,
+        "incomplete_count": 0,
+        "incomplete_examples": [],
+        "non_trailing_incomplete_count": 0
+      },
+      "kvaser": {
+        "candidates": 0,
+        "complete_count": 0,
+        "incomplete_count": 0,
+        "incomplete_examples": [],
+        "non_trailing_incomplete_count": 0
+      }
+    },
+    "counts": {
+      "burst_matches": {
+        "ambiguous": 0,
+        "unique": 0,
+        "unmatched": 0
+      },
+      "can_tx_raw_control_records": 0,
+      "can_tx_raw_records": 0,
+      "can_tx_raw_to_kvaser": {},
+      "kvaser_control_frames": 0,
+      "phase5_duplicate_attempt_records": 0,
+      "phase5_kvaser_data_confirmed": 0,
+      "phase5_records": 0,
+      "phase5_to_can_tx_raw": {},
+      "phase5_to_kvaser": {},
+      "phase5_unique_attempts": 0
+    },
+    "future_source_order_slack_ms": 20.0,
+    "host_window_ms": 250.0,
+    "raw_to_outcome_board_window_us": 15000,
+    "rolling_nibble_0x503": {
+      "can_tx_raw": {
+        "applicable": false,
+        "checksum_failures": 0,
+        "continuity_failures": 0,
+        "failure_examples": [],
+        "frames": 0,
+        "reason": "fewer_than_two_0x503_frames"
+      },
+      "kvaser": {
+        "applicable": false,
+        "checksum_failures": 0,
+        "continuity_failures": 0,
+        "failure_examples": [],
+        "frames": 0,
+        "reason": "fewer_than_two_0x503_frames"
+      }
+    },
+    "unmatched_or_ambiguous_examples": {
+      "can_tx_raw_to_kvaser": [],
+      "phase5_to_can_tx_raw": [],
+      "phase5_to_kvaser": []
+    }
+  },
+  "capture_start_monotonic_ns": 67568906819800,
+  "checks": [
+    {
+      "detail": {
+        "capture_started": true,
+        "completed_without_early_fault": true
+      },
+      "name": "capture_window",
+      "pass": true
+    },
+    {
+      "detail": {
+        "disconnects": 0,
+        "epochs": 1
+      },
+      "name": "usb_single_epoch",
+      "pass": true
+    },
+    {
+      "detail": {
+        "bad_crc": 0
+      },
+      "name": "typed_crc",
+      "pass": true
+    },
+    {
+      "detail": {
+        "gap_events": 0,
+        "missing_modulo_total": 0
+      },
+      "name": "typed_sequence",
+      "pass": true
+    },
+    {
+      "detail": {
+        "records": 0
+      },
+      "name": "stream_session_present",
+      "pass": false
+    },
+    {
+      "detail": {
+        "records": 10
+      },
+      "name": "board_health_progress",
+      "pass": true
+    },
+    {
+      "detail": {
+        "records": 97
+      },
+      "name": "remote_state_progress",
+      "pass": true
+    },
+    {
+      "detail": {
+        "read_errors": []
+      },
+      "name": "kvaser_read",
+      "pass": true
+    },
+    {
+      "detail": {
+        "error_frames": 0
+      },
+      "name": "kvaser_error_frames",
+      "pass": true
+    },
+    {
+      "detail": {
+        "phase_counts": {},
+        "records": 0
+      },
+      "name": "runtime_diagnostic_present",
+      "pass": false
+    },
+    {
+      "detail": {
+        "fault_samples": 0,
+        "max_rec": 0,
+        "max_tec": 0
+      },
+      "name": "fdcan_protocol_state",
+      "pass": true
+    },
+    {
+      "detail": {
+        "budget_us": 2000,
+        "max_duration_us": 0,
+        "write_failures": 0
+      },
+      "name": "fdcan_write",
+      "pass": true
+    },
+    {
+      "detail": {
+        "outcome_failures": 0,
+        "outcome_records": 0
+      },
+      "name": "fdcan_tx_outcome",
+      "pass": false
+    },
+    {
+      "detail": {
+        "duplicate_attempt_records": 0,
+        "match_status": {},
+        "phase5_records": 0,
+        "unique_attempts": 0
+      },
+      "name": "phase5_CAN_TX_RAW_correlation",
+      "pass": false
+    },
+    {
+      "detail": {
+        "can_tx_raw_control_records": 0,
+        "host_window_ms": 250.0,
+        "match_status": {}
+      },
+      "name": "CAN_TX_RAW_kvaser_correlation",
+      "pass": false
+    },
+    {
+      "detail": {
+        "data_confirmed": 0,
+        "match_status": {},
+        "note": "ID-only unique matches are reported but are not data-confirmed proof",
+        "phase5_attempts": 0
+      },
+      "name": "phase5_physical_kvaser_correlation",
+      "pass": false
+    },
+    {
+      "detail": {
+        "can_tx_raw": {
+          "candidates": 0,
+          "complete_count": 0,
+          "incomplete_count": 0,
+          "incomplete_examples": [],
+          "non_trailing_incomplete_count": 0
+        },
+        "expected_ids": [
+          "0x503",
+          "0x510",
+          "0x512",
+          "0x511",
+          "0x513"
+        ],
+        "kvaser": {
+          "candidates": 0,
+          "complete_count": 0,
+          "incomplete_count": 0,
+          "incomplete_examples": [],
+          "non_trailing_incomplete_count": 0
+        }
+      },
+      "name": "complete_5_id_burst_order",
+      "pass": false
+    },
+    {
+      "detail": {
+        "can_tx_raw": {
+          "applicable": false,
+          "checksum_failures": 0,
+          "continuity_failures": 0,
+          "failure_examples": [],
+          "frames": 0,
+          "reason": "fewer_than_two_0x503_frames"
+        },
+        "kvaser": {
+          "applicable": false,
+          "checksum_failures": 0,
+          "continuity_failures": 0,
+          "failure_examples": [],
+          "frames": 0,
+          "reason": "fewer_than_two_0x503_frames"
+        }
+      },
+      "name": "rolling_nibble_0x503_when_applicable",
+      "pass": true
+    },
+    {
+      "detail": {
+        "ids": [
+          "0xB9D61B65FDE56618"
+        ]
+      },
+      "name": "m7_single_boot_session",
+      "pass": true
+    },
+    {
+      "detail": {
+        "ids": [
+          "0x00000001"
+        ]
+      },
+      "name": "m4_single_boot_id",
+      "pass": true
+    },
+    {
+      "detail": {
+        "ids": [
+          "0x785FFC3B"
+        ]
+      },
+      "name": "firmware_single_build",
+      "pass": true
+    },
+    {
+      "detail": {
+        "expected": "portenta_h7_m7_mid_feeder_uart_j4_remote_servic",
+        "observed": [
+          "portenta_h7_m7_mid_feeder_uart_j4_remote_servic"
+        ]
+      },
+      "name": "firmware_environment",
+      "pass": true
+    },
+    {
+      "detail": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "name": "can_0x503_continuity",
+      "pass": false
+    },
+    {
+      "detail": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "name": "can_0x510_continuity",
+      "pass": false
+    },
+    {
+      "detail": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "name": "can_0x512_continuity",
+      "pass": false
+    },
+    {
+      "detail": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "name": "can_0x511_continuity",
+      "pass": false
+    },
+    {
+      "detail": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "name": "can_0x513_continuity",
+      "pass": false
+    },
+    {
+      "detail": {
+        "builtin_tx_fail_total": 0,
+        "can_drop_total": 0,
+        "fifo_overflow_total": 0,
+        "mcp_error_flags_total": 0,
+        "mcp_spi_error_total": 0,
+        "mcp_tx_fail_total": 0,
+        "usb_forced_reset_count": 0,
+        "usb_offer_overflow_total": 0,
+        "usb_reconnect_count": 0,
+        "wifi_offer_overflow_total": 0,
+        "wifi_socket_error_total": 0
+      },
+      "name": "board_health_counter_deltas",
+      "pass": true
+    },
+    {
+      "detail": {
+        "accepted_rc_frames": 0,
+        "can_tx_failed": 0,
+        "can_tx_success": 0,
+        "control_cycles": 0,
+        "cycle_deadline_misses": 0,
+        "ipc_rejects": 0,
+        "rx_bytes": 0,
+        "shared_publish_failures": 0
+      },
+      "name": "remote_runtime_integrity",
+      "pass": true
+    },
+    {
+      "detail": {
+        "counts": {}
+      },
+      "name": "strict_faults",
+      "pass": true
+    }
+  ],
+  "completed_requested_window": true,
+  "ended_utc": "2026-09-01T00:28:44.841+00:00",
+  "exception": null,
+  "faults": {
+    "counts": {},
+    "examples": []
+  },
+  "identity": {
+    "board_boot_events": 0,
+    "build_ids": [
+      "0x785FFC3B"
+    ],
+    "capability_environments": [
+      "portenta_h7_m7_mid_feeder_uart_j4_remote_servic"
+    ],
+    "m4_boot_ids": [
+      "0x00000001"
+    ],
+    "m7_boot_session_ids": [
+      "0xB9D61B65FDE56618"
+    ],
+    "m7_boot_session_sources": {
+      "0xB9D61B65FDE56618": [
+        "BOARD_HEALTH"
+      ]
+    }
+  },
+  "interrupted": false,
+  "kvaser": {
+    "control": {
+      "0x503": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "0x510": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "0x511": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "0x512": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      },
+      "0x513": {
+        "count": 0,
+        "last_data": null,
+        "period_max_ms": null,
+        "period_median_ms": null,
+        "period_p95_ms": null
+      }
+    },
+    "error_frames": 0,
+    "motion": {
+      "rpm_max": null,
+      "rpm_min": null,
+      "steering_deci_degree_max": null,
+      "steering_deci_degree_min": null
+    },
+    "read_errors": [],
+    "scope_frames": 203,
+    "total_frames": 203
+  },
+  "pass": false,
+  "remote_channel_motion": {
+    "ch2_max": 0,
+    "ch2_min": 0,
+    "ch2_span": 0,
+    "ch4_max": 0,
+    "ch4_min": 0,
+    "ch4_span": 0
+  },
+  "remote_counter_deltas": {
+    "accepted_rc_frames": 0,
+    "can_tx_failed": 0,
+    "can_tx_success": 0,
+    "control_cycles": 0,
+    "cycle_deadline_misses": 0,
+    "ipc_rejects": 0,
+    "rx_bytes": 0,
+    "shared_publish_failures": 0
+  },
+  "requested_seconds": 10.0,
+  "runtime_diagnostic": {
+    "attempts_observed": 0,
+    "fdcan_fault_samples": 0,
+    "fdcan_max_rec": 0,
+    "fdcan_max_tec": 0,
+    "fdcan_max_write_duration_us": 0,
+    "fdcan_outcome_failures": 0,
+    "fdcan_write_failures": 0,
+    "first": null,
+    "last": null,
+    "phase_counts": {},
+    "records": 0
+  },
+  "schema": 1,
+  "started_utc": "2026-09-01T00:28:34.573+00:00",
+  "typed": {
+    "bad_crc": 0,
+    "record_counts": {
+      "16": 250,
+      "18": 97,
+      "20": 9,
+      "26": 97,
+      "7": 110,
+      "8": 10,
+      "9": 1
+    },
+    "resync_discarded_bytes": 0,
+    "sequence_gap_events": 0,
+    "sequence_missing_modulo_total": 0
+  },
+  "usb": {
+    "cold_enumeration_observed": false,
+    "disconnect_count": 0,
+    "epoch_count": 1,
+    "firmware_connection_epochs": [
+      11
+    ],
+    "raw_artifacts": [
+      "usb_epoch_001_COM7.typed.bin"
+    ]
+  }
+}

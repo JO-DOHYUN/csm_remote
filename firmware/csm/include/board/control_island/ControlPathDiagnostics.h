@@ -25,11 +25,11 @@ inline uint8_t localReadyReason(bool present, uint32_t age_ms,
 struct ControlPathFirstFailure {
   uint32_t reason = 0;
   uint32_t observed_ms = 0;
-  uint32_t context[18] = {};
-  bool record(uint32_t failure, uint32_t now_ms, const uint32_t (&values)[18]) {
+  uint32_t context[24] = {};
+  bool record(uint32_t failure, uint32_t now_ms, const uint32_t (&values)[24]) {
     if (reason != 0u || failure == 0u) return false;
     observed_ms = now_ms;
-    for (unsigned i = 0; i < 18; ++i) context[i] = values[i];
+    for (unsigned i = 0; i < 24; ++i) context[i] = values[i];
     reason = failure;
     return true;
   }

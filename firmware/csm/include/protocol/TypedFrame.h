@@ -49,6 +49,10 @@ enum class RecordType : uint8_t {
   HostControlNShot = 25,
   ControlIslandHealth = 26,
   ControlPathDiagnostic = 27,
+  // Datagram-only realtime lane. Each UDP datagram contains exactly one
+  // complete typed frame; these IDs never appear on a TCP byte stream.
+  HostRealtimeStateV1 = 28,
+  RealtimeProofV1 = 29,
 };
 
 void wr_u16_le(uint8_t* p, uint16_t v);

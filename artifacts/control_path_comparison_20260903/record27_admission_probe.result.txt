@@ -1,0 +1,1 @@
+record=27 payload=340 medium=192 accepted=0 alloc_fail=1 queued=0 pool_used=0

@@ -25,7 +25,7 @@ enum class HostControlCloseReason : uint8_t {
 class HostControlAuthorityGate {
  public:
   void reset();
-  bool activate(bool lease_alive, bool authority_allowed,
+  bool activate(bool authority_active, bool authority_allowed,
                 uint8_t active_control_slots);
   bool beginClose(HostControlCloseReason reason,
                   uint8_t active_host_slots);

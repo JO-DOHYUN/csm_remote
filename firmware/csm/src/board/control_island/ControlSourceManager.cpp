@@ -14,20 +14,31 @@ void ControlSourceManager::begin(uint32_t m7_boot_id) {
   host_transaction_seen_ = false;
 }
 
-bool ControlSourceManager::acceptHostState(
+HostStateAdmission ControlSourceManager::acceptHostRealtimeState(
     uint32_t state_generation, uint8_t valid_mask, const uint8_t data005[8],
     const uint8_t data007[8], const uint8_t data364[8],
-    uint32_t lease_sequence) {
+    uint32_t realtime_sequence) {
   if (state_generation == 0u || data005 == nullptr || data007 == nullptr ||
       data364 == nullptr || (valid_mask & kAllLanePermitMask) !=
-          kAllLanePermitMask ||
-      (host_.image_generation != 0u &&
-       !sequenceNewer(state_generation, host_.image_generation))) {
-    return false;
+          kAllLanePermitMask || realtime_sequence == 0u) {
+    return HostStateAdmission::Rejected;
+  }
+  if (host_.image_generation != 0u &&
+      !sequenceNewer(state_generation, host_.image_generation)) {
+    if (state_generation == host_.image_generation && host_.valid &&
+        memcmp(host_.lanes[kLane005].data, data005, 8u) == 0 &&
+        memcmp(host_.lanes[kLane007].data, data007, 8u) == 0 &&
+        memcmp(host_.lanes[kLane364].data, data364, 8u) == 0) {
+      host_.lease_sequence = realtime_sequence;
+      return HostStateAdmission::AcceptedUnchanged;
+    }
+    return HostStateAdmission::Rejected;
   }
   host_.valid = true;
   host_.image_generation = state_generation;
-  host_.lease_sequence = lease_sequence;
+  // The legacy IPC field is an opaque source-update sequence on the M4 side;
+  // realtime Host control fills it from the UDP publication sequence.
+  host_.lease_sequence = realtime_sequence;
   const uint8_t* source[kLaneCount] = {data005, data007, data364};
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     host_.lanes[lane].value_generation = state_generation;
@@ -37,7 +48,7 @@ bool ControlSourceManager::acceptHostState(
   // A coherent state replacement cancels any previous event primitive. A new
   // strict-N transaction must be explicitly admitted after this state.
   host_.transaction = {};
-  return true;
+  return HostStateAdmission::AcceptedNew;
 }
 
 bool ControlSourceManager::acceptHostNShot(
@@ -65,12 +76,6 @@ void ControlSourceManager::resetHostTransportEpoch() {
   host_.transaction = {};
   last_host_transaction_id_ = 0u;
   host_transaction_seen_ = false;
-}
-
-void ControlSourceManager::renewHostLease(uint32_t lease_sequence) {
-  if (host_.valid && lease_sequence != 0u) {
-    host_.lease_sequence = lease_sequence;
-  }
 }
 
 void ControlSourceManager::clearHost() {

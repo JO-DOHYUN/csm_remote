@@ -14,12 +14,19 @@ struct SourceImage {
   BoundedTxTransaction transaction = {};
 };
 
+enum class HostStateAdmission : uint8_t {
+  Rejected = 0,
+  AcceptedNew = 1,
+  AcceptedUnchanged = 2,
+};
+
 class ControlSourceManager {
  public:
   void begin(uint32_t m7_boot_id);
-  bool acceptHostState(uint32_t state_generation, uint8_t valid_mask,
-                       const uint8_t data005[8], const uint8_t data007[8],
-                       const uint8_t data364[8], uint32_t lease_sequence);
+  HostStateAdmission acceptHostRealtimeState(
+      uint32_t state_generation, uint8_t valid_mask,
+      const uint8_t data005[8], const uint8_t data007[8],
+      const uint8_t data364[8], uint32_t realtime_sequence);
   bool acceptHostNShot(uint32_t transaction_id, uint8_t lane,
                        uint16_t successful_tx_count,
                        uint32_t payload_generation, const uint8_t data[8]);
@@ -27,7 +34,6 @@ class ControlSourceManager {
   // transaction-id domain. Ordinary state replacement, DISARM and re-ARM do
   // not make an already consumed transaction reusable.
   void resetHostTransportEpoch();
-  void renewHostLease(uint32_t lease_sequence);
   void clearHost();
   void updateRemote(uint32_t image_generation, uint32_t lease_sequence,
                     const LaneExecutionImage lanes[kLaneCount], bool valid);

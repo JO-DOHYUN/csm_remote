@@ -1,0 +1,54 @@
+--------- beginning of main
+--------- beginning of system
+09-03 16:15:31.079 12964 12964 I AndroidJUnitRunner: newApplication com.hamt.vsm.android.VsmApplication
+09-03 16:15:31.390 12964 12964 I AndroidJUnitRunner: onCreate Bundle[mParcelledData.dataSize=316]
+09-03 16:15:31.396 12964 12964 D AndroidJUnitRunner: Use the raw file system for managing file I/O.
+09-03 16:15:31.451 12964 12987 D AndroidJUnitRunner: onStart is called.
+09-03 16:15:31.623 12964 12987 I TestRunner: run started: 1 tests
+09-03 16:15:31.632 12964 12987 I TestRunner: started: simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilRealTouchDeviceTest)
+09-03 16:16:10.764 12964 12987 I VSM_CONTROL_COMPARISON: window=real-dual elapsedMs=206 samples=0 maxDispatchGapMs=206 state=ServiceControlState(available=true, selectedBus=1, drivePermille=0, driveWireSpeed=0, driveWireDirection=0, steeringPermille=0, steeringByte=130, driveHeld=false, steeringHeld=true, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=ControlActive, stopOutcome=None, armRequested=true, armAcknowledged=true, gateReady=true, blockReason=null, downlinkWrites=86, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=94, controlLastAckCommandId=85, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=3397, RxAtMs=9534944, AckCommandId=85, AckAtMs=9534944, AckCsmMonoUs=2989486318, WriteCommandId=86, WriteEpoch=1, WriteStartedMs=9535038, WriteInProgress=0, WriteCompletedMs=9535040, WriteSuccess=1, HeartbeatWriteId=86, HeartbeatWriteStartedMs=9535038, HeartbeatWriteCompletedMs=9535040, HeartbeatWriteSuccess=1, WriteDurationUs=1356, WriteMaxUs=5082}, firstControlFailureEvidence=null, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+09-03 16:16:10.765 12964 12987 I VSM_CONTROL_COMPARISON: window=real-dual elapsedMs=206 observationAge=77 localReason=0 localAge=7 tick=597859 driveTx=597858 steeringTx=149465
+09-03 16:16:10.774 12964 12987 I VSM_CONTROL_COMPARISON: window=real-dual-final elapsedMs=299 samples=0 simultaneous=0 maxDispatchGapMs=206 state=ServiceControlState(available=true, selectedBus=1, drivePermille=99, driveWireSpeed=200, driveWireDirection=96, steeringPermille=-85, steeringByte=140, driveHeld=true, steeringHeld=true, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=ControlActive, stopOutcome=None, armRequested=true, armAcknowledged=true, gateReady=true, blockReason=null, downlinkWrites=94, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=1, controlLastAckCommandId=92, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=3670, RxAtMs=9535141, AckCommandId=92, AckAtMs=9535141, AckCsmMonoUs=2989685872, WriteCommandId=94, WriteEpoch=1, WriteStartedMs=9535145, WriteInProgress=0, WriteCompletedMs=9535146, WriteSuccess=1, HeartbeatWriteId=93, HeartbeatWriteStartedMs=9535143, HeartbeatWriteCompletedMs=9535144, HeartbeatWriteSuccess=1, WriteDurationUs=926, WriteMaxUs=5082}, firstControlFailureEvidence=null, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+09-03 16:16:10.884 12964 12987 W VSM_CONTROL_FIRST_FAILURE: reason=real dual joystick test cleanup atMs=9535264 epoch=1 boot=BD5AC4F24CE5C107 pendingHeartbeat=null lastHeartbeatMs=9535242 {RxBytes=3982, RxAtMs=9535248, AckCommandId=100, AckAtMs=9535248, AckCsmMonoUs=2989792749, WriteCommandId=101, WriteEpoch=1, WriteStartedMs=9535244, WriteInProgress=0, WriteCompletedMs=9535245, WriteSuccess=1, HeartbeatWriteId=100, HeartbeatWriteStartedMs=9535242, HeartbeatWriteCompletedMs=9535243, HeartbeatWriteSuccess=1, WriteDurationUs=1179, WriteMaxUs=5082}
+09-03 16:16:13.827 12964 12987 E TestRunner: failed: simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilRealTouchDeviceTest)
+09-03 16:16:13.839 12964 12987 E TestRunner: ----- begin exception -----
+09-03 16:16:13.839 12964 12987 E TestRunner: java.lang.AssertionError: Both real pointer paths must remain held: ServiceControlState(available=true, selectedBus=1, drivePermille=0, driveWireSpeed=0, driveWireDirection=0, steeringPermille=0, steeringByte=130, driveHeld=false, steeringHeld=true, centering=false, ehbEnabled=false, ehbRequest=0, ehbOpenLoop=false, ehbPulseCount=0, ehbPulseActive=false, phase=ControlActive, stopOutcome=None, armRequested=true, armAcknowledged=true, gateReady=true, blockReason=null, downlinkWrites=86, downlinkFailures=0, controlEndpoint=192.168.4.1:3334, controlConnectionPhase=Connected, controlIntegrity=Live, controlConnectionEpoch=1, controlBootSessionId=BD5AC4F24CE5C107, controlAckAgeMillis=94, controlLastAckCommandId=85, controlLastAckAccepted=true, controlLastAckReason=0, controlPathEvidence={RxBytes=3397, RxAtMs=9534944, AckCommandId=85, AckAtMs=9534944, AckCsmMonoUs=2989486318, WriteCommandId=86, WriteEpoch=1, WriteStartedMs=9535038, WriteInProgress=0, WriteCompletedMs=9535040, WriteSuccess=1, HeartbeatWriteId=86, HeartbeatWriteStartedMs=9535038, HeartbeatWriteCompletedMs=9535040, HeartbeatWriteSuccess=1, WriteDurationUs=1356, WriteMaxUs=5082}, firstControlFailureEvidence=null, admissionPressureRejects=0, maxAdmissionRejectsWithoutHwProgress=0, steeringEndurance=SteeringEnduranceTestState(available=true, phase=Idle, durationHours=1, elapsedMillis=0, remainingMillis=3600000, targetDegrees=0, reversals=0, issue=null, observationIssue=null, evidenceComplete=true))
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.Assert.fail(Assert.java:89)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.Assert.assertTrue(Assert.java:42)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at com.hamt.vsm.android.ServiceHilRealTouchDeviceTest.simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(ServiceHilRealTouchDeviceTest.kt:83)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at java.lang.reflect.Method.invoke(Native Method)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at androidx.test.ext.junit.runners.AndroidJUnit4.run(AndroidJUnit4.java:162)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.Suite.runChild(Suite.java:128)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.Suite.runChild(Suite.java:27)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at androidx.test.internal.runner.TestExecutor.execute(TestExecutor.java:68)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at androidx.test.internal.runner.TestExecutor.execute(TestExecutor.java:59)
+09-03 16:16:13.839 12964 12987 E TestRunner: 	at androidx.test.runner.AndroidJUnitRunner.onStart(AndroidJUnitRunner.java:467)
+09-03 16:16:13.840 12964 12987 E TestRunner: 	at android.app.Instrumentation$InstrumentationThread.run(Instrumentation.java:2145)
+09-03 16:16:13.841 12964 12987 E TestRunner: ----- end exception -----
+09-03 16:16:13.867 12964 12987 I TestRunner: finished: simultaneousDriveAndSteeringJoysticksRetainArmForTenMinutes(com.hamt.vsm.android.ServiceHilRealTouchDeviceTest)
+09-03 16:16:13.884 12964 12987 I TestRunner: run finished: 1 tests, 1 failed, 0 ignored

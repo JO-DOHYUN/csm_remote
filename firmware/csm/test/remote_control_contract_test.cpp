@@ -6,8 +6,7 @@
 #include "board/control_island/ControlPathDiagnostics.h"
 #include "board/control_island/ControlSourceManager.h"
 #include "board/control_island/M4StaticCyclicExecutor.h"
-#include "board/control/HostCommandFreshness.h"
-#include "board/control/HostControlSession.h"
+#include "board/control/HostRealtimeAuthority.h"
 #include "board/remote/CrsfParser.h"
 #include "board/remote/CrsfForegroundBudget.h"
 #include "board/remote/R16smReceiverProfile.h"
@@ -16,6 +15,8 @@
 #include "board/remote/RemoteControlSource.h"
 #include "board/remote/RemoteTypes.h"
 #include "protocol/ControlProtocol.h"
+#include "protocol/RealtimeControl.h"
+#include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
 
 using namespace csm::board::control_island;
@@ -36,7 +37,7 @@ void testLocalReadyTruthAndFirstFailureRetention() {
   assert(localReadyReason(true, 0, 500, required | kHealthFlagErrorPassive) == 5);
   assert(localReadyReason(true, 0, 500, required | kHealthFlagTrackingFault) == 6);
   ControlPathFirstFailure first;
-  uint32_t context[18] = {123, 456};
+  uint32_t context[24] = {123, 456};
   assert(first.record(1, 0xFFFFFFF0u, context));
   context[0] = 999;
   assert(!first.record(2, 20, context)); // reconnect/secondary failure cannot replace it
@@ -211,7 +212,9 @@ void testSourceManagerOwnershipAndEpochs() {
   ControlSourceManager manager;
   manager.begin(9u);
   uint8_t a[8] = {1}, b[8] = {2}, c[8] = {3};
-  assert(manager.acceptHostState(1u, kAllLanePermitMask, a, b, c, 1u));
+  assert(manager.acceptHostRealtimeState(1u, kAllLanePermitMask,
+                                         a, b, c, 1u) ==
+         HostStateAdmission::AcceptedNew);
   manager.select(ControlSource::Host);
   const uint32_t host_epoch = manager.sourceEpoch();
   auto host = manager.snapshot(kAllLanePermitMask, 41u);
@@ -234,22 +237,30 @@ void testHostNShotTransactionWatermarkSurvivesLifecycle() {
   ControlSourceManager manager;
   manager.begin(9u);
   uint8_t a[8] = {1}, b[8] = {2}, c[8] = {3}, pulse[8] = {4};
-  assert(manager.acceptHostState(100u, kAllLanePermitMask, a, b, c, 1u));
+  assert(manager.acceptHostRealtimeState(100u, kAllLanePermitMask,
+                                         a, b, c, 1u) ==
+         HostStateAdmission::AcceptedNew);
   assert(manager.acceptHostNShot(100u, kLane364, 2u, 100u, pulse));
 
   // A newer coherent state cancels the active event but cannot reopen an old
   // transaction ID, even when the command/state generation itself is newer.
-  assert(manager.acceptHostState(101u, kAllLanePermitMask, a, b, c, 2u));
+  assert(manager.acceptHostRealtimeState(101u, kAllLanePermitMask,
+                                         a, b, c, 2u) ==
+         HostStateAdmission::AcceptedNew);
   assert(!manager.acceptHostNShot(50u, kLane364, 2u, 101u, pulse));
 
   manager.clearHost();  // DISARM / authority close.
-  assert(manager.acceptHostState(102u, kAllLanePermitMask, a, b, c, 3u));
+  assert(manager.acceptHostRealtimeState(102u, kAllLanePermitMask,
+                                         a, b, c, 3u) ==
+         HostStateAdmission::AcceptedNew);
   assert(!manager.acceptHostNShot(50u, kLane364, 2u, 102u, pulse));
   assert(manager.acceptHostNShot(101u, kLane364, 2u, 102u, pulse));
 
   manager.resetHostTransportEpoch();
   manager.clearHost();
-  assert(manager.acceptHostState(1u, kAllLanePermitMask, a, b, c, 1u));
+  assert(manager.acceptHostRealtimeState(1u, kAllLanePermitMask,
+                                         a, b, c, 1u) ==
+         HostStateAdmission::AcceptedNew);
   assert(manager.acceptHostNShot(50u, kLane364, 2u, 1u, pulse));
 }
 
@@ -453,8 +464,9 @@ void testTransmitterOffOnAndHostToRcTakeover() {
   uint8_t lane005[8] = {1u};
   uint8_t lane007[8] = {2u};
   uint8_t lane364[8] = {3u};
-  assert(manager.acceptHostState(1u, kAllLanePermitMask,
-                                 lane005, lane007, lane364, 1u));
+  assert(manager.acceptHostRealtimeState(1u, kAllLanePermitMask,
+                                         lane005, lane007, lane364, 1u) ==
+         HostStateAdmission::AcceptedNew);
   manager.select(ControlSource::Host);
   assert(manager.activeSource() == ControlSource::Host);
 
@@ -705,89 +717,128 @@ void testBringupTraceMonotonicFailureRetention() {
   assert(failed_then_advanced.failure_detail == 499999u);
 }
 
-void testHostSessionCausalAckProofAndConsumedWatermark() {
-  csm::board::control::HostCommandFreshness freshness;
-  assert(!freshness.begin({}));
-  csm::board::control::HostCommandFreshnessConfig limits;
-  limits.proof_timeout_ms = 300u;
-  assert(freshness.begin(limits));
-  using csm::board::control::HostFreshnessResult;
+void testRealtimeWireAndBidirectionalAuthority() {
+  using csm::board::control::HostRealtimeAdmission;
+  using csm::board::control::HostRealtimeAuthority;
 
-  // T01: a bootstrap heartbeat is ACKable but cannot qualify liveness.
-  assert(freshness.acceptHeartbeat(1u, 0u, 1000u, 2000u) ==
-         HostFreshnessResult::BootstrapAccepted);
-  assert(!freshness.qualified() && !freshness.proofAlive(2000u));
+  constexpr uint64_t kBoot = 0x1020304050607080ull;
+  constexpr uint32_t kTimeoutMs = 300u;
+  HostRealtimeAuthority authority;
+  assert(!authority.begin(0u, kTimeoutMs));
+  assert(authority.begin(kBoot, kTimeoutMs));
 
-  // T02/T05: only a causal echo qualifies; forward commands then pass.
-  assert(freshness.acceptHeartbeat(2u, 1u, 500000u, 2100u) ==
-         HostFreshnessResult::Accepted);
-  assert(freshness.qualified());
-  assert(freshness.acceptCommand(3u, 2150u) ==
-         HostFreshnessResult::Accepted);
+  csm::HostRealtimeStateV1 state;
+  state.boot_session_id = kBoot;
+  state.control_contract_id = csm::kHostControlStateContractId;
+  state.valid_mask = kAllLanePermitMask;
+  state.state_generation = 1u;
+  state.realtime_sequence = 1u;
+  assert(authority.accept(state, 100u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(!authority.preArmQualified(100u));
+  assert(authority.proofSequence() == 1u);
 
-  // T03/T07: a wrong echo consumes its ID but refreshes neither pending nor
-  // proof time, so repeated wrong proof cannot keep authority alive.
-  assert(freshness.acceptHeartbeat(4u, 1u, 600000u, 2200u) ==
-         HostFreshnessResult::ProofMismatch);
-  assert(freshness.proofAlive(2399u));
-  assert(freshness.acceptHeartbeat(5u, 1u, 700000u, 2399u) ==
-         HostFreshnessResult::ProofMismatch);
-  freshness.update(2401u);
-  assert(!freshness.proofAlive(2401u));
-  assert(freshness.proofTimeoutTotal() == 1u);
+  // A returned cumulative proof, not TCP connection state, qualifies ARM.
+  state.realtime_sequence = 2u;
+  state.proof_ref = 1u;
+  assert(authority.accept(state, 120u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.preArmQualified(120u));
+  uint8_t reason = 0xFFu;
+  assert(authority.arm(100u, 121u, true, true, &reason));
+  assert(reason == csm::ControlReasonOk && authority.authorityEpoch() == 100u);
 
-  // T04/T06/T08: consumed IDs remain replay-protected across proof timeout and
-  // policy rejection; a late heartbeat is bootstrap only, never auto-resume.
-  assert(freshness.acceptCommand(5u, 2402u) == HostFreshnessResult::Replay);
-  assert(freshness.acceptCommand(6u, 2402u) ==
-         HostFreshnessResult::ProofRequired);
-  assert(freshness.acceptCommand(6u, 2403u) == HostFreshnessResult::Replay);
-  assert(freshness.acceptHeartbeat(7u, 2u, 800000u, 2404u) ==
-         HostFreshnessResult::BootstrapAccepted);
-  assert(!freshness.qualified());
-  assert(freshness.acceptHeartbeat(8u, 7u, 900000u, 2410u) ==
-         HostFreshnessResult::Accepted);
+  state.mode = csm::kHostRealtimeModeActive;
+  state.authority_epoch = 100u;
+  state.realtime_sequence = 3u;
+  state.proof_ref = 2u;
+  assert(authority.accept(state, 130u) ==
+         HostRealtimeAdmission::AcceptedActive);
+  authority.noteStateApplied(state.state_generation, true);
+  assert(authority.healthy(130u));
+  assert((authority.proofFlags(130u) &
+          (csm::kRealtimeProofFlagForwardFresh |
+           csm::kRealtimeProofFlagReturnFresh |
+           csm::kRealtimeProofFlagAuthorityActive |
+           csm::kRealtimeProofFlagStateApplied)) != 0u);
 
-  // T09: uint32 command IDs advance correctly through wrap.
-  freshness.resetTransportEpoch();
-  assert(freshness.acceptHeartbeat(0xFFFFFFFEu, 0u, 0u, 10u) ==
-         HostFreshnessResult::BootstrapAccepted);
-  assert(freshness.acceptHeartbeat(0xFFFFFFFFu, 0xFFFFFFFEu, 0u, 20u) ==
-         HostFreshnessResult::Accepted);
-  assert(freshness.acceptCommand(1u, 21u) == HostFreshnessResult::Accepted);
-  assert(freshness.acceptCommand(0xFFFFFFFFu, 22u) ==
-         HostFreshnessResult::Replay);
+  // Duplicate/reordered packets cannot refresh either direction. A TCP
+  // transaction reconnect does not revoke or resurrect live UDP authority.
+  assert(authority.accept(state, 200u) ==
+         HostRealtimeAdmission::DuplicateOrReordered);
+  authority.resetTransactionEpoch();
+  assert(authority.active() && authority.healthy(200u));
 
-  csm::board::control::HostControlSession session;
-  session.begin(0u);
-  assert(session.arm(0u, 500u, true) == csm::ControlReasonHostTimeout);
-  session.heartbeat(10u);
-  assert(session.arm(10u, 500u, true) == csm::ControlReasonOk);
-  const uint32_t first = session.activationEpoch();
-  session.update(511u);
-  // T11: proof can remain alive while the independent lease closes.
-  assert(!session.leaseAlive(511u) && session.timeoutCount() == 1u);
-  session.heartbeat(512u);
-  assert(session.arm(512u, 500u, true) == csm::ControlReasonOk);
-  assert(session.activationEpoch() > first);
+  // Forward traffic with a stale proof reference cannot keep return-path
+  // liveness alive. Both directions are receiver-local and fail closed.
+  state.realtime_sequence = 4u;
+  state.proof_ref = 2u;
+  assert(authority.accept(state, 300u) ==
+         HostRealtimeAdmission::AcceptedActive);
+  assert(authority.update(431u));
+  assert(!authority.active() && authority.timeoutTotal() == 1u);
 
-  // T10: an otherwise live lease cannot compensate for expired proof.
-  freshness.resetTransportEpoch();
-  assert(freshness.acceptHeartbeat(10u, 0u, 0u, 1000u) ==
-         HostFreshnessResult::BootstrapAccepted);
-  assert(freshness.acceptHeartbeat(11u, 10u, 0u, 1010u) ==
-         HostFreshnessResult::Accepted);
-  session.heartbeat(1010u);
-  assert(session.arm(1010u, 1000u, true) == csm::ControlReasonOk);
-  freshness.update(1311u);
-  assert(!freshness.proofAlive(1311u));
-  assert(session.leaseAlive(1311u));
+  // Timeout never reactivates old ACTIVE. PRE-ARM proof plus a strictly newer
+  // explicit activation epoch is required, including for the same source.
+  state.mode = csm::kHostRealtimeModePreArm;
+  state.authority_epoch = 0u;
+  state.realtime_sequence = 5u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 500u) ==
+         HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.preArmQualified(500u));
+  assert(!authority.arm(100u, 501u, true, true, &reason));
+  assert(reason == csm::ControlReasonReplay);
+  assert(authority.arm(101u, 501u, true, true, &reason));
+  assert(authority.update(802u));  // no first ACTIVE state arrived
+
+  // TCP transaction commands use a separate replay domain and wrap safely.
+  assert(authority.consumeTransactionCommand(0xFFFFFFFEu));
+  assert(authority.consumeTransactionCommand(0xFFFFFFFFu));
+  assert(authority.consumeTransactionCommand(1u));
+  assert(!authority.consumeTransactionCommand(0xFFFFFFFFu));
+  authority.resetTransactionEpoch();
+  assert(authority.consumeTransactionCommand(5u));
+
+  // Exact 64-byte payload and one typed frame per datagram are wire facts.
+  uint8_t payload[csm::kHostRealtimeStateV1PayloadLen] = {};
+  payload[csm::kHostRealtimeStateSchemaOffset] = csm::kHostRealtimeStateSchema;
+  payload[csm::kHostRealtimeStateModeOffset] = csm::kHostRealtimeModePreArm;
+  csm::wr_u64_le(payload + csm::kHostRealtimeStateBootSessionOffset, kBoot);
+  csm::wr_u32_le(payload + csm::kHostRealtimeStateSequenceOffset, 77u);
+  csm::wr_u32_le(payload + csm::kHostRealtimeStateGenerationOffset, 9u);
+  csm::wr_u32_le(payload + csm::kHostRealtimeStateContractIdOffset,
+                 csm::kHostControlStateContractId);
+  payload[csm::kHostRealtimeStateValidMaskOffset] = kAllLanePermitMask;
+  uint8_t frame[96] = {};
+  size_t frame_length = 0u;
+  assert(csm::encode_typed_frame(
+      frame, sizeof(frame), csm::RecordType::HostRealtimeStateV1, payload,
+      sizeof(payload), 8u, 0u, &frame_length));
+  assert(frame_length == csm::encoded_typed_frame_len(64u));
+  csm::HostRealtimeStateV1 decoded;
+  assert(csm::decode_host_realtime_datagram(frame, frame_length, &decoded) ==
+         csm::RealtimeFrameDecodeResult::Accepted);
+  assert(decoded.boot_session_id == kBoot && decoded.realtime_sequence == 77u &&
+         decoded.state_generation == 9u);
+  frame[frame_length - 1u] ^= 1u;
+  assert(csm::decode_host_realtime_datagram(frame, frame_length, &decoded) ==
+         csm::RealtimeFrameDecodeResult::BadCrc);
+
+  uint8_t proof[64] = {};
+  assert(csm::encode_realtime_proof_v1(
+             proof, sizeof(proof), 1u, 1000u, kBoot, 101u, 4u, 77u,
+             9u, csm::kRealtimeProofStatusActive,
+             csm::kRealtimeProofReasonOk,
+             csm::kRealtimeProofFlagForwardFresh) ==
+         csm::encoded_typed_frame_len(csm::kRealtimeProofV1PayloadLen));
+  assert(proof[3] == static_cast<uint8_t>(csm::RecordType::RealtimeProofV1));
 }
 }  // namespace
 
 int main() {
   testLocalReadyTruthAndFirstFailureRetention();
-  testHostSessionCausalAckProofAndConsumedWatermark();
+  testRealtimeWireAndBidirectionalAuthority();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfForegroundBudgetIsByteTimeAndWrapBounded();
   testCrsfStreamResynchronizationAndR16smFixture();

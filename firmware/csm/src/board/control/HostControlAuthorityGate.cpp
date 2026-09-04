@@ -7,10 +7,10 @@ void HostControlAuthorityGate::reset() {
   close_reason_ = HostControlCloseReason::None;
 }
 
-bool HostControlAuthorityGate::activate(bool lease_alive,
+bool HostControlAuthorityGate::activate(bool authority_active,
                                         bool authority_allowed,
                                         uint8_t active_control_slots) {
-  if (phase_ != HostControlPhase::Inactive || !lease_alive ||
+  if (phase_ != HostControlPhase::Inactive || !authority_active ||
       !authority_allowed || active_control_slots != 0) {
     return false;
   }

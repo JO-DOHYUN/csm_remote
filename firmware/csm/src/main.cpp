@@ -13,9 +13,8 @@
 #include "board/CapabilityPublisher.h"
 #include "board/HostDownlinkParser.h"
 #include "board/StatusLed.h"
-#include "board/control/HostCommandFreshness.h"
 #include "board/control/HostControlAuthorityGate.h"
-#include "board/control/HostControlSession.h"
+#include "board/control/HostRealtimeAuthority.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
 #include "board/control_island/ControlPathDiagnostics.h"
@@ -33,6 +32,7 @@
 #include "board/uplink/UsbCdcSink.h"
 #include "board/uplink/WifiTcpSink.h"
 #include "protocol/HostCommands.h"
+#include "protocol/RealtimeControl.h"
 #include "protocol/TypedFrame.h"
 #include "protocol/TypedRecords.h"
 
@@ -85,6 +85,9 @@
 #endif
 #ifndef BOARD_WIFI_CONTROL_TCP_PORT
 #define BOARD_WIFI_CONTROL_TCP_PORT 3334
+#endif
+#ifndef BOARD_WIFI_REALTIME_UDP_PORT
+#define BOARD_WIFI_REALTIME_UDP_PORT 3335
 #endif
 
 #ifndef BOARD_WIFI_AP_CHANNEL
@@ -457,8 +460,8 @@
 #define BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET 256
 #endif
 
-#ifndef BOARD_HOST_PROOF_TIMEOUT_MS
-#define BOARD_HOST_PROOF_TIMEOUT_MS 300
+#ifndef BOARD_HOST_REALTIME_LIVENESS_TIMEOUT_MS
+#define BOARD_HOST_REALTIME_LIVENESS_TIMEOUT_MS 350
 #endif
 
 #define BOARD_ENABLE_HOST_CAN_TX_ANY (BOARD_ENABLE_HOST_CAN_TX || BOARD_ENABLE_HOST_CAN_TX_BUILTIN || BOARD_ENABLE_HOST_CAN_TX_MCP2515)
@@ -942,14 +945,13 @@ static volatile uint32_t can_queue_high_water = 0;
 static volatile uint32_t can_segment_enqueue_fail_total = 0;
 static uint32_t pending_can_segment_enqueue_fail_frames = 0;
 static uint32_t host_frame_crc_failed_total = 0;
-static uint32_t host_heartbeat_total = 0;
 static uint32_t host_control_session_total = 0;
 static uint32_t host_control_state_request_total = 0;
 static uint32_t __attribute__((unused)) host_can_tx_accepted_total = 0;
 static uint32_t host_can_tx_rejected_total = 0;
 static uint32_t host_can_tx_transient_rejected_total = 0;
-static csm::board::control::HostCommandFreshness host_command_freshness;
-static bool host_command_freshness_ok = false;
+static csm::board::control::HostRealtimeAuthority host_realtime_authority;
+static bool host_realtime_authority_ok = false;
 static csm::board::control::HostControlAuthorityGate host_authority_gate;
 static csm::board::control_island::ControlSourceManager control_source_manager;
 static csm::board::control_island::ControlHealthPayload control_island_health = {};
@@ -959,7 +961,6 @@ static uint32_t control_snapshot_publish_total = 0;
 static uint32_t control_snapshot_publish_failed_total = 0;
 static uint32_t last_control_snapshot_publish_ms = 0;
 static uint32_t last_control_health_emit_ms = 0;
-static uint32_t host_control_lease_sequence = 0;
 static bool control_island_health_valid = false;
 static csm::board::control_island::BringupTracePayload control_island_bringup = {};
 static uint32_t control_island_bringup_sequence = 0;
@@ -979,9 +980,17 @@ static bool control_path_observing = false;
 static uint32_t control_service_last_ms = 0;
 static uint32_t control_service_gap_ms = 0;
 static uint32_t control_service_gap_max_ms = 0;
-static uint32_t control_heartbeat_id = 0;
-static uint32_t control_heartbeat_rx_ms = 0;
-static uint32_t control_heartbeat_ack_ref = 0;
+static uint64_t product_boot_session_id = 0;
+static uint32_t realtime_processed_total = 0;
+static uint32_t realtime_decode_reject_total = 0;
+static uint32_t realtime_boot_reject_total = 0;
+static uint32_t realtime_contract_reject_total = 0;
+static uint32_t realtime_state_reject_total = 0;
+static uint32_t realtime_epoch_reject_total = 0;
+static uint32_t realtime_reorder_reject_total = 0;
+static uint32_t realtime_last_processed_ms = 0;
+static uint32_t realtime_process_max_gap_ms = 0;
+static uint16_t realtime_proof_frame_sequence = 0;
 
 static volatile bool encoder_index_pending = false;
 static volatile uint64_t encoder_index_mono_us = 0;
@@ -1095,7 +1104,6 @@ static uint16_t encoder_last_count = 0;
 static int64_t encoder_position = 0;
 static uint32_t encoder_wrap_events = 0;
 static uint32_t encoder_fault_events = 0;
-static csm::board::control::HostControlSession host_control_session;
 static uint32_t remote_activation_epoch = 0u;
 static bool remote_source_was_valid = false;
 #if BOARD_ENABLE_REMOTE_CONTROL
@@ -2656,9 +2664,8 @@ static void emit_capability() {
 #endif
 #if BOARD_ENABLE_HOST_DOWNLINK
   config.supported_downlink_records =
-      (1u << static_cast<uint8_t>(RecordType::HostControlStateV2)) |
+      (1u << static_cast<uint8_t>(RecordType::HostRealtimeStateV1)) |
       (1u << static_cast<uint8_t>(RecordType::HostControlNShot)) |
-      (1u << static_cast<uint8_t>(RecordType::HostHeartbeat)) |
       (1u << static_cast<uint8_t>(RecordType::HostControlSession)) |
       (1u << static_cast<uint8_t>(RecordType::HostQueryCapability));
 #else
@@ -2739,14 +2746,14 @@ static void emit_capability() {
   config.hardware_tx_slots = csm::board::control_island::kLaneCount;
   config.host_software_retention = 0;
   config.hw_pending_stale_us = 0;
-  config.host_proof_timeout_ms = host_command_freshness.proofTimeoutMs();
-  config.host_proof_ok_total = host_command_freshness.proofOkTotal();
-  config.host_replay_total = host_command_freshness.replayTotal();
-  config.host_proof_max_gap_ms = host_command_freshness.maxProofGapMs();
+  config.host_proof_timeout_ms = host_realtime_authority.livenessTimeoutMs();
+  config.host_proof_ok_total = host_realtime_authority.proofOkTotal();
+  config.host_replay_total = host_realtime_authority.replayTotal();
+  config.host_proof_max_gap_ms = host_realtime_authority.maxProofRefGapMs();
   config.host_proof_mismatch_total =
-      host_command_freshness.proofMismatchTotal();
+      host_realtime_authority.proofMismatchTotal();
   config.host_proof_timeout_total =
-      host_command_freshness.proofTimeoutTotal();
+      host_realtime_authority.timeoutTotal();
   config.admission_reject_total =
       host_can_tx_rejected_total - host_can_tx_transient_rejected_total;
   config.transient_reject_total = host_can_tx_transient_rejected_total;
@@ -3711,8 +3718,10 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[53] = static_cast<uint8_t>(sizeof(payload));
   payload[54] = 0u;  // Reserved: retired GPIO safety state.
   payload[55] = 0u;  // Reserved: retired GPIO fault bits.
-  wr_u32_le(&payload[56], host_control_session.heartbeatAgeMs(millis()));
-  wr_u32_le(&payload[60], host_control_session.leaseRemainingMs(millis()));
+  // v2 compatibility offsets 56/60 are retired heartbeat/lease fields.
+  // Realtime ages have their own record-27 fields and are never inferred here.
+  wr_u32_le(&payload[56], UINT32_MAX);
+  wr_u32_le(&payload[60], 0u);
   wr_u32_le(&payload[64], host_frame_crc_failed_total);
   wr_u32_le(&payload[68], host_control_state_request_total);
   wr_u32_le(&payload[72], host_can_tx_accepted_total);
@@ -3741,7 +3750,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
   payload[csm::kBoardHealthMcpLastIntLowOffset] = mcp_service.last_int_low ? 1 : 0;
 #endif
   wr_u32_le(&payload[108], queued);
-  wr_u32_le(&payload[112], host_control_session.activationEpoch());
+  wr_u32_le(&payload[112], host_realtime_authority.authorityEpoch());
   uint32_t backend_flags = 0;
   backend_flags |= can_backend_ok ? (1u << 0) : 0;
 #if BOARD_ENABLE_FEEDER_UART
@@ -3755,7 +3764,7 @@ static void emit_board_health(const EncoderSnapshot& snap) {
       control_island_runtime_ready(millis()) ? (1u << 1) : 0;
 #endif
   wr_u32_le(&payload[116], backend_flags);
-  wr_u32_le(&payload[120], host_heartbeat_total);
+  wr_u32_le(&payload[120], 0u);
   wr_u32_le(&payload[124], host_control_session_total);
   wr_u32_le(&payload[128], can_bus_runtime[0].rx_total);
   wr_u32_le(&payload[132], can_bus_runtime[0].drop_total);
@@ -4325,19 +4334,28 @@ static void record_control_path_failure(uint32_t reason, uint32_t now_ms) {
   if (!control_path_observing || control_path_first.reason != 0u) return;
   const auto transport = wifi_tcp_sink.controlEvidence();
   const auto call = wifi_tcp_sink.workerCallSnapshot();
-  const uint32_t context[18] = {
+  const auto realtime = wifi_tcp_sink.realtimeEvidence();
+  const uint32_t context[24] = {
       control_island_local_ready_reason(now_ms), control_island_health.flags,
       control_island_health_valid ? now_ms - control_island_health_seen_ms : UINT32_MAX,
       control_island_health_sequence, control_island_health.tim4_tick_total,
       control_island_health.lanes[1].tx_success,
       (now_ms - control_service_last_ms > control_service_gap_ms)
           ? now_ms - control_service_last_ms : control_service_gap_ms,
-      wifi_tcp_sink.controlConnectionEpoch(), control_heartbeat_id,
+      wifi_tcp_sink.controlConnectionEpoch(),
+      host_realtime_authority.highestRxSequence(),
       transport.ack_generated_id, transport.ack_sent_id, transport.rx_bytes,
       wifi_tcp_sink.workerHeartbeatAgeMs(now_ms), static_cast<uint32_t>(call.phase),
       control_island_bringup.health_published,
       control_island_bringup.health_publish_failures,
-      control_island_health_reject_total, host_control_session.activationEpoch()};
+      control_island_health_reject_total,
+      host_realtime_authority.authorityEpoch(),
+      host_realtime_authority.highestRxSequence(),
+      host_realtime_authority.proofSequence(),
+      host_realtime_authority.proofRefAgeMs(now_ms),
+      host_realtime_authority.forwardAgeMs(now_ms),
+      realtime.rx_last_token,
+      static_cast<uint32_t>(realtime.last_socket_result)};
   (void)control_path_first.record(reason, now_ms, context);
 #else
   (void)reason; (void)now_ms;
@@ -4352,6 +4370,7 @@ static void emit_control_path_diagnostic(uint32_t now_ms) {
   last_emit_ms = now_ms;  // Evidence loss never creates retry/catch-up.
   const auto t = wifi_tcp_sink.controlEvidence();
   const auto w = wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
+  const auto rt = wifi_tcp_sink.realtimeEvidence();
   uint8_t payload[csm::kControlPathDiagnosticPayloadLen] = {};
   wr_u64_le(payload, mono64_us());
   payload[csm::kControlPathDiagnosticSchemaOffset] = csm::kControlPathDiagnosticSchema;
@@ -4391,16 +4410,16 @@ static void emit_control_path_diagnostic(uint32_t now_ms) {
             t.rx_high_water);
   wr_u32_le(payload + csm::kControlPathDiagnosticControlRxOverflowOffset,
             t.rx_overflow);
-  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatIdOffset,
-            control_heartbeat_id);
-  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatRxMsOffset,
-            control_heartbeat_rx_ms);
-  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatAckRefOffset,
-            control_heartbeat_ack_ref);
-  wr_u32_le(payload + csm::kControlPathDiagnosticHeartbeatProcessedTotalOffset,
-            host_heartbeat_total);
-  wr_u32_le(payload + csm::kControlPathDiagnosticProofTimeoutTotalOffset,
-            host_command_freshness.proofTimeoutTotal());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtHighestRxSequenceOffset,
+            host_realtime_authority.highestRxSequence());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtLastProcessedMsOffset,
+            realtime_last_processed_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtLastProofRefOffset,
+            host_realtime_authority.lastProofRef());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProcessedTotalOffset,
+            realtime_processed_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtTimeoutTotalOffset,
+            host_realtime_authority.timeoutTotal());
   wr_u32_le(payload + csm::kControlPathDiagnosticAckGeneratedIdOffset,
             t.ack_generated_id);
   wr_u32_le(payload + csm::kControlPathDiagnosticAckGeneratedMsOffset,
@@ -4475,7 +4494,7 @@ static void emit_control_path_diagnostic(uint32_t now_ms) {
             control_path_first.context[6]);
   wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstControlEpochOffset,
             control_path_first.context[7]);
-  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstHeartbeatIdOffset,
+  wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstRtRxSequenceOffset,
             control_path_first.context[8]);
   wr_u32_le(payload + csm::kControlPathDiagnosticM7FirstAckGenIdOffset,
             control_path_first.context[9]);
@@ -4520,6 +4539,84 @@ static void emit_control_path_diagnostic(uint32_t now_ms) {
             t.tx_offset);
   wr_u32_le(payload + csm::kControlPathDiagnosticM4TraceTim4TickOffset,
             control_island_bringup.executor_tick);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtWorkerStartedOffset,
+            rt.worker_started ? 1u : 0u);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtSocketReadyOffset,
+            rt.socket_ready ? 1u : 0u);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtNetworkEpochOffset,
+            rt.network_epoch);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtRxDatagramsOffset,
+            rt.rx_datagrams);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtRxBytesOffset, rt.rx_bytes);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtRxOverwriteOffset,
+            rt.rx_overwrite);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtRxTokenOffset,
+            rt.rx_last_token);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtSocketRxMsOffset,
+            rt.rx_last_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtSocketMaxGapMsOffset,
+            rt.rx_max_gap_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtRxBudgetHitsOffset,
+            rt.rx_budget_hits);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProcessMaxGapMsOffset,
+            realtime_process_max_gap_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtForwardAgeMsOffset,
+            host_realtime_authority.forwardAgeMs(now_ms));
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofRefAgeMsOffset,
+            host_realtime_authority.proofRefAgeMs(now_ms));
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtAuthorityEpochOffset,
+            host_realtime_authority.authorityEpoch());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtStateGenerationOffset,
+            host_realtime_authority.lastAppliedGeneration());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofSequenceOffset,
+            host_realtime_authority.proofSequence());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofStagedOffset,
+            rt.proof_staged);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofSentOffset,
+            rt.proof_sent);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofWouldBlockOffset,
+            rt.proof_would_block);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofSocketErrorOffset,
+            rt.proof_socket_error);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofLastSentMsOffset,
+            rt.proof_last_sent_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtSocketErrorOffset,
+            rt.socket_error);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtSocketResultOffset,
+            static_cast<uint32_t>(rt.last_socket_result));
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtWorkerAgeMsOffset,
+            rt.worker_heartbeat_ms == 0u ? UINT32_MAX
+                                        : now_ms - rt.worker_heartbeat_ms);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtDecodeRejectOffset,
+            realtime_decode_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtBootRejectOffset,
+            realtime_boot_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtContractRejectOffset,
+            realtime_contract_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtStateRejectOffset,
+            realtime_state_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtEpochRejectOffset,
+            realtime_epoch_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtReorderRejectOffset,
+            realtime_reorder_reject_total);
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofFlagsOffset,
+            host_realtime_authority.proofFlags(now_ms));
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofStatusOffset,
+            host_realtime_authority.proofStatus());
+  wr_u32_le(payload + csm::kControlPathDiagnosticRtProofReasonOffset,
+            host_realtime_authority.proofReason());
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtRxSequenceOffset,
+            control_path_first.context[18]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtProofSequenceOffset,
+            control_path_first.context[19]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtProofRefAgeMsOffset,
+            control_path_first.context[20]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtForwardAgeMsOffset,
+            control_path_first.context[21]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtSocketTokenOffset,
+            control_path_first.context[22]);
+  wr_u32_le(payload + csm::kControlPathDiagnosticFirstRtSocketResultOffset,
+            control_path_first.context[23]);
   emit_record(RecordType::ControlPathDiagnostic, payload, sizeof(payload));
 #else
   (void)now_ms;
@@ -4544,35 +4641,6 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
 #endif
 }
 
-static uint8_t host_freshness_reason(
-    csm::board::control::HostFreshnessResult result) {
-  using csm::board::control::HostFreshnessResult;
-  switch (result) {
-    case HostFreshnessResult::ProofRequired:
-      return csm::ControlReasonHostProofRequired;
-    case HostFreshnessResult::ProofMismatch:
-      return csm::ControlReasonHostProofMismatch;
-    case HostFreshnessResult::Replay:
-      return csm::ControlReasonReplay;
-    case HostFreshnessResult::ProofExpired:
-    case HostFreshnessResult::NotConfigured:
-      return csm::ControlReasonHostTimeout;
-    case HostFreshnessResult::Accepted:
-    case HostFreshnessResult::BootstrapAccepted:
-      return csm::ControlReasonOk;
-  }
-  return csm::ControlReasonBadProtocol;
-}
-
-static bool host_freshness_requires_close(
-    csm::board::control::HostFreshnessResult result) {
-  using csm::board::control::HostFreshnessResult;
-  return result == HostFreshnessResult::ProofRequired ||
-         result == HostFreshnessResult::ProofExpired ||
-         result == HostFreshnessResult::ProofMismatch ||
-         result == HostFreshnessResult::NotConfigured;
-}
-
 static void close_host_control_epoch(
     csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
   using csm::board::control::HostControlCloseReason;
@@ -4581,7 +4649,7 @@ static void close_host_control_epoch(
     record_control_path_failure(0x100u + static_cast<uint32_t>(reason), now_ms);
   control_path_observing = false;
   host_authority_gate.beginClose(reason, 0u);
-  host_control_session.invalidate(now_ms);
+  host_realtime_authority.disarm();
   control_source_manager.clearHost();
   host_authority_gate.observeHostSlots(0u);
 }
@@ -4592,19 +4660,19 @@ static void service_host_authority_boundary(uint32_t now_ms) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::AuthorityPreempted,
         now_ms);
-  } else if (!host_control_session.leaseAlive(now_ms)) {
+  } else if (!host_realtime_authority.active()) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::LeaseExpired, now_ms);
+        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
   }
 }
 
-static void update_host_control_session() {
+static void update_host_realtime_authority() {
   const uint32_t now_ms = millis();
-  const uint32_t timeouts = host_command_freshness.proofTimeoutTotal();
-  host_command_freshness.update(now_ms);
-  if (host_command_freshness.proofTimeoutTotal() != timeouts)
+  if (host_realtime_authority.update(now_ms)) {
     record_control_path_failure(2u, now_ms);
-  host_control_session.update(now_ms);
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+  }
   service_host_authority_boundary(now_ms);
 }
 
@@ -4645,6 +4713,7 @@ static void service_control_island() {
   if (host_authority_gate.rcAllowed() && output.source_valid) {
     selected = ControlSource::Remote;
   } else if (host_authority_gate.admissionOpen() &&
+             host_realtime_authority.healthy(now_ms) &&
              control_source_manager.host().valid) {
     selected = ControlSource::Host;
   }
@@ -4657,10 +4726,7 @@ static void service_control_island() {
       permit_mask = (1u << csm::board::control_island::kLane005) |
                     (1u << csm::board::control_island::kLane007);
     } else if (selected == ControlSource::Host) {
-      uint8_t reason = ControlReasonOk;
-      if (host_control_session.canAccept(now_ms, true, &reason)) {
-        permit_mask = csm::board::control_island::kAllLanePermitMask;
-      }
+      permit_mask = csm::board::control_island::kAllLanePermitMask;
     }
   }
   control_island_permit_mask = permit_mask;
@@ -4669,7 +4735,7 @@ static void service_control_island() {
         control_source_manager.snapshot(
             permit_mask,
             selected == ControlSource::Host
-                ? host_control_session.activationEpoch()
+                ? host_realtime_authority.authorityEpoch()
                 : remote_activation_epoch);
     if (csm::board::control_island::publishFinalControlSnapshot(snapshot)) {
       ++control_snapshot_publish_total;
@@ -5386,70 +5452,94 @@ static void service_mcp2515_tx_audit() {
 #endif
 
 #if BOARD_ENABLE_HOST_DOWNLINK
-static void handle_host_control_state(const uint8_t* payload, uint16_t len) {
-  uint32_t command_id = 0;
-  ++host_control_state_request_total;
-  if (len != csm::kHostControlStateV2PayloadLen) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength,
-                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
-                     host_control_state_request_total);
-    return;
+#if BOARD_ENABLE_WIFI_UPLINK
+static void stage_realtime_proof(uint32_t rx_token, uint32_t now_ms) {
+  uint8_t frame[csm::board::uplink::kRealtimeProofFrameBytes] = {};
+  const size_t length = csm::encode_realtime_proof_v1(
+      frame, sizeof(frame), realtime_proof_frame_sequence++, mono64_us(),
+      product_boot_session_id, host_realtime_authority.authorityEpoch(),
+      host_realtime_authority.proofSequence(),
+      host_realtime_authority.highestRxSequence(),
+      host_realtime_authority.lastAppliedGeneration(),
+      host_realtime_authority.proofStatus(),
+      host_realtime_authority.proofReason(),
+      host_realtime_authority.proofFlags(now_ms));
+  if (length == sizeof(frame)) {
+    (void)wifi_tcp_sink.offerRealtimeProof(
+        frame, static_cast<uint16_t>(length), rx_token,
+        host_realtime_authority.proofSequence(), now_ms);
   }
-  command_id = rd_u32_le(&payload[csm::kHostControlStateCommandIdOffset]);
-  const uint32_t state_generation =
-      rd_u32_le(&payload[csm::kHostControlStateGenerationOffset]);
-  const uint32_t contract_id =
-      rd_u32_le(&payload[csm::kHostControlStateContractIdOffset]);
-  const uint8_t valid_mask =
-      payload[csm::kHostControlStateValidMaskOffset];
-  const uint32_t now_ms = millis();
-  const csm::board::control::HostFreshnessResult freshness =
-      host_command_freshness.acceptCommand(command_id, now_ms);
-  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
-    if (host_freshness_requires_close(freshness)) {
-      close_host_control_epoch(
-          csm::board::control::HostControlCloseReason::FreshnessFault,
-          now_ms);
-    }
-    ++host_can_tx_rejected_total;
-    emit_control_ack(command_id, ControlAckRejected,
-                     host_freshness_reason(freshness),
-                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
-                     host_control_state_request_total);
-    return;
-  }
-  service_host_authority_boundary(now_ms);
-  if (contract_id != csm::kHostControlStateContractId ||
-      !host_authority_gate.admissionOpen()) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected,
-                     contract_id == csm::kHostControlStateContractId
-                         ? ControlReasonAuthorityDenied
-                         : csm::ControlReasonBadProtocol,
-                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
-                     host_control_state_request_total);
-    return;
-  }
-  const bool accepted = control_source_manager.acceptHostState(
-      state_generation, valid_mask,
-      &payload[csm::kHostControlStateData005Offset],
-      &payload[csm::kHostControlStateData007Offset],
-      &payload[csm::kHostControlStateData364Offset],
-      host_control_lease_sequence);
-  if (!accepted) {
-    host_can_tx_rejected_total++;
-    emit_control_ack(command_id, ControlAckRejected,
-                     csm::ControlReasonReplay,
-                     BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
-                     host_control_state_request_total);
-    return;
-  }
-  ++host_can_tx_accepted_total;
-  emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk,
-                   BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
-                   host_can_tx_accepted_total);
 }
+
+static void service_host_realtime() {
+  csm::board::uplink::WifiRealtimeDatagram datagram;
+  if (!wifi_tcp_sink.takeRealtimeDatagram(&datagram)) return;
+  const uint32_t now_ms = millis();
+  if (realtime_last_processed_ms != 0u) {
+    const uint32_t gap = now_ms - realtime_last_processed_ms;
+    if (gap > realtime_process_max_gap_ms) realtime_process_max_gap_ms = gap;
+  }
+  realtime_last_processed_ms = now_ms;
+  ++realtime_processed_total;
+
+  csm::HostRealtimeStateV1 state;
+  const csm::RealtimeFrameDecodeResult decoded =
+      csm::decode_host_realtime_datagram(datagram.bytes, datagram.length,
+                                         &state);
+  if (decoded != csm::RealtimeFrameDecodeResult::Accepted) {
+    ++realtime_decode_reject_total;
+    return;
+  }
+
+  using csm::board::control::HostRealtimeAdmission;
+  const HostRealtimeAdmission admission =
+      host_realtime_authority.accept(state, datagram.arrival_ms);
+  bool close_for_state = false;
+  switch (admission) {
+    case HostRealtimeAdmission::AcceptedActive: {
+      const csm::board::control_island::HostStateAdmission state_result =
+          control_source_manager.acceptHostRealtimeState(
+              state.state_generation, state.valid_mask, state.data005,
+              state.data007, state.data364, state.realtime_sequence);
+      const bool applied = state_result !=
+          csm::board::control_island::HostStateAdmission::Rejected;
+      host_realtime_authority.noteStateApplied(state.state_generation,
+                                               applied);
+      if (applied) {
+        ++host_control_state_request_total;
+      } else {
+        ++realtime_state_reject_total;
+        close_for_state = true;
+      }
+      break;
+    }
+    case HostRealtimeAdmission::AcceptedPreArm:
+      break;
+    case HostRealtimeAdmission::DuplicateOrReordered:
+      ++realtime_reorder_reject_total;
+      return;
+    case HostRealtimeAdmission::BootMismatch:
+      ++realtime_boot_reject_total;
+      break;
+    case HostRealtimeAdmission::ContractMismatch:
+      ++realtime_contract_reject_total;
+      break;
+    case HostRealtimeAdmission::StateInvalid:
+      ++realtime_state_reject_total;
+      break;
+    case HostRealtimeAdmission::AuthorityMismatch:
+      ++realtime_epoch_reject_total;
+      break;
+  }
+  stage_realtime_proof(datagram.token, now_ms);
+  if (close_for_state) {
+    close_host_control_epoch(
+        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+  }
+}
+#else
+static void service_host_realtime() {}
+#endif
 
 static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
   uint32_t command_id = 0u;
@@ -5462,17 +5552,9 @@ static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
   }
   command_id = rd_u32_le(&payload[csm::kHostControlNShotCommandIdOffset]);
   const uint32_t now_ms = millis();
-  const csm::board::control::HostFreshnessResult freshness =
-      host_command_freshness.acceptCommand(command_id, now_ms);
-  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
-    if (host_freshness_requires_close(freshness)) {
-      close_host_control_epoch(
-          csm::board::control::HostControlCloseReason::FreshnessFault,
-          now_ms);
-    }
+  if (!host_realtime_authority.consumeTransactionCommand(command_id)) {
     ++host_can_tx_rejected_total;
-    emit_control_ack(command_id, ControlAckRejected,
-                     host_freshness_reason(freshness),
+    emit_control_ack(command_id, ControlAckRejected, csm::ControlReasonReplay,
                      BOARD_BUILTIN_CAN_BUS_ID, 0u, 0u,
                      host_can_tx_rejected_total);
     return;
@@ -5483,6 +5565,7 @@ static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
   const bool accepted =
       contract_id == csm::kHostControlStateContractId &&
       host_authority_gate.admissionOpen() &&
+      host_realtime_authority.healthy(now_ms) &&
       control_source_manager.acceptHostNShot(
           rd_u32_le(&payload[csm::kHostControlNShotTransactionIdOffset]),
           lane,
@@ -5501,66 +5584,10 @@ static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
                                 : host_can_tx_rejected_total);
 }
 
-static void handle_host_heartbeat(uint16_t seq, const uint8_t* payload, uint16_t len) {
-  uint32_t command_id = seq;
-  if (len >= 4) {
-    command_id = rd_u32_le(&payload[csm::kHostHeartbeatCommandIdOffset]);
-  }
-  if (len != csm::kHostHeartbeatPayloadLen) {
-    emit_control_ack(command_id, ControlAckRejected, ControlReasonBadLength, 0xFF, 0, 0,
-                     host_heartbeat_total);
-    return;
-  }
-
-  host_heartbeat_total++;
-  const uint32_t now_ms = millis();
-  const uint32_t host_mono_ms =
-      rd_u32_le(&payload[csm::kHostHeartbeatMonoMsOffset]);
-  const uint32_t ack_ref =
-      rd_u32_le(&payload[csm::kHostHeartbeatAckRefOffset]);
-  control_heartbeat_id = command_id;
-  control_heartbeat_rx_ms = now_ms;
-  control_heartbeat_ack_ref = ack_ref;
-  const csm::board::control::HostFreshnessResult freshness =
-      host_command_freshness.acceptHeartbeat(
-          command_id, ack_ref, host_mono_ms, now_ms);
-  if (freshness == csm::board::control::HostFreshnessResult::Accepted) {
-    host_control_session.heartbeat(now_ms);
-  }
-  if (freshness == csm::board::control::HostFreshnessResult::Accepted ||
-      freshness ==
-          csm::board::control::HostFreshnessResult::BootstrapAccepted) {
-    // Bootstrap is ACKed but does not refresh Host liveness. The next heartbeat
-    // must causally echo this accepted command ID.
-    emit_control_ack(command_id, ControlAckAccepted, ControlReasonOk, 0xFF, 0,
-                     0, host_heartbeat_total);
-  } else {
-    if (host_freshness_requires_close(freshness)) {
-      host_command_freshness.invalidateProof();
-    }
-    close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::FreshnessFault,
-        now_ms);
-    emit_control_ack(command_id, ControlAckRejected,
-                     host_freshness_reason(freshness), 0xFF, 0, 0,
-                     host_heartbeat_total);
-  }
-  if ((host_heartbeat_total & 0x3Fu) == 1) {
-    emit_board_event(
-        EventHostHeartbeat,
-        freshness == csm::board::control::HostFreshnessResult::Accepted
-            ? 0u
-            : static_cast<uint16_t>(freshness),
-        host_heartbeat_total);
-  }
-}
-
 static void handle_host_control_session(uint16_t seq, const uint8_t* payload, uint16_t len) {
   uint32_t command_id = seq;
   uint8_t action = 0xFF;
   uint8_t requested_bus = 0xFF;
-  uint16_t lease_ms = 0;
-  uint32_t host_mono_ms = 0;
 
   host_control_session_total++;
 
@@ -5578,33 +5605,20 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
 
   action = payload[csm::kHostControlSessionActionOffset];
   requested_bus = payload[csm::kHostControlSessionBusOffset];
-  lease_ms = rd_u16_le(&payload[csm::kHostControlSessionLeaseMsOffset]);
-  host_mono_ms =
-      rd_u32_le(&payload[csm::kHostControlSessionMonoMsOffset]);
-  (void)host_mono_ms;
+  // Lease and sender-time fields remain reserved wire bytes in schema 4.
   const uint8_t control_schema =
       payload[csm::kHostControlSessionSchemaOffset];
 
   const uint32_t now_ms = millis();
   uint8_t reason = ControlReasonOk;
   uint8_t status = ControlAckAccepted;
-  const csm::board::control::HostFreshnessResult freshness =
-      action == csm::HostControlDisarm
-          ? host_command_freshness.consumeCommand(command_id)
-          : host_command_freshness.acceptCommand(command_id, now_ms);
-  if (freshness != csm::board::control::HostFreshnessResult::Accepted) {
-    if (host_freshness_requires_close(freshness)) {
-      close_host_control_epoch(
-          csm::board::control::HostControlCloseReason::FreshnessFault,
-          now_ms);
-    }
+  if (!host_realtime_authority.consumeTransactionCommand(command_id)) {
     ++host_can_tx_rejected_total;
-    const uint8_t freshness_reason = host_freshness_reason(freshness);
-    emit_control_ack(command_id, ControlAckRejected, freshness_reason,
+    emit_control_ack(command_id, ControlAckRejected, csm::ControlReasonReplay,
                      requested_bus, 0, 0, host_control_session_total);
     emit_board_event(
         EventHostControlSession,
-        (static_cast<uint16_t>(action) << 8) | freshness_reason,
+        (static_cast<uint16_t>(action) << 8) | csm::ControlReasonReplay,
         host_control_session_total);
     return;
   }
@@ -5625,7 +5639,6 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
     case csm::HostControlDisarm:
       close_host_control_epoch(
           csm::board::control::HostControlCloseReason::HostDisarm, now_ms);
-      host_control_session.disarm(now_ms);
       break;
     case csm::HostControlArm:
       if (!host_control_authority_allowed()) {
@@ -5637,40 +5650,22 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         const bool backend_ready =
             (requested_bus == 0xFF ? any_control_backend_ready() :
              control_backend_ready_for_bus(requested_bus));
-        reason = host_control_session.arm(now_ms, lease_ms, backend_ready);
+        (void)host_realtime_authority.arm(
+            command_id, now_ms, backend_ready,
+            host_control_authority_allowed(), &reason);
         if (reason == ControlReasonOk &&
             !host_authority_gate.activate(
-                host_control_session.leaseAlive(now_ms),
+                host_realtime_authority.active(),
                 host_control_authority_allowed(), 0u)) {
-          host_control_session.disarm(now_ms);
+          host_realtime_authority.disarm();
           reason = ControlReasonTxBusy;
         } else if (reason == ControlReasonOk) {
           control_path_observing = true;
-          ++host_control_lease_sequence;
-          if (host_control_lease_sequence == 0u) {
-            host_control_lease_sequence = 1u;
-          }
-          control_source_manager.renewHostLease(host_control_lease_sequence);
         }
       }
       break;
     case csm::HostControlRenewLease:
-      if (!host_control_authority_allowed() ||
-          !host_authority_gate.admissionOpen()) {
-        close_host_control_epoch(
-            csm::board::control::HostControlCloseReason::AuthorityPreempted,
-            now_ms);
-        reason = ControlReasonAuthorityDenied;
-      } else {
-        reason = host_control_session.renew(now_ms, lease_ms);
-        if (reason == ControlReasonOk) {
-          ++host_control_lease_sequence;
-          if (host_control_lease_sequence == 0u) {
-            host_control_lease_sequence = 1u;
-          }
-          control_source_manager.renewHostLease(host_control_lease_sequence);
-        }
-      }
+      reason = ControlReasonUnsupportedCommand;
       break;
     case csm::HostControlInstallNeutralProfile:
       reason = ControlReasonUnsupportedCommand;
@@ -5714,13 +5709,8 @@ static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t s
     return;
   }
 
-  if (record_type == static_cast<uint8_t>(RecordType::HostControlStateV2)) {
-    handle_host_control_state(payload, len);
-  } else if (record_type ==
-             static_cast<uint8_t>(RecordType::HostControlNShot)) {
+  if (record_type == static_cast<uint8_t>(RecordType::HostControlNShot)) {
     handle_host_control_nshot(payload, len);
-  } else if (record_type == static_cast<uint8_t>(RecordType::HostHeartbeat)) {
-    handle_host_heartbeat(seq, payload, len);
   } else if (record_type == static_cast<uint8_t>(RecordType::HostControlSession)) {
     handle_host_control_session(seq, payload, len);
   } else if (record_type == static_cast<uint8_t>(RecordType::HostQueryCapability)) {
@@ -5770,13 +5760,9 @@ static void service_host_downlink(int budget) {
   const uint32_t wifi_epoch = wifi_tcp_sink.controlConnectionEpoch();
   if (wifi_epoch != last_wifi_epoch) {
     host_control_downlink_parser.reset();
-    // A transport epoch is also a control-authority epoch. A disconnected or
-    // newly accepted Wi-Fi client must establish a fresh heartbeat and arm;
-    // it cannot renew the prior client's lease.
-    close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::TransportEpochClosed,
-        millis());
-    host_command_freshness.resetTransportEpoch();
+    // TCP transaction continuity is independent of an already healthy UDP
+    // realtime authority. Only the command/N-shot replay domains reset here.
+    host_realtime_authority.resetTransactionEpoch();
     control_source_manager.resetHostTransportEpoch();
     last_wifi_epoch = wifi_epoch;
   }
@@ -6012,6 +5998,7 @@ void setup() {
       (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 33) ^
       (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 2) ^
       static_cast<uint64_t>(static_cast<uint32_t>(random(4)));
+  product_boot_session_id = boot_session_id;
 #if BOARD_ENABLE_WIFI_UPLINK
   csm::board::uplink::WifiTcpSinkConfig wifi_sink_config;
   requested_wifi_runtime_mode =
@@ -6027,6 +6014,7 @@ void setup() {
   wifi_sink_config.ap_passphrase = BOARD_WIFI_AP_PASSPHRASE;
   wifi_sink_config.port = BOARD_WIFI_TCP_PORT;
   wifi_sink_config.control_port = BOARD_WIFI_CONTROL_TCP_PORT;
+  wifi_sink_config.realtime_port = BOARD_WIFI_REALTIME_UDP_PORT;
   wifi_sink_config.channel = BOARD_WIFI_AP_CHANNEL;
   wifi_sink_config.boot_session_id = boot_session_id;
   wifi_sink_config.drain_time_budget_us = BOARD_WIFI_TX_DRAIN_TIME_BUDGET_US;
@@ -6080,12 +6068,9 @@ void setup() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootM4Issued);
 #endif
-  host_control_session.begin(millis());
   host_authority_gate.reset();
-  csm::board::control::HostCommandFreshnessConfig freshness_config;
-  freshness_config.proof_timeout_ms = BOARD_HOST_PROOF_TIMEOUT_MS;
-  host_command_freshness_ok =
-      host_command_freshness.begin(freshness_config);
+  host_realtime_authority_ok = host_realtime_authority.begin(
+      boot_session_id, BOARD_HOST_REALTIME_LIVENESS_TIMEOUT_MS);
   voltage_adc_ok = init_voltage_adc_lane();
 
 #if BOARD_ENABLE_ENCODER_IO
@@ -6231,16 +6216,19 @@ void loop() {
   // The first bounded control poll precedes feeder, host, publisher, and
   // Wi-Fi work. Later bounded polls reduce release latency without changing
   // the runtime's absolute timeline or producing catch-up bursts.
-  update_host_control_session();
+  service_host_realtime();
+  update_host_realtime_authority();
   service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();
 #endif
   poll_uplink_connections(millis());
   service_uplink_session_state();
-  update_host_control_session();
+  service_host_realtime();
+  update_host_realtime_authority();
   record_runtime_breadcrumb(RuntimeStageHostDownlink);
   service_host_downlink(BOARD_HOST_DOWNLINK_SERVICE_BYTE_BUDGET);
+  service_host_realtime();
   record_runtime_breadcrumb(RuntimeStageIdle);
   service_recovered_runtime_breadcrumb();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
@@ -6251,7 +6239,7 @@ void loop() {
 #endif
 #if BOARD_CSM_PROFILE_PASSIVE_PRODUCT
   if (uplink_host_session_open() && !ensure_passive_can_frontend_session_ready(millis())) {
-    update_host_control_session();
+    update_host_realtime_authority();
     service_status_led();
     service_capability_advertisement();
     service_uplink(1024);
@@ -6274,7 +6262,7 @@ void loop() {
       }
     }
     service_builtin_can_rx_host_absent_drain(128);
-    update_host_control_session();
+    update_host_realtime_authority();
     service_status_led();
     last_health_ms = millis();
     service_boot_recovery();
@@ -6290,7 +6278,7 @@ void loop() {
   service_uplink(1024);
   service_deferred_loss_events();
   service_control_island();
-  update_host_control_session();
+  update_host_realtime_authority();
   service_control_island();
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   service_runtime_diagnostics();

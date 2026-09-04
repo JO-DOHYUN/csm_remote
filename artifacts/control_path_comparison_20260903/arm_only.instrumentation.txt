@@ -1,0 +1,41 @@
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stream=
+com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest:
+INSTRUMENTATION_STATUS: test=armRemainsAcknowledgedForTenMinutes
+INSTRUMENTATION_STATUS_CODE: 1
+INSTRUMENTATION_STATUS: class=com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest
+INSTRUMENTATION_STATUS: current=1
+INSTRUMENTATION_STATUS: id=AndroidJUnitRunner
+INSTRUMENTATION_STATUS: numtests=1
+INSTRUMENTATION_STATUS: stack=java.lang.AssertionError: ARM left acknowledged state after 208 seconds: phase=Stopping, reason=heartbeat causal ACK timeout, failures=0, session=Connected/null, integrity=Live
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.armRemainsAcknowledgedForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:105)
+
+INSTRUMENTATION_STATUS: stream=
+Error in armRemainsAcknowledgedForTenMinutes(com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest):
+java.lang.AssertionError: ARM left acknowledged state after 208 seconds: phase=Stopping, reason=heartbeat causal ACK timeout, failures=0, session=Connected/null, integrity=Live
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.armRemainsAcknowledgedForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:105)
+
+INSTRUMENTATION_STATUS: test=armRemainsAcknowledgedForTenMinutes
+INSTRUMENTATION_STATUS_CODE: -2
+INSTRUMENTATION_RESULT: stream=
+
+Time: 241.489
+There was 1 failure:
+1) armRemainsAcknowledgedForTenMinutes(com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest)
+java.lang.AssertionError: ARM left acknowledged state after 208 seconds: phase=Stopping, reason=heartbeat causal ACK timeout, failures=0, session=Connected/null, integrity=Live
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.hamt.vsm.android.ServiceHilArmRetentionDeviceTest.armRemainsAcknowledgedForTenMinutes(ServiceHilArmRetentionDeviceTest.kt:105)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+
+INSTRUMENTATION_CODE: -1
