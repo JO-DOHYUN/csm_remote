@@ -64,7 +64,9 @@ control:
   fdcan_irq_ingress: bounded_terminal_error_latch_only
   health_read_side_effects: forbidden
   source_epoch_owner: csm_m7_global_source_selection
-  activation_epoch_owner: explicit_host_arm_or_fresh_rc_activation
+  activation_epoch_owner: csm_m7_global_monotonic_host_or_rc_activation
+  host_authority_epoch_owner: android_transaction_and_udp_proof_correlation_only
+  activation_execution_binding: target_m4_boot_id_frozen_at_admission
   source_lane_ownership:
     host: [0x005, 0x007, 0x364]
     remote: [0x005, 0x007]
@@ -95,6 +97,7 @@ ipc:
   guard_region: 0x3800F800-0x3800FBFF
   control_slots: 2
   integrity: sequence_crc32_boot_identity
+  control_schema_id: 0x43495345
   raw_can_ring_capacity: 512
 profiles:
   production_vsm_control: false

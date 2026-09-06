@@ -823,4 +823,11 @@ for token in (
 if "BOARD_UPLINK_POOL_MEDIUM_PAYLOAD_BYTES=192" not in feeder_product:
     fail("transport diagnostic no longer has bounded medium-pool admission")
 
+realtime_worker = (ROOT / "src/board/uplink/WifiRealtimeWorker.cpp").read_text(encoding="utf-8")
+for required in ("proof.peer.address", "proof.peer.port", "realtimeRxAfterSocketOpen"):
+    if required not in realtime_worker:
+        fail(f"realtime proof must retain validated request endpoint: {required}")
+if "latest_peer_" in realtime_worker:
+    fail("raw UDP peer cannot own proof destination")
+
 print("Wi-Fi architecture guard PASS")

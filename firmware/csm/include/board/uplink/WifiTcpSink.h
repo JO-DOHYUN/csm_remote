@@ -143,9 +143,9 @@ class WifiTcpSink final : public IFrameSink, public Stream {
     return realtime_mailbox_.takeLatestRx(datagram);
   }
   bool offerRealtimeProof(const uint8_t* bytes, uint16_t length,
-                          uint32_t rx_token, uint32_t proof_sequence,
+                          const WifiRealtimeDatagram& request, uint32_t proof_sequence,
                           uint32_t now_ms) {
-    return realtime_mailbox_.stageProof(bytes, length, rx_token,
+    return realtime_mailbox_.stageProof(bytes, length, request,
                                         proof_sequence, now_ms);
   }
   WifiRealtimeEvidence realtimeEvidence() const {

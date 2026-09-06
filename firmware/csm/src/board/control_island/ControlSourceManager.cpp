@@ -117,11 +117,13 @@ void ControlSourceManager::select(ControlSource source) {
 }
 
 FinalControlSnapshotPayload ControlSourceManager::snapshot(
-    uint32_t permit_mask, uint32_t activation_epoch) const {
+    uint32_t permit_mask, uint32_t activation_epoch,
+    uint32_t target_m4_boot_id) const {
   FinalControlSnapshotPayload result;
   result.m7_boot_id = m7_boot_id_;
   result.source_epoch = source_epoch_;
   result.activation_epoch = activation_epoch;
+  result.target_m4_boot_id = target_m4_boot_id;
   result.active_source = static_cast<uint32_t>(active_source_);
   const SourceImage* source = nullptr;
   if (active_source_ == ControlSource::Host && host_.valid) source = &host_;

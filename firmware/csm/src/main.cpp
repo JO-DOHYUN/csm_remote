@@ -1104,8 +1104,29 @@ static uint16_t encoder_last_count = 0;
 static int64_t encoder_position = 0;
 static uint32_t encoder_wrap_events = 0;
 static uint32_t encoder_fault_events = 0;
+// M7-global physical activation domain shared by Host and RC. Host command IDs
+// remain transaction/proof correlation only and never enter the M4 watermark.
+static uint32_t control_activation_epoch = 0u;
 static uint32_t remote_activation_epoch = 0u;
+static uint32_t remote_activation_m4_boot_id = 0u;
 static bool remote_source_was_valid = false;
+
+static bool u32_sequence_newer(uint32_t previous, uint32_t current) {
+  const uint32_t delta = current - previous;
+  return delta != 0u && delta < 0x80000000u;
+}
+
+static uint32_t next_control_activation_epoch() {
+  const uint32_t observed = control_island_health.activation_epoch_seen;
+  if (control_island_health_valid && observed != 0u &&
+      (control_activation_epoch == 0u ||
+       u32_sequence_newer(control_activation_epoch, observed))) {
+    control_activation_epoch = observed;
+  }
+  ++control_activation_epoch;
+  if (control_activation_epoch == 0u) control_activation_epoch = 1u;
+  return control_activation_epoch;
+}
 #if BOARD_ENABLE_REMOTE_CONTROL
 static csm::board::control::RemoteControlRuntime remote_control_runtime;
 static bool remote_control_runtime_ok = false;
@@ -4329,6 +4350,17 @@ static bool control_island_runtime_ready(uint32_t now_ms) {
   return control_island_local_ready_reason(now_ms) == 0u;
 }
 
+static uint32_t control_island_common_applied_generation() {
+  using namespace csm::board::control_island;
+  const uint32_t generation =
+      control_island_health.lanes[kLane005].last_value_generation;
+  return generation != 0u &&
+          generation == control_island_health.lanes[kLane007].last_value_generation &&
+          generation == control_island_health.lanes[kLane364].last_value_generation
+      ? generation
+      : 0u;
+}
+
 static void record_control_path_failure(uint32_t reason, uint32_t now_ms) {
 #if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY && BOARD_ENABLE_WIFI_UPLINK
   if (!control_path_observing || control_path_first.reason != 0u) return;
@@ -4663,12 +4695,14 @@ static void service_host_authority_boundary(uint32_t now_ms) {
   } else if (!host_realtime_authority.active()) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
-  } else if (control_island_health_valid &&
+  } else if (!control_island_runtime_ready(now_ms) ||
+             (control_island_health_valid &&
              host_realtime_authority.m4AuthorityRevoked(
                  control_island_health.m4_boot_id,
                  control_island_health.activation_epoch_seen,
                  (control_island_health.flags &
-                  csm::board::control_island::kHealthFlagControlActive) != 0u)) {
+                  csm::board::control_island::kHealthFlagControlActive) != 0u,
+                 control_island_common_applied_generation()))) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
   }
@@ -4704,8 +4738,8 @@ static void service_control_island() {
   if (remote_control_runtime_ok) output = remote_control_runtime.service(now_ms);
 #endif
   if (output.source_valid && !remote_source_was_valid) {
-    ++remote_activation_epoch;
-    if (remote_activation_epoch == 0u) remote_activation_epoch = 1u;
+    remote_activation_epoch = next_control_activation_epoch();
+    remote_activation_m4_boot_id = control_island_health.m4_boot_id;
   }
   remote_source_was_valid = output.source_valid;
   control_source_manager.updateRemote(output.image_generation,
@@ -4743,8 +4777,11 @@ static void service_control_island() {
         control_source_manager.snapshot(
             permit_mask,
             selected == ControlSource::Host
-                ? host_realtime_authority.authorityEpoch()
-                : remote_activation_epoch);
+                ? host_realtime_authority.boundM4ActivationEpoch()
+                : remote_activation_epoch,
+            selected == ControlSource::Host
+                ? host_realtime_authority.boundM4BootId()
+                : remote_activation_m4_boot_id);
     if (csm::board::control_island::publishFinalControlSnapshot(snapshot)) {
       ++control_snapshot_publish_total;
     } else {
@@ -5461,7 +5498,8 @@ static void service_mcp2515_tx_audit() {
 
 #if BOARD_ENABLE_HOST_DOWNLINK
 #if BOARD_ENABLE_WIFI_UPLINK
-static void stage_realtime_proof(uint32_t rx_token, uint32_t now_ms) {
+static void stage_realtime_proof(
+    const csm::board::uplink::WifiRealtimeDatagram& request, uint32_t now_ms) {
   uint8_t frame[csm::board::uplink::kRealtimeProofFrameBytes] = {};
   const size_t length = csm::encode_realtime_proof_v1(
       frame, sizeof(frame), realtime_proof_frame_sequence++, mono64_us(),
@@ -5474,7 +5512,7 @@ static void stage_realtime_proof(uint32_t rx_token, uint32_t now_ms) {
       host_realtime_authority.proofFlags(now_ms));
   if (length == sizeof(frame)) {
     (void)wifi_tcp_sink.offerRealtimeProof(
-        frame, static_cast<uint16_t>(length), rx_token,
+        frame, static_cast<uint16_t>(length), request,
         host_realtime_authority.proofSequence(), now_ms);
   }
 }
@@ -5539,7 +5577,7 @@ static void service_host_realtime() {
       ++realtime_epoch_reject_total;
       break;
   }
-  stage_realtime_proof(datagram.token, now_ms);
+  stage_realtime_proof(datagram, now_ms);
   if (close_for_state) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
@@ -5668,7 +5706,9 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
           host_realtime_authority.disarm();
           reason = ControlReasonTxBusy;
         } else if (reason == ControlReasonOk) {
-          host_realtime_authority.bindM4(control_island_health.m4_boot_id);
+          host_realtime_authority.bindM4(
+              control_island_health.m4_boot_id,
+              next_control_activation_epoch());
           control_path_observing = true;
         }
       }

@@ -15,6 +15,9 @@ manifest = (root / "docs/architecture/ACTIVE_ARCHITECTURE.yaml").read_text(
 )
 platformio = (project / "platformio.ini").read_text(encoding="utf-8")
 main = (project / "src/main.cpp").read_text(encoding="utf-8")
+host_realtime = (
+    project / "src/board/control/HostRealtimeAuthority.cpp"
+).read_text(encoding="utf-8")
 contract = (
     project / "include/board/control_island/ControlIslandContract.h"
 ).read_text(encoding="utf-8")
@@ -495,6 +498,7 @@ for required in (
     "testHostNShotTransactionWatermarkSurvivesLifecycle",
     "testCrsfForegroundBudgetIsByteTimeAndWrapBounded",
     "testActivationEpochWrapAfterRevoke",
+    "testM4OnlyRebootRejectsRetainedAndRepublishedActive",
     "proofAuthorityEpoch() == 100u",
 ):
     if required not in control_test:
@@ -529,11 +533,21 @@ if "while (" in executor or "for (;;" in executor:
 for required in (
     "u32Newer(rejected_activation_epoch_, staged_.activation_epoch)",
     "host_realtime_authority.m4AuthorityRevoked(",
-    "host_realtime_authority.bindM4(control_island_health.m4_boot_id)",
+    "next_control_activation_epoch()",
+    "host_realtime_authority.boundM4ActivationEpoch()",
+    "next_control_activation_epoch());",
     "host_realtime_authority.proofAuthorityEpoch()",
+    "snapshot.target_m4_boot_id != health_.m4_boot_id",
+    "host_realtime_authority.boundM4BootId()",
 ):
     if required not in executor and required not in main:
         fail(f"activation retirement/terminal proof contract missing {required}")
+for required in (
+    "activation_epoch == bound_m4_activation_epoch_",
+    "last_state_applied_ && bound_m4_active_seen_",
+):
+    if required not in host_realtime:
+        fail(f"physical ACTIVE proof contract missing {required}")
 for obsolete in (
     "staged_.activation_epoch <= rejected_activation_epoch_",
     "staged_.activation_epoch > rejected",

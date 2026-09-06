@@ -101,8 +101,9 @@ void realtimeHandoffsAreDepthOneAndNeverReplay() {
   const uint8_t latest[] = {7, 8, 9, 10};
   uint32_t first_token = 0;
   uint32_t latest_token = 0;
-  CHECK(mailbox.publishRx(first, sizeof(first), 100, &first_token));
-  CHECK(mailbox.publishRx(latest, sizeof(latest), 120, &latest_token));
+  const csm::board::uplink::WifiRealtimePeer peer = {"192.168.4.2", 45000};
+  CHECK(mailbox.publishRx(first, sizeof(first), 100, peer, &first_token));
+  CHECK(mailbox.publishRx(latest, sizeof(latest), 120, peer, &latest_token));
   CHECK(first_token != 0 && latest_token != first_token);
   csm::board::uplink::WifiRealtimeDatagram datagram;
   CHECK(mailbox.takeLatestRx(&datagram));
@@ -114,20 +115,32 @@ void realtimeHandoffsAreDepthOneAndNeverReplay() {
   CHECK(mailbox.evidence().rx_max_gap_ms == 20);
 
   uint8_t proof[csm::board::uplink::kRealtimeProofFrameBytes] = {};
-  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 1, 121));
+  CHECK(mailbox.stageProof(proof, sizeof(proof), datagram, 1, 121));
   csm::board::uplink::WifiRealtimeProof first_proof;
   CHECK(mailbox.peekProof(&first_proof));
   proof[0] = 0x55;
-  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 2, 122));
+  // A raw packet from another peer arriving during semantic processing cannot
+  // take ownership of the accepted request's return destination.
+  const csm::board::uplink::WifiRealtimePeer noise = {"192.168.4.99", 45001};
+  CHECK(mailbox.publishRx(first, sizeof(first), 122, noise, nullptr));
+  CHECK(mailbox.stageProof(proof, sizeof(proof), datagram, 2, 122));
   csm::board::uplink::WifiRealtimeProof latest_proof;
   CHECK(mailbox.peekProof(&latest_proof));
   CHECK(latest_proof.token != first_proof.token && latest_proof.bytes[0] == 0x55);
+  CHECK(std::strcmp(latest_proof.peer.address, peer.address) == 0);
+  CHECK(latest_proof.peer.port == peer.port);
+  CHECK(latest_proof.rx_token == datagram.token);
+  using csm::board::uplink::realtimeRxAfterSocketOpen;
+  CHECK(realtimeRxAfterSocketOpen(0u, latest_proof.rx_token));
+  CHECK(!realtimeRxAfterSocketOpen(mailbox.evidence().rx_last_token, latest_proof.rx_token));
+  CHECK(realtimeRxAfterSocketOpen(0xFFFFFFFFu, 1u));
+  CHECK(!realtimeRxAfterSocketOpen(1u, 0xFFFFFFFFu));
   mailbox.consumeProof(first_proof.token);
   CHECK(mailbox.peekProof(&latest_proof));
   mailbox.consumeProof(latest_proof.token);
   CHECK(!mailbox.peekProof(&latest_proof));
 
-  CHECK(mailbox.stageProof(proof, sizeof(proof), latest_token, 3, 123));
+  CHECK(mailbox.stageProof(proof, sizeof(proof), datagram, 3, 123));
   mailbox.discardProof();
   CHECK(!mailbox.peekProof(&latest_proof));
   mailbox.noteSocketReady(true, 9);

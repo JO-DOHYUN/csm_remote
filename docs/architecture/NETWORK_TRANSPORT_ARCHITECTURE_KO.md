@@ -31,12 +31,21 @@ ARM→DISARM→ARM. CSM accepts a new inactive sender sequence domain only from 
 valid PRE-ARM packet. Boot, DISARM, liveness expiry and an inactive TCP epoch
 discard prior PRE-ARM proof and require a proof issued after that boundary.
 Delayed ACTIVE packets cannot establish or poison the new inactive domain.
-Within one transport epoch ACTIVE requires a wrap-safe strictly newer
-activation epoch. An inactive new TCP epoch may establish a replacement Host
-activation namespace only after the new PRE-ARM challenge is returned. Each
+Within one transport epoch ACTIVE requires a wrap-safe strictly newer Host
+authority epoch for transaction/proof correlation. Android identity never
+enters M4's persistent activation watermark. M7 allocates one global monotonic
+physical activation epoch across Host and RC, synchronized forward from the
+last M4-observed epoch. An inactive new TCP epoch may establish a replacement
+Host authority namespace only after the new PRE-ARM challenge is returned. Each
 accepted Host ARM is bound to the current M4 boot identity; a later M4 boot or
 a locally observed M4 ACTIVE revoke retires the M7 Host authority. Recovery
 therefore requires fresh PRE-ARM plus explicit ARM and never resumes old motion.
+The snapshot carries that admitted `target_m4_boot_id`; M4 rejects retained or
+republished ACTIVE for an older boot before any physical release. This closes
+the interval before M7 receives reboot health. A local not-ready condition also
+retires Host authority before the first matching M4 ACTIVE observation.
+The realtime `STATE_APPLIED` proof flag is asserted only after both the state
+was accepted by M7 and matching M4 boot/physical activation was observed.
 
 Operator stop first stages the neutral UDP image independently of TCP `3333`
 observer availability or either TCP epoch. Fresh `3333` evidence may confirm
@@ -62,6 +71,10 @@ Service/HIL exposes bounded first/current evidence for network epoch/loss,
 UDP state sequence/generation/send result, CSM RX/admission/applied generation,
 proof sequence/ref/status/reason/send result, TCP transaction write/ACK and
 TCP `3333` telemetry progress. Evidence never gates runtime or adds backlog.
+Proof destination is copied from the exact decoded request through the depth-1
+mailbox. Later raw UDP traffic cannot redirect an admitted proof. The worker
+rejects proofs whose RX token predates the current socket open, including proofs
+staged late by M7 after a socket close.
 
 ## Physical qualification
 

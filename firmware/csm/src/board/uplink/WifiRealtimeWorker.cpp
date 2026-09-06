@@ -4,6 +4,7 @@
 
 #include <Arduino.h>
 #include <new>
+#include <string.h>
 
 namespace csm::board::uplink {
 
@@ -67,8 +68,7 @@ bool WifiRealtimeWorker::openSocket() {
   }
   socket_.sigio(mbed::callback(this, &WifiRealtimeWorker::onSocketStateChanged));
   socket_open_ = true;
-  latest_peer_valid_ = false;
-  latest_peer_rx_token_ = 0u;
+  socket_open_rx_floor_ = mailbox_.evidence().rx_last_token;
   mailbox_.discardProof();
   mailbox_.noteSocketReady(true, network_epoch_);
   return true;
@@ -80,8 +80,6 @@ void WifiRealtimeWorker::closeSocket(int32_t result) {
     (void)socket_.close();
   }
   socket_open_ = false;
-  latest_peer_valid_ = false;
-  latest_peer_rx_token_ = 0u;
   mailbox_.discardProof();
   mailbox_.noteSocketReady(false, network_epoch_);
   mailbox_.noteSocketError(result);
@@ -104,13 +102,13 @@ void WifiRealtimeWorker::serviceReceive() {
         received > static_cast<nsapi_size_or_error_t>(sizeof(rx_buffer_))) {
       continue;
     }
-    uint32_t token = 0;
-    if (mailbox_.publishRx(rx_buffer_, static_cast<uint16_t>(received),
-                           millis(), &token)) {
-      latest_peer_ = peer;
-      latest_peer_valid_ = true;
-      latest_peer_rx_token_ = token;
-    }
+    WifiRealtimePeer endpoint;
+    const char* address = peer.get_ip_address();
+    if (address == nullptr) continue;
+    strncpy(endpoint.address, address, sizeof(endpoint.address) - 1u);
+    endpoint.port = peer.get_port();
+    (void)mailbox_.publishRx(rx_buffer_, static_cast<uint16_t>(received),
+                            millis(), endpoint, nullptr);
   }
   mailbox_.noteRxBudgetHit();
 }
@@ -118,12 +116,14 @@ void WifiRealtimeWorker::serviceReceive() {
 void WifiRealtimeWorker::serviceProof() {
   WifiRealtimeProof proof;
   if (!mailbox_.peekProof(&proof)) return;
-  if (!latest_peer_valid_ || proof.rx_token != latest_peer_rx_token_) {
+  if (!realtimeRxAfterSocketOpen(socket_open_rx_floor_, proof.rx_token) ||
+      proof.peer.address[0] == '\0' || proof.peer.port == 0u) {
     mailbox_.consumeProof(proof.token);
     return;
   }
+  const SocketAddress destination(proof.peer.address, proof.peer.port);
   const nsapi_size_or_error_t sent =
-      socket_.sendto(latest_peer_, proof.bytes, proof.length);
+      socket_.sendto(destination, proof.bytes, proof.length);
   const bool would_block = sent == NSAPI_ERROR_WOULD_BLOCK;
   const uint32_t proof_sequence = csm::rd_u32_le(
       proof.bytes + 9u + csm::kRealtimeProofSequenceOffset);

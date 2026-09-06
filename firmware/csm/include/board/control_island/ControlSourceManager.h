@@ -40,7 +40,8 @@ class ControlSourceManager {
   void clearRemote();
   void select(ControlSource source);
   FinalControlSnapshotPayload snapshot(uint32_t permit_mask,
-                                       uint32_t activation_epoch) const;
+                                       uint32_t activation_epoch,
+                                       uint32_t target_m4_boot_id) const;
 
   ControlSource activeSource() const { return active_source_; }
   uint32_t sourceEpoch() const { return source_epoch_; }

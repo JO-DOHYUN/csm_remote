@@ -39,9 +39,7 @@ class WifiRealtimeWorker final {
   uint32_t network_epoch_ = 0;
   UDPSocket socket_;
   bool socket_open_ = false;
-  SocketAddress latest_peer_;
-  bool latest_peer_valid_ = false;
-  uint32_t latest_peer_rx_token_ = 0;
+  uint32_t socket_open_rx_floor_ = 0;
   uint32_t next_open_ms_ = 0;
   uint8_t rx_buffer_[kRealtimeDatagramCapacity] = {};
   rtos::EventFlags wake_flags_;

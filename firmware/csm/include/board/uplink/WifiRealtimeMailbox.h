@@ -16,11 +16,22 @@ static constexpr uint16_t kRealtimeProofFrameBytes =
         csm::encoded_typed_frame_len(csm::kRealtimeProofV1PayloadLen));
 static constexpr uint16_t kRealtimeDatagramCapacity = 128;
 
+struct WifiRealtimePeer {
+  char address[48] = {};
+  uint16_t port = 0;
+};
+
+constexpr bool realtimeRxAfterSocketOpen(uint32_t floor, uint32_t token) {
+  const uint32_t delta = token - floor;
+  return token != 0u && delta != 0u && delta < 0x80000000u;
+}
+
 struct WifiRealtimeDatagram {
   uint8_t bytes[kRealtimeDatagramCapacity] = {};
   uint16_t length = 0;
   uint32_t token = 0;
   uint32_t arrival_ms = 0;
+  WifiRealtimePeer peer = {};
 };
 
 struct WifiRealtimeProof {
@@ -29,6 +40,7 @@ struct WifiRealtimeProof {
   uint32_t token = 0;
   uint32_t rx_token = 0;
   uint32_t staged_ms = 0;
+  WifiRealtimePeer peer = {};
 };
 
 struct WifiRealtimeEvidence {
@@ -66,10 +78,11 @@ class WifiRealtimeMailbox {
   void reset();
   void setNotifier(WifiRealtimeNotifier notifier) { notifier_ = notifier; }
   bool publishRx(const uint8_t* bytes, uint16_t length,
-                 uint32_t arrival_ms, uint32_t* token);
+                 uint32_t arrival_ms, const WifiRealtimePeer& peer,
+                 uint32_t* token);
   bool takeLatestRx(WifiRealtimeDatagram* datagram);
   bool stageProof(const uint8_t* bytes, uint16_t length,
-                  uint32_t rx_token, uint32_t proof_sequence,
+                  const WifiRealtimeDatagram& request, uint32_t proof_sequence,
                   uint32_t now_ms);
   bool peekProof(WifiRealtimeProof* proof) const;
   void consumeProof(uint32_t token);

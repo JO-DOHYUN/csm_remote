@@ -34,7 +34,9 @@ void WifiRealtimeMailbox::reset() {
 }
 
 bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
-                                    uint32_t arrival_ms, uint32_t* token) {
+                                    uint32_t arrival_ms,
+                                    const WifiRealtimePeer& peer,
+                                    uint32_t* token) {
   if (bytes == nullptr || length == 0u ||
       length > kRealtimeDatagramCapacity) return false;
   if (rx_guard_.test_and_set(std::memory_order_acquire)) {
@@ -51,6 +53,7 @@ bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
   rx_slot_.length = length;
   rx_slot_.token = next;
   rx_slot_.arrival_ms = arrival_ms;
+  rx_slot_.peer = peer;
   rx_guard_.clear(std::memory_order_release);
   incrementSaturating(&rx_datagrams_);
   rx_bytes_.fetch_add(length, std::memory_order_relaxed);
@@ -81,11 +84,11 @@ bool WifiRealtimeMailbox::takeLatestRx(WifiRealtimeDatagram* datagram) {
 }
 
 bool WifiRealtimeMailbox::stageProof(const uint8_t* bytes, uint16_t length,
-                                     uint32_t rx_token,
+                                     const WifiRealtimeDatagram& request,
                                      uint32_t proof_sequence,
                                      uint32_t now_ms) {
   if (bytes == nullptr || length != kRealtimeProofFrameBytes ||
-      rx_token == 0u || proof_sequence == 0u) return false;
+      request.token == 0u || proof_sequence == 0u) return false;
   if (proof_guard_.test_and_set(std::memory_order_acquire)) {
     incrementSaturating(&proof_would_block_);
     return false;
@@ -95,7 +98,8 @@ bool WifiRealtimeMailbox::stageProof(const uint8_t* bytes, uint16_t length,
   memcpy(proof_slot_.bytes, bytes, length);
   proof_slot_.length = length;
   proof_slot_.token = next;
-  proof_slot_.rx_token = rx_token;
+  proof_slot_.rx_token = request.token;
+  proof_slot_.peer = request.peer;
   proof_slot_.staged_ms = now_ms;
   proof_guard_.clear(std::memory_order_release);
   incrementSaturating(&proof_staged_);

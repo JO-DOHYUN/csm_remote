@@ -617,7 +617,13 @@ Local ready reason: `0 READY`, `1 no health`, `2 timeout contract disabled`,
 `3 M7-local health stale`, `4 bus-off`, `5 error-passive`, `6 tracking fault`,
 `7 clock contract`, `8 M7 source stale at M4`, `9 M4 not ready`.
 This preserves the prior M7 predicate; it is not a new permission gate.
-IPC/schema identity is `0x43495344`; the trace slot remains 64 bytes.
+IPC/schema identity is `0x43495345`; the trace slot remains 64 bytes.
+The internal final snapshot includes `target_m4_boot_id`, bound by M7 at
+activation admission. Its `activation_epoch` is allocated from one M7-global,
+wrap-safe monotonic Host/RC execution domain synchronized from M4 health;
+Android command/authority IDs remain transaction/proof correlation and never
+enter the M4 watermark. M4 accepts ACTIVE only for its own boot instance. Both
+cores must migrate together; external health record offsets remain unchanged.
 
 `CONTROL_PATH_DIAGNOSTIC` record 27, schema 1, 340 bytes, Service/HIL only:
 `0..7 M7 mono_us`, `8 schema`, `9..11 reserved zero`; every remaining field is
@@ -761,6 +767,8 @@ host monotonic time, contract/valid mask and exact 005/007/364 bytes.
 carries CSM monotonic time, boot/activation identity, proof sequence, highest
 accepted realtime sequence, applied generation and status/reason/flags. Both
 directions retain only the newest item; no TCP fallback, retry, replay or catch-up.
+`STATE_APPLIED` means M7 accepted the state and observed matching M4 boot plus
+physical ACTIVE activation; M7 staging/admission alone never asserts it.
   - `17..23 reserved`
 - `HOST_QUERY_CAPABILITY` payload is either 0 bytes or `command_id u32`.
   It is the only downlink record accepted on telemetry TCP `3333`, so
@@ -770,20 +778,16 @@ directions retain only the newest item; no TCP fallback, retry, replay or catch-
   `CONTROL_ACK` on TCP `3334` (plus the canonical evidence mirror). The query is
   idempotent and gives a reconnecting host a fresh boot identity/sequence
   anchor even if it missed the connection-edge announcement.
-- Production Host TX requires a live CSM-local causal proof, accepted ARM, live
-  lease, and ready target backend. The first heartbeat is a pending bootstrap and
-  is ACKed without opening liveness. Only a later heartbeat whose `ack_ref`
-  matches that pending ID proves an application round trip and refreshes the
-  receiver-local proof timer. Raw arrival and socket-write completion never do.
-- Heartbeat/session/state/N-shot share one wrap-safe consumed command-ID
-  watermark. A trustworthy well-formed ID is consumed before later policy
-  rejection and cannot execute after circumstances change. The watermark resets
-  only on M7 boot/new TCP epoch, never on DISARM, re-ARM, lease/proof timeout, RC
-  preemption, or state replacement.
-- Proof timeout is initially `300 ms` and remains independent of lease timeout.
-  Either expiry closes Host authority. `host_mono_ms` remains available only for
-  scheduling/clock diagnostics and is never compared with the CSM clock for a
-  safety decision. Heartbeat resume cannot auto-arm.
+- Service/HIL Host TX requires accepted ARM, a ready target backend and the
+  receiver-local UDP bidirectional proof. PRE-ARM requires a newly issued
+  challenge to return after boot/DISARM/expiry/inactive TCP epoch.
+- TCP session/N-shot transactions use the wrap-safe consumed command-ID
+  watermark. UDP state uses its independent process-scoped sequence domain.
+  The TCP watermark resets only on M7 boot/new TCP epoch; DISARM, re-ARM,
+  liveness timeout, RC preemption and state replacement do not reset it.
+- UDP forward/proof-reference freshness initially expires after `350 ms`.
+  Expiry closes Host authority. `host_mono_ms` is diagnostic only and is never
+  compared with the CSM clock for safety. Resumed UDP cannot auto-arm.
 
 Reserved next-phase `CONTROL_ACK` status names, without changing the current v1
 payload:

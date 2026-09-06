@@ -6,7 +6,7 @@
 namespace csm::board::control_island {
 
 // Frozen REV.B cross-image identity and fixed SRAM4 ownership.
-static constexpr uint32_t kControlIslandSchemaId = 0x43495344u;   // "CISD"
+static constexpr uint32_t kControlIslandSchemaId = 0x43495345u;   // "CISE"
 static constexpr uint32_t kHno1WireContractId = 0x484E4F31u;     // "HNO1"
 static constexpr uint32_t kControlMemoryLayoutId = 0xD3A8B800u;
 static constexpr uintptr_t kControlIpcAddress = 0x3800A800u;
@@ -146,6 +146,9 @@ struct FinalControlSnapshotPayload {
   uint32_t activation_epoch = 0;
   uint32_t active_source = static_cast<uint32_t>(ControlSource::None);
   uint32_t permit_mask = 0;
+  // Bound by M7 to the execution instance admitted for this activation.
+  // Retained shared RAM must never activate a newly booted M4.
+  uint32_t target_m4_boot_id = 0;
   LaneExecutionImage lanes[kLaneCount] = {};
   BoundedTxTransaction transaction = {};
 };

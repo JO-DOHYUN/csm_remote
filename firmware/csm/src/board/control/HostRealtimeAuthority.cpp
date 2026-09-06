@@ -24,7 +24,9 @@ bool HostRealtimeAuthority::begin(uint64_t boot_session_id,
   authority_epoch_ = 0u;
   proof_authority_epoch_ = 0u;
   bound_m4_boot_id_ = 0u;
+  bound_m4_activation_epoch_ = 0u;
   bound_m4_active_seen_ = false;
+  bound_m4_applied_generation_ = 0u;
   arm_ms_ = 0u;
   realtime_sequence_seen_ = false;
   highest_rx_sequence_ = 0u;
@@ -116,18 +118,23 @@ bool HostRealtimeAuthority::arm(uint32_t authority_epoch, uint32_t now_ms,
   return result == csm::ControlReasonOk;
 }
 
-void HostRealtimeAuthority::bindM4(uint32_t m4_boot_id) {
+void HostRealtimeAuthority::bindM4(uint32_t m4_boot_id,
+                                   uint32_t activation_epoch) {
   bound_m4_boot_id_ = active_ ? m4_boot_id : 0u;
+  bound_m4_activation_epoch_ = active_ ? activation_epoch : 0u;
   bound_m4_active_seen_ = false;
+  bound_m4_applied_generation_ = 0u;
 }
 
 bool HostRealtimeAuthority::m4AuthorityRevoked(uint32_t m4_boot_id,
                                                uint32_t activation_epoch,
-                                               bool control_active) {
+                                               bool control_active,
+                                               uint32_t applied_generation) {
   if (!active_ || bound_m4_boot_id_ == 0u) return false;
   if (m4_boot_id == 0u || m4_boot_id != bound_m4_boot_id_) return true;
-  if (control_active && activation_epoch == authority_epoch_) {
+  if (control_active && activation_epoch == bound_m4_activation_epoch_) {
     bound_m4_active_seen_ = true;
+    bound_m4_applied_generation_ = applied_generation;
     return false;
   }
   return bound_m4_active_seen_;
@@ -140,7 +147,9 @@ void HostRealtimeAuthority::disarm() {
   active_ = false;
   authority_epoch_ = 0u;
   bound_m4_boot_id_ = 0u;
+  bound_m4_activation_epoch_ = 0u;
   bound_m4_active_seen_ = false;
+  bound_m4_applied_generation_ = 0u;
   active_forward_valid_ = false;
   active_proof_valid_ = false;
   last_applied_generation_ = 0u;
@@ -288,7 +297,10 @@ uint16_t HostRealtimeAuthority::proofFlags(uint32_t now_ms) const {
   if (return_fresh) flags |= csm::kRealtimeProofFlagReturnFresh;
   if (preArmQualified(now_ms)) flags |= csm::kRealtimeProofFlagPreArmQualified;
   if (active_) flags |= csm::kRealtimeProofFlagAuthorityActive;
-  if (last_state_applied_) flags |= csm::kRealtimeProofFlagStateApplied;
+  if (last_state_applied_ && bound_m4_active_seen_ &&
+      bound_m4_applied_generation_ == last_applied_generation_) {
+    flags |= csm::kRealtimeProofFlagStateApplied;
+  }
   return flags;
 }
 

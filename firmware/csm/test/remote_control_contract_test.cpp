@@ -106,6 +106,7 @@ FinalControlSnapshotPayload makeSnapshot(uint32_t publish_sequence,
                                          uint32_t generation) {
   FinalControlSnapshotPayload snapshot;
   snapshot.m7_boot_id = 11u;
+  snapshot.target_m4_boot_id = 3u;
   snapshot.publish_sequence = publish_sequence;
   snapshot.source_epoch = source_epoch;
   snapshot.activation_epoch = activation_epoch;
@@ -217,7 +218,7 @@ void testSourceManagerOwnershipAndEpochs() {
          HostStateAdmission::AcceptedNew);
   manager.select(ControlSource::Host);
   const uint32_t host_epoch = manager.sourceEpoch();
-  auto host = manager.snapshot(kAllLanePermitMask, 41u);
+  auto host = manager.snapshot(kAllLanePermitMask, 41u, 3u);
   assert(host.source_epoch == host_epoch && host.activation_epoch == 41u);
   assert(host.permit_mask == 0x07u && host.lanes[kLane364].valid == 1u);
   LaneExecutionImage remote[kLaneCount] = {};
@@ -227,7 +228,7 @@ void testSourceManagerOwnershipAndEpochs() {
   }
   manager.updateRemote(2u, 3u, remote, true);
   manager.select(ControlSource::Remote);
-  auto rc = manager.snapshot(kAllLanePermitMask, 42u);
+  auto rc = manager.snapshot(kAllLanePermitMask, 42u, 3u);
   assert(rc.source_epoch != host_epoch && rc.permit_mask == 0x03u);
   assert(rc.lanes[kLane005].valid && rc.lanes[kLane007].valid);
   assert(!rc.lanes[kLane364].valid);
@@ -484,7 +485,7 @@ void testTransmitterOffOnAndHostToRcTakeover() {
                                         UINT32_MAX));
   manager.select(ControlSource::Remote);
   assert(manager.activeSource() == ControlSource::Remote);
-  const FinalControlSnapshotPayload rc = manager.snapshot(0x03u, 2u);
+  const FinalControlSnapshotPayload rc = manager.snapshot(0x03u, 2u, 3u);
   assert(rc.permit_mask == 0x03u && !rc.lanes[kLane364].valid);
 
   // Transmitter OFF revokes RC. ON requires a fresh three-frame sequence; an
@@ -517,6 +518,42 @@ void testSharedMemoryIntegrityAndBoundedRing() {
   for (size_t i = 0; i < kRawCanRingCapacity; ++i) assert(pushRawCanFromM4(raw));
   assert(!pushRawCanFromM4(raw));
   for (size_t i = 0; i < kRawCanRingCapacity; ++i) assert(popRawCanForM7(&raw));
+}
+
+void testM4OnlyRebootRejectsRetainedAndRepublishedActive() {
+  initializeControlIpcForM7(17u);
+  const uint32_t first_boot = initializeControlIpcForM4();
+  auto old = makeSnapshot(1u, 1u, 100u, ControlSource::Host, 1u);
+  old.m7_boot_id = 17u;
+  old.target_m4_boot_id = first_boot;
+  assert(publishFinalControlSnapshot(old));
+  const uint32_t reboot = initializeControlIpcForM4();
+  assert(reboot != first_boot);
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(reboot, 300000u, &driver);
+  // First foreground read after reset observes the retained, CRC-valid slot.
+  auto read = readFinalControlSnapshot(0u);
+  assert(read.accepted && read.new_snapshot);
+  stage(&executor, read.payload, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  assert(!executor.hasActiveControl());
+  assert(memcmp(driver.last_data[kLane005], kLaneSafeWirePolicies[kLane005].idle_safe.data, 8u) == 0);
+  closeAll(&driver, &executor);
+  // M7 can still publish before it observes reboot health: binding stays old.
+  assert(publishFinalControlSnapshot(old));
+  read = readFinalControlSnapshot(read.sequence);
+  stage(&executor, read.payload, 5100u);
+  executor.onFiveMillisecondSlot(10000u);
+  assert(!executor.hasActiveControl());
+  closeAll(&driver, &executor);
+  old.target_m4_boot_id = reboot;
+  old.activation_epoch = 101u;  // fresh explicit ARM bound to the new M4
+  assert(publishFinalControlSnapshot(old));
+  read = readFinalControlSnapshot(read.sequence);
+  stage(&executor, read.payload, 10100u);
+  executor.onFiveMillisecondSlot(15000u);
+  assert(executor.hasActiveControl());
 }
 
 void testLongSafeCyclicAndRepeatedSafeStaging() {
@@ -620,6 +657,7 @@ void testActivationEpochWrapAfterRevoke() {
   auto active = makeSnapshot(1u, 5u, 0xFFFFFFFFu, ControlSource::Host, 1u);
   stage(&executor, active, 100u);
   executor.onFiveMillisecondSlot(5000u);
+  assert(executor.hasActiveControl());
   closeAll(&driver, &executor);
   executor.onFiveMillisecondSlot(20000u);
   assert(!executor.hasActiveControl());
@@ -769,8 +807,13 @@ void testRealtimeWireAndBidirectionalAuthority() {
   uint8_t reason = 0xFFu;
   assert(authority.arm(100u, 121u, true, true, &reason));
   assert(reason == csm::ControlReasonOk && authority.authorityEpoch() == 100u);
-  authority.bindM4(7u);
-  assert(!authority.m4AuthorityRevoked(7u, 0u, false));
+  // Android command/authority identity is not the persistent M4 activation
+  // watermark. A restarted Android sender may legitimately begin at command
+  // ID 1 while M7 allocates a newer physical activation epoch.
+  constexpr uint32_t kPhysicalActivation = 900u;
+  authority.bindM4(7u, kPhysicalActivation);
+  assert(authority.boundM4ActivationEpoch() == kPhysicalActivation);
+  assert(!authority.m4AuthorityRevoked(7u, 0u, false, 0u));
 
   state.mode = csm::kHostRealtimeModeActive;
   state.authority_epoch = 100u;
@@ -778,10 +821,19 @@ void testRealtimeWireAndBidirectionalAuthority() {
   state.proof_ref = 2u;
   assert(authority.accept(state, 130u) ==
          HostRealtimeAdmission::AcceptedActive);
-  assert(!authority.m4AuthorityRevoked(7u, 100u, true));
-  assert(authority.m4AuthorityRevoked(8u, 100u, true));
-  assert(authority.m4AuthorityRevoked(7u, 100u, false));
   authority.noteStateApplied(state.state_generation, true);
+  assert((authority.proofFlags(130u) &
+          csm::kRealtimeProofFlagStateApplied) == 0u);
+  assert(!authority.m4AuthorityRevoked(7u, 100u, true, 0u));
+  assert(!authority.m4AuthorityRevoked(7u, kPhysicalActivation, true, 0u));
+  assert((authority.proofFlags(130u) &
+          csm::kRealtimeProofFlagStateApplied) == 0u);
+  assert(!authority.m4AuthorityRevoked(
+      7u, kPhysicalActivation, true, state.state_generation));
+  assert(authority.m4AuthorityRevoked(
+      8u, kPhysicalActivation, true, state.state_generation));
+  assert(authority.m4AuthorityRevoked(
+      7u, kPhysicalActivation, false, state.state_generation));
   assert(authority.healthy(130u));
   assert((authority.proofFlags(130u) &
           (csm::kRealtimeProofFlagForwardFresh |
@@ -935,6 +987,7 @@ int main() {
   testHostAndRcLaneOwnership();
   testSameSourceRearmAndStale();
   testActivationEpochWrapAfterRevoke();
+  testM4OnlyRebootRejectsRetainedAndRepublishedActive();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
   testDedicatedBufferTerminalReconciliation();

@@ -97,7 +97,7 @@ static constexpr uint8_t kHostControlNShotDataOffset = 20;
 
 static constexpr uint16_t kControlIslandHealthPayloadLen = 512;
 static constexpr uint8_t kControlIslandHealthSchema = 5;
-static constexpr uint32_t kControlIslandHealthSchemaId = 0x43495344;
+static constexpr uint32_t kControlIslandHealthSchemaId = 0x43495345;
 static constexpr uint32_t kControlIslandHealthWireContractId = 0x484E4F31;
 static constexpr uint32_t kControlIslandHealthMemoryLayoutId = 0xD3A8B800;
 static constexpr uint16_t kControlIslandHealthMonoUsOffset = 0;

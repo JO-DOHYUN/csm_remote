@@ -215,7 +215,7 @@ void M4StaticCyclicExecutor::applyStagedSnapshot(uint32_t) {
     revokeActive(true);
     return;
   }
-  if (rearm_required_ &&
+  if (rearm_required_ && rejected_activation_epoch_ != 0u &&
       !u32Newer(rejected_activation_epoch_, staged_.activation_epoch)) return;
   const bool source_change = active_valid_ &&
       (staged_.m7_boot_id != active_.m7_boot_id ||
@@ -230,7 +230,7 @@ void M4StaticCyclicExecutor::activateStaged() {
     if (lane_state_[lane] == LaneState::PendingActive) return;
   }
   if (!snapshotHasActiveMotion(staged_) ||
-      (rearm_required_ &&
+      (rearm_required_ && rejected_activation_epoch_ != 0u &&
        !u32Newer(rejected_activation_epoch_, staged_.activation_epoch))) {
     activation_pending_ = false;
     return;
@@ -374,6 +374,8 @@ bool M4StaticCyclicExecutor::activeMotionAllowed() const {
 
 bool M4StaticCyclicExecutor::snapshotHasActiveMotion(
     const FinalControlSnapshotPayload& snapshot) const {
+  if (snapshot.target_m4_boot_id == 0u ||
+      snapshot.target_m4_boot_id != health_.m4_boot_id) return false;
   uint32_t owned = 0u;
   if (snapshot.active_source == static_cast<uint32_t>(ControlSource::Host)) {
     owned = kAllLanePermitMask;
