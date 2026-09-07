@@ -13,7 +13,6 @@
 #include "board/CapabilityPublisher.h"
 #include "board/HostDownlinkParser.h"
 #include "board/StatusLed.h"
-#include "board/control/HostControlAuthorityGate.h"
 #include "board/control/HostRealtimeAuthority.h"
 #include "board/control/RemoteControlRuntime.h"
 #include "board/control_island/ControlIslandSharedMemory.h"
@@ -952,7 +951,6 @@ static uint32_t host_can_tx_rejected_total = 0;
 static uint32_t host_can_tx_transient_rejected_total = 0;
 static csm::board::control::HostRealtimeAuthority host_realtime_authority;
 static bool host_realtime_authority_ok = false;
-static csm::board::control::HostControlAuthorityGate host_authority_gate;
 static csm::board::control_island::ControlSourceManager control_source_manager;
 static csm::board::control_island::ControlHealthPayload control_island_health = {};
 static uint32_t control_island_health_sequence = 0;
@@ -4680,14 +4678,12 @@ static void close_host_control_epoch(
       reason != HostControlCloseReason::AuthorityPreempted)
     record_control_path_failure(0x100u + static_cast<uint32_t>(reason), now_ms);
   control_path_observing = false;
-  host_authority_gate.beginClose(reason, 0u);
   host_realtime_authority.disarm();
   control_source_manager.clearHost();
-  host_authority_gate.observeHostSlots(0u);
 }
 
 static void service_host_authority_boundary(uint32_t now_ms) {
-  if (!host_authority_gate.admissionOpen()) return;
+  if (!host_realtime_authority.active()) return;
   if (!host_control_authority_allowed()) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::AuthorityPreempted,
@@ -4744,7 +4740,7 @@ static void service_control_island() {
   remote_source_was_valid = output.source_valid;
   control_source_manager.updateRemote(output.image_generation,
       output.lease_sequence, output.lanes, output.source_valid);
-  if (output.source_valid && host_authority_gate.admissionOpen()) {
+  if (output.source_valid && host_realtime_authority.active()) {
     close_host_control_epoch(
         csm::board::control::HostControlCloseReason::AuthorityPreempted,
         now_ms);
@@ -4752,10 +4748,9 @@ static void service_control_island() {
 
   using csm::board::control_island::ControlSource;
   ControlSource selected = ControlSource::None;
-  if (host_authority_gate.rcAllowed() && output.source_valid) {
+  if (output.source_valid) {
     selected = ControlSource::Remote;
-  } else if (host_authority_gate.admissionOpen() &&
-             host_realtime_authority.healthy(now_ms) &&
+  } else if (host_realtime_authority.healthy(now_ms) &&
              control_source_manager.host().valid) {
     selected = ControlSource::Host;
   }
@@ -5610,7 +5605,6 @@ static void handle_host_control_nshot(const uint8_t* payload, uint16_t len) {
   const uint8_t lane = payload[csm::kHostControlNShotLaneOffset];
   const bool accepted =
       contract_id == csm::kHostControlStateContractId &&
-      host_authority_gate.admissionOpen() &&
       host_realtime_authority.healthy(now_ms) &&
       control_source_manager.acceptHostNShot(
           rd_u32_le(&payload[csm::kHostControlNShotTransactionIdOffset]),
@@ -5699,13 +5693,7 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
         (void)host_realtime_authority.arm(
             command_id, now_ms, backend_ready,
             host_control_authority_allowed(), &reason);
-        if (reason == ControlReasonOk &&
-            !host_authority_gate.activate(
-                host_realtime_authority.active(),
-                host_control_authority_allowed(), 0u)) {
-          host_realtime_authority.disarm();
-          reason = ControlReasonTxBusy;
-        } else if (reason == ControlReasonOk) {
+        if (reason == ControlReasonOk) {
           host_realtime_authority.bindM4(
               control_island_health.m4_boot_id,
               next_control_activation_epoch());
@@ -6117,7 +6105,6 @@ void setup() {
 #if BOARD_ENABLE_RUNTIME_DIAGNOSTICS
   runtime_diagnostic_boot_checkpoint(RuntimeDiagBootM4Issued);
 #endif
-  host_authority_gate.reset();
   host_realtime_authority_ok = host_realtime_authority.begin(
       boot_session_id, BOARD_HOST_REALTIME_LIVENESS_TIMEOUT_MS);
   voltage_adc_ok = init_voltage_adc_lane();

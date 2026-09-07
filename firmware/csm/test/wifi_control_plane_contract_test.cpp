@@ -81,6 +81,27 @@ void overflowClosesEpochAndReconnectDoesNotReplay() {
   CHECK(!mailbox.peekTx(frame, sizeof(frame), length));
 }
 
+void acceptedReplacementStartsOnlyANewControlEpoch() {
+  csm::board::uplink::WifiControlPlaneMailbox mailbox;
+  mailbox.configure(9);
+  CHECK(mailbox.activate(1));
+  uint8_t ack[csm::kControlAckPayloadLen] = {};
+  csm::wr_u32_le(&ack[csm::kControlAckCommandIdOffset], 41);
+  CHECK(mailbox.offerAck(ack, sizeof(ack)));
+  const uint32_t old_epoch = mailbox.connectionEpoch();
+
+  // Worker replacement is driven by a successfully accepted/configured
+  // candidate. activate() clears the old anchor/ACK epoch before exposing the
+  // replacement, so no old pre-ARM proof or ACK can cross it.
+  CHECK(mailbox.activate(2));
+  CHECK(mailbox.connectionEpoch() == old_epoch + 1u);
+  uint8_t frame[64] = {};
+  uint16_t length = 0;
+  CHECK(mailbox.copyAnchor(frame, sizeof(frame), length));
+  CHECK(frame[3] == static_cast<uint8_t>(csm::RecordType::StreamSession));
+  CHECK(!mailbox.peekTx(frame, sizeof(frame), length));
+}
+
 void rxIsBoundedAndClearedAcrossEpochs() {
   csm::board::uplink::WifiControlPlaneMailbox mailbox;
   mailbox.configure(1);
@@ -156,6 +177,7 @@ void realtimeHandoffsAreDepthOneAndNeverReplay() {
 int main() {
   activationAnchorsIdentityAndAckSequence();
   overflowClosesEpochAndReconnectDoesNotReplay();
+  acceptedReplacementStartsOnlyANewControlEpoch();
   rxIsBoundedAndClearedAcrossEpochs();
   realtimeHandoffsAreDepthOneAndNeverReplay();
   if (failures != 0) return 1;

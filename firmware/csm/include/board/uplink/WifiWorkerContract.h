@@ -283,6 +283,9 @@ enum class WifiCloseReason : uint8_t {
   TransmitNoProgress = 4,
   IsolationRequest = 5,
   QueuePressure = 6,
+  // A configured candidate was actually accepted by the listener. SIGIO alone
+  // is never sufficient to replace a live client.
+  AcceptedReplacement = 7,
 };
 
 struct WifiTxProgressObservation {

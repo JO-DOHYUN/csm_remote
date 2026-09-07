@@ -123,22 +123,24 @@ void WifiSocketWorker::run() {
     // Host causal ACKs are serviced before the bulk evidence socket. Both are
     // nonblocking and bounded, but telemetry backpressure never gets first
     // claim on a worker turn.
-    if (control_client_ == nullptr) {
-      if (static_cast<uint32_t>(now_ms - last_control_accept_poll_ms_) >=
-          BOARD_WIFI_ACCEPT_POLL_MS) {
-        last_control_accept_poll_ms_ = now_ms;
-        serviceControlAccept(now_ms);
-      }
-    } else {
+    if (static_cast<uint32_t>(now_ms - last_control_accept_poll_ms_) >=
+        BOARD_WIFI_ACCEPT_POLL_MS) {
+      last_control_accept_poll_ms_ = now_ms;
+      // Polling accept returns a bounded, concrete candidate. A wake alone is
+      // not replacement evidence and cannot close the current control epoch.
+      serviceControlAccept(now_ms);
+    }
+    if (control_client_ != nullptr) {
       serviceControlClient(now_ms);
     }
-    if (client_ == nullptr) {
-      if (static_cast<uint32_t>(now_ms - last_accept_poll_ms_) >=
-          BOARD_WIFI_ACCEPT_POLL_MS) {
-        last_accept_poll_ms_ = now_ms;
-        serviceAccept(now_ms);
-      }
-    } else {
+    if (static_cast<uint32_t>(now_ms - last_accept_poll_ms_) >=
+        BOARD_WIFI_ACCEPT_POLL_MS) {
+      last_accept_poll_ms_ = now_ms;
+      // A half-open client is replaced only after accept() hands this worker
+      // a new candidate; generic SIGIO never owns epoch closure.
+      serviceAccept(now_ms);
+    }
+    if (client_ != nullptr) {
       serviceClient(now_ms);
     }
     publishState(millis());
@@ -484,6 +486,15 @@ void WifiSocketWorker::serviceAccept(uint32_t) {
     return;
   }
 
+  if (client_ != nullptr) {
+    closeClient(WifiCloseReason::AcceptedReplacement);
+    applyAbortRequest();
+    if (mailbox_.abortRequestSequence() != handled_abort_sequence_) {
+      closeSocket(candidate, WifiWorkerCallPhase::CloseClient);
+      return;
+    }
+  }
+
   const uint32_t disconnect_sequence = mailbox_.disconnectRequestSequence();
   if (disconnect_sequence != handled_disconnect_sequence_) {
     handled_disconnect_sequence_ = disconnect_sequence;
@@ -682,10 +693,18 @@ void WifiSocketWorker::serviceControlAccept(uint32_t) {
   }
   endCall(configured);
   if (configured != NSAPI_ERROR_OK ||
-      !control_mailbox_.activate(static_cast<uint64_t>(micros()))) {
+      (control_client_ == nullptr &&
+       !control_mailbox_.activate(static_cast<uint64_t>(micros())))) {
     if (configured != NSAPI_ERROR_OK) noteSocketError(configured);
     closeSocket(candidate, WifiWorkerCallPhase::CloseControlClient);
     return;
+  }
+  if (control_client_ != nullptr) {
+    closeControlClient(7u, 0);
+    if (!control_mailbox_.activate(static_cast<uint64_t>(micros()))) {
+      closeSocket(candidate, WifiWorkerCallPhase::CloseControlClient);
+      return;
+    }
   }
   control_client_ = candidate;
   control_anchor_length_ = 0;

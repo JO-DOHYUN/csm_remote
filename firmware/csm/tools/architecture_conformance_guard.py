@@ -176,6 +176,9 @@ for source, required in (
 for obsolete in ("HostCommandFreshness", "handle_host_heartbeat"):
     if obsolete in main or obsolete in realtime_authority_header + realtime_authority_source:
         fail(f"retired TCP liveness path remains: {obsolete}")
+for obsolete in ("HostControlAuthorityGate", "host_authority_gate"):
+    if obsolete in main:
+        fail(f"duplicate Host/RC exclusion owner remains: {obsolete}")
 if "host_realtime_authority.resetTransactionEpoch();" not in main:
     fail("Host transaction watermark lacks explicit transport-epoch reset")
 if "control_source_manager.resetHostTransportEpoch();" not in main:
