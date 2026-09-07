@@ -57,6 +57,7 @@ class M4StaticCyclicExecutor {
   bool laneOwnedByActiveSource(uint8_t lane) const;
   void revokeActive(bool require_rearm);
   void latchFault(uint8_t lane);
+  void publishCoherentHealth(uint32_t now_us);
   void saturatingIncrement(uint32_t* value);
 
   M4LaneDriver* driver_ = nullptr;

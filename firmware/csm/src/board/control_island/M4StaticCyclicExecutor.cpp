@@ -141,6 +141,7 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
     releaseLane(kLane005);
   }
   next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 3u);
+  publishCoherentHealth(now_us);
   ++health_write_sequence_;
 }
 
@@ -407,7 +408,12 @@ bool M4StaticCyclicExecutor::laneOwnedByActiveSource(uint8_t lane) const {
 
 void M4StaticCyclicExecutor::revokeActive(bool require_rearm) {
   uint32_t rejected = active_.activation_epoch;
-  if (activation_pending_ && u32Newer(rejected, staged_.activation_epoch)) {
+  // A fault consumed before ingress applies its staged first ACTIVE must fence
+  // that same staged activation. A later, explicit epoch remains admissible.
+  const bool staged_active = snapshotHasActiveMotion(staged_);
+  if ((activation_pending_ || staged_generation_ != consumed_staged_generation_) &&
+      staged_active && (rejected == 0u ||
+                        u32Newer(rejected, staged_.activation_epoch))) {
     rejected = staged_.activation_epoch;
   }
   if (require_rearm && rejected != 0u) {
@@ -462,31 +468,37 @@ bool M4StaticCyclicExecutor::healthSnapshot(
     }
   }
   if (!coherent) return false;
-  result.flags = timebase_configured_ ? kHealthFlagTim4Configured : 0u;
+  (void)now_us;
+  *output = result;
+  return true;
+}
+
+void M4StaticCyclicExecutor::publishCoherentHealth(uint32_t now_us) {
+  // TIM4 is the only writer. Everything safety consumers read is materialized
+  // before the enclosing write sequence becomes even.
+  health_.flags = timebase_configured_ ? kHealthFlagTim4Configured : 0u;
   if (driver_ != nullptr && driver_->ready()) {
-    result.flags |= kHealthFlagReady | kHealthFlagClockContractOk |
+    health_.flags |= kHealthFlagReady | kHealthFlagClockContractOk |
                     kHealthFlagTransportReady;
   }
-  if (result.tim4_tick_total != 0u) result.flags |= kHealthFlagTim4Ticking;
-  if (driver_ != nullptr && driver_->busOff()) result.flags |= kHealthFlagBusOff;
+  if (health_.tim4_tick_total != 0u) health_.flags |= kHealthFlagTim4Ticking;
+  if (driver_ != nullptr && driver_->busOff()) health_.flags |= kHealthFlagBusOff;
   if (driver_ != nullptr && driver_->errorPassive()) {
-    result.flags |= kHealthFlagErrorPassive;
+    health_.flags |= kHealthFlagErrorPassive;
   }
   if (last_publish_seen_us_ != 0u && publish_timeout_us_ != 0u &&
       !elapsedAtLeast(now_us, last_publish_seen_us_, publish_timeout_us_)) {
-    result.flags |= kHealthFlagM7Fresh;
+    health_.flags |= kHealthFlagM7Fresh;
   }
   if (activeMotionAllowed()) {
-    result.flags |= kHealthFlagControlActive | kHealthFlagActiveMotion;
+    health_.flags |= kHealthFlagControlActive | kHealthFlagActiveMotion;
   }
-  if (tracking_fault_active_) result.flags |= kHealthFlagTrackingFault;
-  result.m7_publish_age_local_ms = last_publish_seen_us_ == 0u
+  if (tracking_fault_active_) health_.flags |= kHealthFlagTrackingFault;
+  health_.m7_publish_age_local_ms = last_publish_seen_us_ == 0u
       ? UINT32_MAX
       : static_cast<uint32_t>(now_us - last_publish_seen_us_) / 1000u;
-  result.current = driver_ == nullptr ? FdcanRawSnapshot{}
+  health_.current = driver_ == nullptr ? FdcanRawSnapshot{}
                                       : driver_->rawSnapshot();
-  *output = result;
-  return true;
 }
 
 void M4StaticCyclicExecutor::saturatingIncrement(uint32_t* value) {

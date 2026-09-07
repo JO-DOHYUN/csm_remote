@@ -58,8 +58,17 @@ struct FakeDriver final : M4LaneDriver {
   uint32_t cancels[kLaneCount] = {};
   uint8_t last_data[kLaneCount][8] = {};
   TxRequestResult next_result = TxRequestResult::Accepted;
+  mutable M4StaticCyclicExecutor* ready_hook = nullptr;
+  mutable bool trigger_ready_hook = false;
+  mutable uint32_t ready_hook_now_us = 0u;
 
-  bool ready() const override { return ready_value && !off; }
+  bool ready() const override {
+    if (trigger_ready_hook && ready_hook != nullptr) {
+      trigger_ready_hook = false;
+      ready_hook->onFiveMillisecondSlot(ready_hook_now_us);
+    }
+    return ready_value && !off;
+  }
   bool errorPassive() const override { return passive; }
   bool busOff() const override { return off; }
   TxRequestResult request(uint8_t lane, const uint8_t data[8]) override {
@@ -724,6 +733,59 @@ void testTrackingFaultGloballyClosesActive() {
   assert((health.flags & kHealthFlagTrackingFault) != 0u);
 }
 
+void testFirstActiveFaultFencesStagedActivation() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  const auto first = makeSnapshot(1u, 1u, 0xFFFFFFFFu, ControlSource::Host, 1u);
+  stage(&executor, first, 100u);
+  executor.latchTrackingFault(kLane005);
+  executor.onFiveMillisecondSlot(5000u);
+  assert(!executor.hasActiveControl());
+  assert((executor.health().flags & kHealthFlagTrackingFault) != 0u);
+
+  auto replay = first;
+  replay.publish_sequence = 2u;
+  stage(&executor, replay, 5100u);
+  executor.onFiveMillisecondSlot(10000u);
+  assert(!executor.hasActiveControl());
+
+  auto rearmed = first;
+  rearmed.publish_sequence = 3u;
+  rearmed.activation_epoch = 1u;
+  stage(&executor, rearmed, 10100u);
+  executor.onFiveMillisecondSlot(15000u);
+  assert(executor.hasActiveControl());
+}
+
+void testHealthSnapshotDoesNotMixTim4Generations() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  const auto first = makeSnapshot(1u, 1u, 1u, ControlSource::Host, 1u);
+  stage(&executor, first, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  closeAll(&driver, &executor);
+  auto second = first;
+  second.publish_sequence = 2u;
+  second.activation_epoch = 2u;
+  stage(&executor, second, 5100u);
+
+  driver.ready_hook = &executor;
+  driver.ready_hook_now_us = 10000u;
+  driver.trigger_ready_hook = true;
+  ControlHealthPayload health;
+  assert(executor.healthSnapshot(6000u, &health));
+  assert((health.flags & kHealthFlagControlActive) != 0u);
+  assert(health.activation_epoch_seen == executor.health().activation_epoch_seen);
+  // A read cannot call the driver or allow a TIM4 transition to mix fields.
+  assert(driver.trigger_ready_hook);
+  driver.trigger_ready_hook = false;
+  executor.onFiveMillisecondSlot(10000u);
+  assert(executor.healthSnapshot(11000u, &health));
+  assert(health.activation_epoch_seen == 2u);
+}
+
 void testDedicatedBufferTerminalReconciliation() {
   const TxBufferReconciliation pending =
       reconcileAcceptedTxBuffers(0x07u, 0x01u, 0x02u, 0x04u);
@@ -1030,6 +1092,8 @@ int main() {
   testM4OnlyRebootRejectsRetainedAndRepublishedActive();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
+  testFirstActiveFaultFencesStagedActivation();
+  testHealthSnapshotDoesNotMixTim4Generations();
   testDedicatedBufferTerminalReconciliation();
   testBringupTraceMonotonicFailureRetention();
   testStaticDueAndExplicitRequestAccounting();
