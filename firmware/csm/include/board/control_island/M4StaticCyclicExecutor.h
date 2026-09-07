@@ -57,6 +57,10 @@ class M4StaticCyclicExecutor {
   bool laneOwnedByActiveSource(uint8_t lane) const;
   void revokeActive(bool require_rearm);
   void latchFault(uint8_t lane);
+  void requireReset();
+  void advanceRecovery();
+  void notePending(uint8_t lane, LaneState state, uint32_t generation,
+                   uint32_t transaction_id);
   void publishCoherentHealth(uint32_t now_us);
   void saturatingIncrement(uint32_t* value);
 
@@ -83,6 +87,16 @@ class M4StaticCyclicExecutor {
   bool rearm_required_ = true;
   bool tracking_fault_active_ = false;
   bool fault_closing_ = false;
+  RecoveryState recovery_state_ = RecoveryState::Normal;
+  uint32_t recovery_safe_mask_ = 0;
+  struct PendingIdentity {
+    uint32_t m7_boot_id = 0;
+    uint32_t source_epoch = 0;
+    uint32_t activation_epoch = 0;
+    uint32_t generation = 0;
+    uint32_t transaction_id = 0;
+    LaneState state = LaneState::Free;
+  } pending_[kLaneCount] = {};
   bool error_warning_seen_ = false;
   bool error_passive_seen_ = false;
   bool bus_off_seen_ = false;

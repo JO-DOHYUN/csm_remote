@@ -733,6 +733,119 @@ void testTrackingFaultGloballyClosesActive() {
   assert((health.flags & kHealthFlagTrackingFault) != 0u);
 }
 
+void testTerminalIdentityNeverUsesAdmissionOrCumulativeSuccess() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  auto old_motion = makeSnapshot(1u, 11u, 21u, ControlSource::Host, 10u);
+  stage(&executor, old_motion, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  driver.terminal(&executor, kLane005, true);
+  driver.terminal(&executor, kLane007, true);
+  driver.terminal(&executor, kLane364, true);
+  executor.onFiveMillisecondSlot(10000u);
+  assert(executor.health().lanes[kLane005].last_value_generation == 10u);
+
+  // New neutral/latest state is admitted, but its request has not terminally
+  // completed.  A cumulative old success must not be attributed to gen 11.
+  auto new_neutral = old_motion;
+  new_neutral.publish_sequence = 2u;
+  new_neutral.source_image_generation = 11u;
+  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+    new_neutral.lanes[lane].value_generation = 11u;
+    memset(new_neutral.lanes[lane].data, 0, sizeof(new_neutral.lanes[lane].data));
+  }
+  stage(&executor, new_neutral, 10100u);
+  executor.onFiveMillisecondSlot(15000u);
+  const LaneHealth& pending = executor.health().lanes[kLane005];
+  assert(pending.tx_success == 1u);
+  assert(pending.last_value_generation != 11u);
+  assert(pending.state == static_cast<uint8_t>(LaneState::PendingActive));
+  driver.terminal(&executor, kLane005, true);
+  executor.onFiveMillisecondSlot(20000u);
+  // The preceding pending request was old gen10; only after its terminal can
+  // the latest image become active and issue gen11.
+  assert(executor.health().lanes[kLane005].last_value_generation != 11u);
+  driver.terminal(&executor, kLane005, true);
+  executor.onFiveMillisecondSlot(25000u);
+  assert(executor.health().lanes[kLane005].last_value_generation == 11u);
+
+  // An identity change resets terminal correlation even when a generation
+  // numerically wraps/repeats.
+  closeAll(&driver, &executor);
+  auto different_activation = new_neutral;
+  different_activation.publish_sequence = 3u;
+  different_activation.activation_epoch = 22u;
+  different_activation.lanes[kLane005].value_generation = 11u;
+  stage(&executor, different_activation, 25100u);
+  executor.onFiveMillisecondSlot(30000u);
+  assert(executor.health().lanes[kLane005].last_value_generation == 0u);
+}
+
+void testTrackingFaultReconcilesSafeOrRequiresReset() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  auto active = makeSnapshot(1u, 1u, 10u, ControlSource::Host, 1u);
+  stage(&executor, active, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  executor.latchTrackingFault(kLane005);
+  executor.onFiveMillisecondSlot(10000u);
+  closeAll(&driver, &executor, false);
+  // Fixed safe 005/007 must terminally transmit; 364 is proven solely by its
+  // frozen SuppressTx policy.  No elapsed-time threshold participates.
+  for (uint32_t now = 15000u; now <= 45000u; now += 5000u) {
+    executor.onFiveMillisecondSlot(now);
+    closeAll(&driver, &executor, true);
+  }
+  executor.onFiveMillisecondSlot(50000u);
+  assert((executor.health().flags & kHealthFlagTrackingFault) == 0u);
+  assert(executor.health().reserved_state[0] ==
+         static_cast<uint8_t>(RecoveryState::RearmReady));
+  assert(!executor.hasActiveControl());
+
+  // The rejected activation cannot revive after SAFE reconciliation.
+  active.publish_sequence = 2u;
+  stage(&executor, active, 50100u);
+  executor.onFiveMillisecondSlot(55000u);
+  assert(!executor.hasActiveControl());
+  active.publish_sequence = 3u;
+  active.activation_epoch = 11u;
+  stage(&executor, active, 55100u);
+  executor.onFiveMillisecondSlot(60000u);
+  assert(executor.hasActiveControl());
+
+  FakeDriver unprovable_driver;
+  unprovable_driver.cancel_accept = false;
+  M4StaticCyclicExecutor unprovable;
+  unprovable.begin(3u, 300000u, &unprovable_driver);
+  stage(&unprovable, makeSnapshot(1u, 1u, 1u, ControlSource::Host, 1u), 100u);
+  unprovable.onFiveMillisecondSlot(5000u);
+  unprovable.latchTrackingFault(kLane005);
+  unprovable.onFiveMillisecondSlot(10000u);
+  assert(unprovable.health().reserved_state[0] ==
+         static_cast<uint8_t>(RecoveryState::ResetRequired));
+}
+
+void testNShotTerminalUsesPayloadGenerationNotContinuousGeneration() {
+  FakeDriver driver;
+  M4StaticCyclicExecutor executor;
+  executor.begin(3u, 300000u, &driver);
+  auto active = makeSnapshot(1u, 1u, 1u, ControlSource::Host, 12u);
+  active.transaction.active = 1u;
+  active.transaction.lane_index = kLane005;
+  active.transaction.transaction_id = 99u;
+  active.transaction.payload_generation = 77u;
+  active.transaction.requested_success_count = 1u;
+  stage(&executor, active, 100u);
+  executor.onFiveMillisecondSlot(5000u);
+  driver.terminal(&executor, kLane005, true);
+  executor.onFiveMillisecondSlot(10000u);
+  assert(executor.health().lanes[kLane005].last_value_generation == 77u);
+  assert(executor.health().transaction_state ==
+         static_cast<uint8_t>(TransactionState::Complete));
+}
+
 void testFirstActiveFaultFencesStagedActivation() {
   FakeDriver driver;
   M4StaticCyclicExecutor executor;
@@ -1092,6 +1205,9 @@ int main() {
   testM4OnlyRebootRejectsRetainedAndRepublishedActive();
   testErrorPassiveBusOffResetAndHealthPurity();
   testTrackingFaultGloballyClosesActive();
+  testTerminalIdentityNeverUsesAdmissionOrCumulativeSuccess();
+  testTrackingFaultReconcilesSafeOrRequiresReset();
+  testNShotTerminalUsesPayloadGenerationNotContinuousGeneration();
   testFirstActiveFaultFencesStagedActivation();
   testHealthSnapshotDoesNotMixTim4Generations();
   testDedicatedBufferTerminalReconciliation();

@@ -55,6 +55,8 @@ void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
   rearm_required_ = true;
   tracking_fault_active_ = false;
   fault_closing_ = false;
+  recovery_state_ = RecoveryState::Normal;
+  recovery_safe_mask_ = 0u;
   error_warning_seen_ = error_passive_seen_ = bus_off_seen_ = false;
   rejected_activation_epoch_ = 0;
   health_write_sequence_ = 0;
@@ -62,6 +64,7 @@ void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
   for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
     lane_state_[lane] = LaneState::Free;
     cancel_issued_[lane] = false;
+    pending_[lane] = {};
     health_.lanes[lane].state = static_cast<uint8_t>(LaneState::Free);
   }
 }
@@ -121,7 +124,12 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
   bus_off_seen_ = bus_off;
   health_.fdcan_state = static_cast<uint8_t>(driver_->rawSnapshot().hal_state);
   consumeIngress(now_us);
-  if (driver_->busOff() || !driver_->ready()) revokeActive(true);
+  if (driver_->busOff()) {
+    requireReset();
+    revokeActive(true);
+  } else if (!driver_->ready()) {
+    revokeActive(true);
+  }
   if (driver_->errorPassive()) revokeActive(true);
   if (active_valid_ &&
       (last_publish_seen_us_ == 0u || publish_timeout_us_ == 0u ||
@@ -141,6 +149,7 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
     releaseLane(kLane005);
   }
   next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 3u);
+  advanceRecovery();
   publishCoherentHealth(now_us);
   ++health_write_sequence_;
 }
@@ -171,10 +180,29 @@ void M4StaticCyclicExecutor::consumeTerminalEvents() {
     if (((transmitted | cancelled) & bit) == 0u) continue;
     const LaneState kind = lane_state_[lane];
     if (kind == LaneState::Free) continue;
+    const PendingIdentity terminal = pending_[lane];
+    const bool active_identity_matches =
+        kind != LaneState::PendingActive ||
+        (terminal.state == kind && terminal.m7_boot_id == active_.m7_boot_id &&
+         terminal.source_epoch == active_.source_epoch &&
+         terminal.activation_epoch == active_.activation_epoch);
     if ((transmitted & bit) != 0u) {
       saturatingIncrement(&health_.lanes[lane].tx_success);
       if ((cancelled & bit) != 0u) {
         saturatingIncrement(&health_.lanes[lane].cancel_race_count);
+      }
+      // This is the only point at which a value generation becomes terminal
+      // evidence.  Admission deliberately does not update this field.
+      if (active_identity_matches) {
+        health_.lanes[lane].last_value_generation = terminal.generation;
+      } else {
+        // A terminal without the pending execution identity can never be
+        // credited to the current activation.
+        requireReset();
+      }
+      if (recovery_state_ == RecoveryState::Reconciling &&
+          kind == LaneState::PendingSafe) {
+        recovery_safe_mask_ |= bit;
       }
       if (kind == LaneState::PendingActive &&
           active_.transaction.active != 0u &&
@@ -196,6 +224,7 @@ void M4StaticCyclicExecutor::consumeTerminalEvents() {
     }
     lane_state_[lane] = LaneState::Free;
     cancel_issued_[lane] = false;
+    pending_[lane] = {};
     health_.lanes[lane].state = static_cast<uint8_t>(LaneState::Free);
   }
 }
@@ -231,6 +260,7 @@ void M4StaticCyclicExecutor::activateStaged() {
     if (lane_state_[lane] == LaneState::PendingActive) return;
   }
   if (!snapshotHasActiveMotion(staged_) ||
+      recovery_state_ == RecoveryState::ResetRequired ||
       (rearm_required_ && rejected_activation_epoch_ != 0u &&
        !u32Newer(rejected_activation_epoch_, staged_.activation_epoch))) {
     activation_pending_ = false;
@@ -242,6 +272,12 @@ void M4StaticCyclicExecutor::activateStaged() {
   activation_pending_ = false;
   rearm_required_ = false;
   tracking_fault_active_ = false;
+  recovery_state_ = RecoveryState::Normal;
+  recovery_safe_mask_ = 0u;
+  // Identity changes must not inherit a terminal from a prior execution.
+  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+    health_.lanes[lane].last_value_generation = 0u;
+  }
   health_.source_epoch_seen = active_.source_epoch;
   health_.activation_epoch_seen = active_.activation_epoch;
   health_.active_source_seen = active_.active_source;
@@ -299,18 +335,36 @@ void M4StaticCyclicExecutor::releaseLane(uint8_t lane) {
       lane_state_[lane] = LaneState::PendingActive;
       cancel_issued_[lane] = true;
       health.state = static_cast<uint8_t>(LaneState::PendingActive);
-      health.last_value_generation = active_.lanes[lane].value_generation;
+      notePending(lane, LaneState::PendingActive,
+                  active_.transaction.active != 0u &&
+                          active_.transaction.lane_index == lane
+                      ? active_.transaction.payload_generation
+                      : active_.lanes[lane].value_generation,
+                  active_.transaction.active != 0u &&
+                          active_.transaction.lane_index == lane
+                      ? active_.transaction.transaction_id : 0u);
+      cancel_issued_[lane] = true;
       return;
     }
-    if (result == TxRequestResult::AlreadyPending ||
-        result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
+    if (result == TxRequestResult::EnableFailedAbortFailed) {
+      latchFault(lane);
+      requireReset();
+    }
+    else if (result == TxRequestResult::AlreadyPending) latchFault(lane);
     return;
   }
   saturatingIncrement(&health.request_accepted);
   lane_state_[lane] = LaneState::PendingActive;
   cancel_issued_[lane] = false;
   health.state = static_cast<uint8_t>(LaneState::PendingActive);
-  health.last_value_generation = active_.lanes[lane].value_generation;
+  notePending(lane, LaneState::PendingActive,
+              active_.transaction.active != 0u &&
+                      active_.transaction.lane_index == lane
+                  ? active_.transaction.payload_generation
+                  : active_.lanes[lane].value_generation,
+              active_.transaction.active != 0u &&
+                      active_.transaction.lane_index == lane
+                  ? active_.transaction.transaction_id : 0u);
 }
 
 void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
@@ -318,6 +372,9 @@ void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
   const SafeWireFrame& safe = kLaneSafeWirePolicies[lane].idle_safe;
   if (safe.action != SafeWireAction::FixedSafeFrame) {
     saturatingIncrement(&health.policy_suppressed);
+    if (recovery_state_ == RecoveryState::Reconciling) {
+      recovery_safe_mask_ |= laneBit(lane);
+    }
     return;
   }
   if (!driver_->ready()) {
@@ -332,32 +389,46 @@ void M4StaticCyclicExecutor::releaseSafeLane(uint8_t lane) {
       lane_state_[lane] = LaneState::PendingSafe;
       cancel_issued_[lane] = true;
       health.state = static_cast<uint8_t>(LaneState::PendingSafe);
-      health.last_value_generation = 0u;
+      notePending(lane, LaneState::PendingSafe, 0u, 0u);
+      cancel_issued_[lane] = true;
       return;
     }
-    if (result == TxRequestResult::AlreadyPending ||
-        result == TxRequestResult::EnableFailedAbortFailed) latchFault(lane);
+    if (result == TxRequestResult::EnableFailedAbortFailed) {
+      latchFault(lane);
+      requireReset();
+    }
+    else if (result == TxRequestResult::AlreadyPending) latchFault(lane);
     return;
   }
   saturatingIncrement(&health.request_accepted);
   lane_state_[lane] = LaneState::PendingSafe;
   cancel_issued_[lane] = false;
   health.state = static_cast<uint8_t>(LaneState::PendingSafe);
-  health.last_value_generation = 0u;
+  notePending(lane, LaneState::PendingSafe, 0u, 0u);
 }
 
 void M4StaticCyclicExecutor::cancelLane(uint8_t lane) {
   if (lane_state_[lane] == LaneState::Free) return;
   if (!driver_->pending(lane)) {
+    if (recovery_state_ == RecoveryState::Reconciling &&
+        lane_state_[lane] == LaneState::PendingActive) {
+      // The accepted active request disappeared without an owned terminal.
+      requireReset();
+    }
     lane_state_[lane] = LaneState::Free;
     cancel_issued_[lane] = false;
+    pending_[lane] = {};
     health_.lanes[lane].state = static_cast<uint8_t>(LaneState::Free);
     return;
   }
   if (cancel_issued_[lane]) return;
   cancel_issued_[lane] = true;
-  if (!driver_->cancel(lane) && driver_->pending(lane) && !fault_closing_) {
-    latchFault(lane);
+  if (!driver_->cancel(lane) && driver_->pending(lane)) {
+    if (fault_closing_ || recovery_state_ == RecoveryState::Reconciling) {
+      requireReset();
+    } else {
+      latchFault(lane);
+    }
   }
 }
 
@@ -436,7 +507,13 @@ void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
   const bool transaction_active =
       health_.transaction_state == static_cast<uint8_t>(TransactionState::Active);
   saturatingIncrement(&health_.lanes[lane].tracking_fault);
+  if (recovery_state_ == RecoveryState::Reconciling) {
+    requireReset();
+    return;
+  }
   tracking_fault_active_ = true;
+  recovery_state_ = RecoveryState::Reconciling;
+  recovery_safe_mask_ = 0u;
   if (health_.first_fault.psr == 0u && health_.first_fault.ecr == 0u &&
       health_.first_fault.ir == 0u) {
     health_.first_fault = driver_ == nullptr ? FdcanRawSnapshot{}
@@ -450,6 +527,38 @@ void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
   if (transaction_active) {
     health_.transaction_state = static_cast<uint8_t>(TransactionState::Faulted);
   }
+}
+
+void M4StaticCyclicExecutor::requireReset() {
+  recovery_state_ = RecoveryState::ResetRequired;
+  recovery_safe_mask_ = 0u;
+  tracking_fault_active_ = true;
+  rearm_required_ = true;
+}
+
+void M4StaticCyclicExecutor::advanceRecovery() {
+  if (recovery_state_ != RecoveryState::Reconciling) return;
+  for (uint8_t lane = 0; lane < kLaneCount; ++lane) {
+    if (lane_state_[lane] == LaneState::PendingActive) return;
+    const SafeWireFrame& safe = kLaneSafeWirePolicies[lane].idle_safe;
+    if (safe.action == SafeWireAction::FixedSafeFrame &&
+        (recovery_safe_mask_ & laneBit(lane)) == 0u) return;
+  }
+  // No deadline is invented here.  The existing fixed-safe terminal contract
+  // is the positive proof; lane 364 is proven by its frozen SuppressTx policy.
+  recovery_state_ = RecoveryState::RearmReady;
+  tracking_fault_active_ = false;
+}
+
+void M4StaticCyclicExecutor::notePending(uint8_t lane, LaneState state,
+                                         uint32_t generation,
+                                         uint32_t transaction_id) {
+  pending_[lane] = {active_.m7_boot_id, active_.source_epoch,
+                    active_.activation_epoch, generation, transaction_id,
+                    state};
+  lane_state_[lane] = state;
+  cancel_issued_[lane] = false;
+  health_.lanes[lane].state = static_cast<uint8_t>(state);
 }
 
 bool M4StaticCyclicExecutor::healthSnapshot(
@@ -494,6 +603,7 @@ void M4StaticCyclicExecutor::publishCoherentHealth(uint32_t now_us) {
     health_.flags |= kHealthFlagControlActive | kHealthFlagActiveMotion;
   }
   if (tracking_fault_active_) health_.flags |= kHealthFlagTrackingFault;
+  health_.reserved_state[0] = static_cast<uint8_t>(recovery_state_);
   health_.m7_publish_age_local_ms = last_publish_seen_us_ == 0u
       ? UINT32_MAX
       : static_cast<uint32_t>(now_us - last_publish_seen_us_) / 1000u;

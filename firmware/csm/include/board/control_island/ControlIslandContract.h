@@ -97,6 +97,16 @@ enum class SafeWireAction : uint8_t {
   FixedSafeFrame = 1,
 };
 
+// A tracking fault may be released only after the existing physical SAFE
+// contract has terminally reconciled.  This is executor-local state: it never
+// reclassifies admission or cumulative statistics as a physical terminal.
+enum class RecoveryState : uint8_t {
+  Normal = 0,
+  Reconciling = 1,
+  RearmReady = 2,
+  ResetRequired = 3,
+};
+
 struct SafeWireFrame {
   SafeWireAction action = SafeWireAction::SuppressTx;
   uint8_t data[8] = {};
