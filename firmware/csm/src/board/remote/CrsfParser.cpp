@@ -211,7 +211,6 @@ void CrsfParser::discardPrefix(uint8_t count) {
 }
 
 void CrsfParser::noteReject(CrsfParseStatus status) {
-  if (malformed_total_ != UINT16_MAX) ++malformed_total_;
   if (status == CrsfParseStatus::RejectedAddress) {
     saturatingIncrement(&rejected_address_total_);
   } else if (status == CrsfParseStatus::RejectedLength) {
@@ -219,6 +218,12 @@ void CrsfParser::noteReject(CrsfParseStatus status) {
   } else if (status == CrsfParseStatus::RejectedCrc) {
     saturatingIncrement(&rejected_crc_total_);
   }
+}
+
+uint32_t CrsfParser::malformedTotal() const {
+  const uint64_t total = static_cast<uint64_t>(rejected_address_total_) +
+      rejected_length_total_ + rejected_crc_total_;
+  return total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
 }
 
 CrsfParseResult CrsfParser::evaluate() {
@@ -253,7 +258,7 @@ CrsfParseResult CrsfParser::evaluate() {
 
     CrsfParseResult result;
     result.status = CrsfParseStatus::FrameReady;
-    result.malformed_total = malformed_total_;
+    result.malformed_total = malformedTotal();
     result.frame.address = buffer_[0];
     result.frame.length = buffer_[1];
     result.frame.type = buffer_[2];
@@ -267,7 +272,7 @@ CrsfParseResult CrsfParser::evaluate() {
   }
   CrsfParseResult result;
   result.status = last_reject;
-  result.malformed_total = malformed_total_;
+  result.malformed_total = malformedTotal();
   return result;
 }
 

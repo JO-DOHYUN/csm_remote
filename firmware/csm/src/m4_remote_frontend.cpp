@@ -94,12 +94,19 @@ bool foreground_loop_entered = false;
 bool first_tick_reported = false;
 
 uint32_t frontendMalformedTotal() {
-  return parser.malformedTotal() + diagnostics.inter_byte_resets;
+  const uint64_t total = static_cast<uint64_t>(diagnostics.rejected_address) +
+      diagnostics.rejected_length + diagnostics.rejected_crc +
+      diagnostics.inter_byte_resets;
+  return total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
 }
 
 void updateSampleState(uint32_t now_ms) {
   if (!has_rc_sample) current_sample.m4_time_ms = now_ms;
-  current_sample.malformed_count = parser.malformedTotal();
+  // The fixed mailbox's legacy u16 field is not diagnostic truth. Clamp it
+  // only for ABI compatibility; M7/Android consume the detailed u32 counters.
+  const uint32_t malformed_total = frontendMalformedTotal();
+  current_sample.malformed_count = malformed_total > UINT16_MAX
+      ? UINT16_MAX : static_cast<uint16_t>(malformed_total);
   diagnostics.last_rc_age_ms = has_rc_sample ? now_ms - last_rc_ms : 0xFFFFFFFFu;
   diagnostics.last_link_statistics_age_ms = has_link_statistics
       ? now_ms - last_link_statistics_ms

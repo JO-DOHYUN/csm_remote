@@ -145,7 +145,9 @@ void handleFrame(uint32_t now_ms,
   }
 
   ++g_counters.normalized_samples;
-  normalized.sample.malformed_count = g_parser.malformedTotal();
+  const uint32_t malformed_total = g_parser.malformedTotal();
+  normalized.sample.malformed_count = malformed_total > UINT16_MAX
+      ? UINT16_MAX : static_cast<uint16_t>(malformed_total);
   const auto write_result =
       g_mailbox_writer.publishSample(normalized.sample, &g_last_mailbox_frame);
   if (!write_result.accepted) {

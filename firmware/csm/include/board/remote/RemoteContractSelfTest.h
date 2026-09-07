@@ -21,7 +21,7 @@ enum class RemoteContractSelfTestDetail : uint16_t {
 struct RemoteContractSelfTestResult {
   bool passed = false;
   RemoteContractSelfTestDetail detail = RemoteContractSelfTestDetail::ParserDidNotComplete;
-  uint16_t parser_malformed_total = 0;
+  uint32_t parser_malformed_total = 0;
   uint32_t published_sequence = 0;
 };
 

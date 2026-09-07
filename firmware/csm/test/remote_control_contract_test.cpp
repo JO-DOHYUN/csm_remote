@@ -371,6 +371,20 @@ void testCrsfStreamResynchronizationAndR16smFixture() {
   assert(recovered && recovery.rejectedCrcTotal() != 0u);
 }
 
+void testCrsfMalformedCountersRemainDetailedPastUint16() {
+  using namespace csm::board::remote;
+  CrsfParser parser;
+  for (uint32_t index = 0u; index <= UINT16_MAX; ++index) {
+    (void)parser.ingest(0x00u);  // never a qualified R16SM address
+  }
+  assert(parser.rejectedAddressTotal() == static_cast<uint32_t>(UINT16_MAX) + 1u);
+  assert(parser.rejectedLengthTotal() == 0u);
+  assert(parser.rejectedCrcTotal() == 0u);
+  assert(parser.malformedTotal() == static_cast<uint32_t>(UINT16_MAX) + 1u);
+  const CrsfParseResult next = parser.ingest(0x00u);
+  assert(next.malformed_total == static_cast<uint32_t>(UINT16_MAX) + 2u);
+}
+
 void packLittleEndian(uint8_t* output, uint16_t bit_offset,
                       uint8_t bit_count, uint16_t value) {
   for (uint8_t bit = 0; bit < bit_count; ++bit) {
@@ -1205,6 +1219,7 @@ int main() {
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfForegroundBudgetIsByteTimeAndWrapBounded();
   testCrsfStreamResynchronizationAndR16smFixture();
+  testCrsfMalformedCountersRemainDetailedPastUint16();
   testCrsfModernFramesAndChannelValidity();
   testTransmitterOffOnAndHostToRcTakeover();
   testSourceManagerOwnershipAndEpochs();

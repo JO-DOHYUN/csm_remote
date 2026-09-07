@@ -56,7 +56,7 @@ struct CrsfFrame {
 struct CrsfParseResult {
   CrsfParseStatus status = CrsfParseStatus::Waiting;
   CrsfFrame frame = {};
-  uint16_t malformed_total = 0;
+  uint32_t malformed_total = 0;
 };
 
 struct CrsfRcChannels {
@@ -108,7 +108,9 @@ class CrsfParser {
   CrsfParseResult ingest(uint8_t byte);
 
   uint8_t bufferedBytes() const { return pos_; }
-  uint16_t malformedTotal() const { return malformed_total_; }
+  // Aggregate is derived from the detailed 32-bit reject counters; it is not
+  // an independent, narrower source of malformed truth.
+  uint32_t malformedTotal() const;
   uint32_t rejectedAddressTotal() const { return rejected_address_total_; }
   uint32_t rejectedLengthTotal() const { return rejected_length_total_; }
   uint32_t rejectedCrcTotal() const { return rejected_crc_total_; }
@@ -120,7 +122,6 @@ class CrsfParser {
 
   uint8_t buffer_[kCrsfMaxFrameBytes] = {};
   uint8_t pos_ = 0;
-  uint16_t malformed_total_ = 0;
   uint32_t rejected_address_total_ = 0;
   uint32_t rejected_length_total_ = 0;
   uint32_t rejected_crc_total_ = 0;

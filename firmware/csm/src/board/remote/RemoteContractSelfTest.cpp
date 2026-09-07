@@ -17,7 +17,7 @@ constexpr uint8_t kSelfTestRssiHint = 82;
 constexpr uint16_t kSelfTestFlags = 0x0055;
 
 RemoteContractSelfTestResult fail(RemoteContractSelfTestDetail detail,
-                                  uint16_t malformed_total = 0,
+                                  uint32_t malformed_total = 0,
                                   uint32_t published_sequence = 0) {
   RemoteContractSelfTestResult result;
   result.detail = detail;
