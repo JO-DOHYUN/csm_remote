@@ -56,6 +56,7 @@ bool ControlSourceManager::acceptHostNShot(
     uint32_t payload_generation, const uint8_t data[8]) {
   if (!host_.valid || transaction_id == 0u || lane >= kLaneCount ||
       successful_tx_count == 0u || payload_generation == 0u || data == nullptr ||
+      !sequenceNewer(payload_generation, host_.image_generation) ||
       (host_transaction_seen_ &&
        !sequenceNewer(transaction_id, last_host_transaction_id_))) {
     return false;

@@ -241,28 +241,30 @@ void testHostNShotTransactionWatermarkSurvivesLifecycle() {
   assert(manager.acceptHostRealtimeState(100u, kAllLanePermitMask,
                                          a, b, c, 1u) ==
          HostStateAdmission::AcceptedNew);
-  assert(manager.acceptHostNShot(100u, kLane364, 2u, 100u, pulse));
+  assert(manager.acceptHostNShot(100u, kLane364, 2u, 101u, pulse));
 
   // A newer coherent state cancels the active event but cannot reopen an old
   // transaction ID, even when the command/state generation itself is newer.
   assert(manager.acceptHostRealtimeState(101u, kAllLanePermitMask,
                                          a, b, c, 2u) ==
          HostStateAdmission::AcceptedNew);
-  assert(!manager.acceptHostNShot(50u, kLane364, 2u, 101u, pulse));
+  // A delayed event whose payload generation was superseded by the coherent
+  // state cannot re-enter after that state cancelled the prior event.
+  assert(!manager.acceptHostNShot(101u, kLane364, 2u, 101u, pulse));
 
   manager.clearHost();  // DISARM / authority close.
   assert(manager.acceptHostRealtimeState(102u, kAllLanePermitMask,
                                          a, b, c, 3u) ==
          HostStateAdmission::AcceptedNew);
   assert(!manager.acceptHostNShot(50u, kLane364, 2u, 102u, pulse));
-  assert(manager.acceptHostNShot(101u, kLane364, 2u, 102u, pulse));
+  assert(manager.acceptHostNShot(101u, kLane364, 2u, 103u, pulse));
 
   manager.resetHostTransportEpoch();
   manager.clearHost();
   assert(manager.acceptHostRealtimeState(1u, kAllLanePermitMask,
                                          a, b, c, 1u) ==
          HostStateAdmission::AcceptedNew);
-  assert(manager.acceptHostNShot(50u, kLane364, 2u, 1u, pulse));
+  assert(manager.acceptHostNShot(50u, kLane364, 2u, 2u, pulse));
 }
 
 void testReceiverQualifiedAdmissionAndOptionalStatistics() {
