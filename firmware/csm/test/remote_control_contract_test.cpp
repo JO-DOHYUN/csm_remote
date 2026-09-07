@@ -971,11 +971,49 @@ void testRealtimeWireAndBidirectionalAuthority() {
          csm::encoded_typed_frame_len(csm::kRealtimeProofV1PayloadLen));
   assert(proof[3] == static_cast<uint8_t>(csm::RecordType::RealtimeProofV1));
 }
+
+void testRealtimeProofCausalIssueAge() {
+  using csm::board::control::HostRealtimeAdmission;
+  using csm::board::control::HostRealtimeAuthority;
+  constexpr uint64_t kBoot = 0x8877665544332211ull;
+  HostRealtimeAuthority authority;
+  assert(authority.begin(kBoot, 350u));
+  csm::HostRealtimeStateV1 state = {};
+  state.boot_session_id = kBoot;
+  state.control_contract_id = csm::kHostControlStateContractId;
+  state.valid_mask = kAllLanePermitMask;
+  state.state_generation = 1u;
+  state.realtime_sequence = 1u;
+  assert(authority.accept(state, 0u) == HostRealtimeAdmission::AcceptedPreArm);
+  state.realtime_sequence = 2u;
+  state.proof_ref = 1u;
+  assert(authority.accept(state, 1u) == HostRealtimeAdmission::AcceptedPreArm);
+  uint8_t reason = 0u;
+  assert(authority.arm(1u, 2u, true, true, &reason));
+  state.mode = csm::kHostRealtimeModeActive;
+  state.authority_epoch = 1u;
+  state.realtime_sequence = 3u;
+  state.proof_ref = 2u;
+  assert(authority.accept(state, 3u) == HostRealtimeAdmission::AcceptedActive);
+
+  // Build newer proof sequence numbers while their references are absent.
+  // Returning the first one at 400ms is an increasing but 397ms-old proof.
+  for (uint32_t sequence = 4u; sequence < 24u; ++sequence) {
+    state.realtime_sequence = sequence;
+    state.proof_ref = 0u;
+    assert(authority.accept(state, sequence) == HostRealtimeAdmission::AcceptedActive);
+  }
+  state.realtime_sequence = 24u;
+  state.proof_ref = 3u;
+  assert(authority.accept(state, 400u) == HostRealtimeAdmission::AcceptedActive);
+  assert(authority.update(400u));  // old proof must not extend 350ms return freshness
+}
 }  // namespace
 
 int main() {
   testLocalReadyTruthAndFirstFailureRetention();
   testRealtimeWireAndBidirectionalAuthority();
+  testRealtimeProofCausalIssueAge();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfForegroundBudgetIsByteTimeAndWrapBounded();
   testCrsfStreamResynchronizationAndR16smFixture();

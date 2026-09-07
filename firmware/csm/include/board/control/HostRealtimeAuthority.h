@@ -70,9 +70,10 @@ class HostRealtimeAuthority {
 
  private:
   static bool newer(uint32_t previous, uint32_t current);
-  bool validProofRef(uint32_t proof_ref) const;
+  bool validProofRef(uint32_t proof_ref, uint32_t now_ms) const;
   void observeProofRef(uint32_t proof_ref, uint32_t now_ms, bool active_path);
-  void issueProof(uint8_t status, uint8_t reason);
+  void issueProof(uint8_t status, uint8_t reason, uint32_t issued_ms);
+  void clearProofIssueWindow();
   void requireNewPreArmChallenge();
   void resetPreArmSequenceDomain();
 
@@ -94,6 +95,14 @@ class HostRealtimeAuthority {
   bool realtime_sequence_seen_ = false;
   uint32_t highest_rx_sequence_ = 0;
   uint32_t proof_sequence_ = 0;
+  // Sender emits one realtime datagram per 20ms and never catch-ups. Nineteen
+  // slots retain the exact 350ms causal window plus its boundary, not traffic.
+  static constexpr uint32_t kProofIssueWindow = 19u;
+  struct ProofIssue {
+    uint32_t sequence = 0;
+    uint32_t issued_ms = 0;
+  };
+  ProofIssue proof_issues_[kProofIssueWindow] = {};
   uint32_t last_echoed_proof_ = 0;
   bool prearm_proof_valid_ = false;
   uint32_t prearm_proof_ms_ = 0;
@@ -103,6 +112,8 @@ class HostRealtimeAuthority {
   uint32_t active_forward_ms_ = 0;
   bool active_proof_valid_ = false;
   uint32_t active_proof_ms_ = 0;
+  uint32_t active_proof_issued_ms_ = 0;
+  uint32_t prearm_proof_issued_ms_ = 0;
   uint32_t last_applied_generation_ = 0;
   bool last_state_applied_ = false;
   uint32_t max_forward_gap_ms_ = 0;
