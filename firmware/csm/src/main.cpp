@@ -4671,9 +4671,16 @@ static bool __attribute__((unused)) host_control_authority_allowed() {
 #endif
 }
 
-static void close_host_control_epoch(
-    csm::board::control::HostControlCloseReason reason, uint32_t now_ms) {
-  using csm::board::control::HostControlCloseReason;
+// This is diagnostic provenance for the one HostRealtimeAuthority lifecycle;
+// it is not a second authority gate or state machine.
+enum class HostControlCloseReason : uint8_t {
+  HostDisarm = 1u,
+  AuthorityPreempted = 3u,
+  FreshnessFault = 6u,
+};
+
+static void close_host_control_epoch(HostControlCloseReason reason,
+                                     uint32_t now_ms) {
   if (reason != HostControlCloseReason::HostDisarm &&
       reason != HostControlCloseReason::AuthorityPreempted)
     record_control_path_failure(0x100u + static_cast<uint32_t>(reason), now_ms);
@@ -4686,11 +4693,11 @@ static void service_host_authority_boundary(uint32_t now_ms) {
   if (!host_realtime_authority.active()) return;
   if (!host_control_authority_allowed()) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::AuthorityPreempted,
+        HostControlCloseReason::AuthorityPreempted,
         now_ms);
   } else if (!host_realtime_authority.active()) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+        HostControlCloseReason::FreshnessFault, now_ms);
   } else if (!control_island_runtime_ready(now_ms) ||
              (control_island_health_valid &&
              host_realtime_authority.m4AuthorityRevoked(
@@ -4700,7 +4707,7 @@ static void service_host_authority_boundary(uint32_t now_ms) {
                   csm::board::control_island::kHealthFlagControlActive) != 0u,
                  control_island_common_applied_generation()))) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+        HostControlCloseReason::FreshnessFault, now_ms);
   }
 }
 
@@ -4709,7 +4716,7 @@ static void update_host_realtime_authority() {
   if (host_realtime_authority.update(now_ms)) {
     record_control_path_failure(2u, now_ms);
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+        HostControlCloseReason::FreshnessFault, now_ms);
   }
   service_host_authority_boundary(now_ms);
 }
@@ -4742,7 +4749,7 @@ static void service_control_island() {
       output.lease_sequence, output.lanes, output.source_valid);
   if (output.source_valid && host_realtime_authority.active()) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::AuthorityPreempted,
+        HostControlCloseReason::AuthorityPreempted,
         now_ms);
   }
 
@@ -5575,7 +5582,7 @@ static void service_host_realtime() {
   stage_realtime_proof(datagram, now_ms);
   if (close_for_state) {
     close_host_control_epoch(
-        csm::board::control::HostControlCloseReason::FreshnessFault, now_ms);
+        HostControlCloseReason::FreshnessFault, now_ms);
   }
 }
 #else
@@ -5678,12 +5685,12 @@ static void handle_host_control_session(uint16_t seq, const uint8_t* payload, ui
   switch (action) {
     case csm::HostControlDisarm:
       close_host_control_epoch(
-          csm::board::control::HostControlCloseReason::HostDisarm, now_ms);
+          HostControlCloseReason::HostDisarm, now_ms);
       break;
     case csm::HostControlArm:
       if (!host_control_authority_allowed()) {
         close_host_control_epoch(
-            csm::board::control::HostControlCloseReason::AuthorityPreempted,
+            HostControlCloseReason::AuthorityPreempted,
             now_ms);
         reason = ControlReasonAuthorityDenied;
       } else {

@@ -33,6 +33,34 @@ uint32_t atomicExchangeZero(volatile uint32_t* value) {
   return __atomic_exchange_n(value, 0u, __ATOMIC_ACQ_REL);
 #endif
 }
+
+uint32_t atomicLoadAcquire(const volatile uint32_t* value) {
+#if defined(_MSC_VER)
+  return *value;
+#else
+  return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+#endif
+}
+
+void healthWriteBegin(volatile uint32_t* value) {
+#if defined(_MSC_VER)
+  ++(*value);
+#else
+  // Publish the odd sequence before TIM4 mutates the payload. Seq-cst prevents
+  // the payload stores from moving ahead of this seqlock transition.
+  __atomic_fetch_add(value, 1u, __ATOMIC_SEQ_CST);
+#endif
+}
+
+void healthWriteEnd(volatile uint32_t* value) {
+#if defined(_MSC_VER)
+  ++(*value);
+#else
+  // The even sequence release makes the fully materialized payload visible to
+  // the foreground acquire reader.
+  __atomic_fetch_add(value, 1u, __ATOMIC_RELEASE);
+#endif
+}
 }
 
 void M4StaticCyclicExecutor::begin(uint32_t m4_boot_id,
@@ -104,7 +132,7 @@ void M4StaticCyclicExecutor::latchTrackingFault(uint8_t lane) {
 
 void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
   if (driver_ == nullptr) return;
-  ++health_write_sequence_;
+  healthWriteBegin(&health_write_sequence_);
   saturatingIncrement(&health_.tim4_tick_total);
   if (health_.tim4_first_tick_us == 0u) health_.tim4_first_tick_us = now_us;
   if (health_.tim4_last_tick_us != 0u) {
@@ -151,7 +179,7 @@ void M4StaticCyclicExecutor::onFiveMillisecondSlot(uint32_t now_us) {
   next_slot_ = static_cast<uint8_t>((next_slot_ + 1u) & 3u);
   advanceRecovery();
   publishCoherentHealth(now_us);
-  ++health_write_sequence_;
+  healthWriteEnd(&health_write_sequence_);
 }
 
 void M4StaticCyclicExecutor::consumeIngress(uint32_t now_us) {
@@ -507,6 +535,7 @@ void M4StaticCyclicExecutor::latchFault(uint8_t lane) {
   const bool transaction_active =
       health_.transaction_state == static_cast<uint8_t>(TransactionState::Active);
   saturatingIncrement(&health_.lanes[lane].tracking_fault);
+  if (recovery_state_ == RecoveryState::ResetRequired) return;
   if (recovery_state_ == RecoveryState::Reconciling) {
     requireReset();
     return;
@@ -567,10 +596,10 @@ bool M4StaticCyclicExecutor::healthSnapshot(
   ControlHealthPayload result;
   bool coherent = false;
   for (uint8_t attempt = 0; attempt < 3u; ++attempt) {
-    const uint32_t begin = health_write_sequence_;
+    const uint32_t begin = atomicLoadAcquire(&health_write_sequence_);
     if ((begin & 1u) != 0u) continue;
     result = health_;
-    const uint32_t end = health_write_sequence_;
+    const uint32_t end = atomicLoadAcquire(&health_write_sequence_);
     if (begin == end && (end & 1u) == 0u) {
       coherent = true;
       break;

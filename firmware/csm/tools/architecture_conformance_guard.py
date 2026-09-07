@@ -162,6 +162,10 @@ for required in (
 ):
     if required not in main:
         fail(f"M7 integration missing {required}")
+for required in ("healthWriteBegin", "healthWriteEnd", "atomicLoadAcquire",
+                 "__ATOMIC_SEQ_CST", "__ATOMIC_ACQUIRE", "__ATOMIC_RELEASE"):
+    if required not in executor:
+        fail(f"M4 health publication lacks target-safe ordering: {required}")
 for source, required in (
     (typed_records, "kHostRealtimeStateV1PayloadLen = 64"),
     (typed_records, "kRealtimeProofV1PayloadLen = 36"),

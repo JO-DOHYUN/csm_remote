@@ -825,6 +825,19 @@ void testTrackingFaultReconcilesSafeOrRequiresReset() {
   unprovable.onFiveMillisecondSlot(10000u);
   assert(unprovable.health().reserved_state[0] ==
          static_cast<uint8_t>(RecoveryState::ResetRequired));
+
+  // ResetRequired is absorbing until the M4 reset. Neither a later fault nor
+  // a newer ARM-shaped snapshot can demote it to a recoverable state.
+  unprovable.latchTrackingFault(kLane007);
+  unprovable.onFiveMillisecondSlot(15000u);
+  assert(unprovable.health().reserved_state[0] ==
+         static_cast<uint8_t>(RecoveryState::ResetRequired));
+  auto newer_arm = makeSnapshot(2u, 2u, 2u, ControlSource::Host, 1u);
+  stage(&unprovable, newer_arm, 15100u);
+  unprovable.onFiveMillisecondSlot(20000u);
+  assert(unprovable.health().reserved_state[0] ==
+         static_cast<uint8_t>(RecoveryState::ResetRequired));
+  assert(!unprovable.hasActiveControl());
 }
 
 void testNShotTerminalUsesPayloadGenerationNotContinuousGeneration() {
