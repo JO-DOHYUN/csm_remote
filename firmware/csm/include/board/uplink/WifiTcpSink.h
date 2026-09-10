@@ -177,6 +177,7 @@ class WifiTcpSink final : public IFrameSink, public Stream {
   WifiTransportDiagnosticSnapshot diagnosticSnapshot(
       uint64_t mono_us, uint32_t now_ms) const;
  private:
+  friend struct ObservationOwnerTest;
   WifiWorkerMailbox mailbox_;
   WifiControlPlaneMailbox control_mailbox_;
   WifiRealtimeMailbox realtime_mailbox_;

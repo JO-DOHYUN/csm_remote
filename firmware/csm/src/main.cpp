@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include "board/observability/DebugObservation.h"
 #include <cstring>
 #include <mbed.h>
 #include <new>
@@ -4398,6 +4399,8 @@ static void emit_control_path_diagnostic(uint32_t now_ms) {
   static uint32_t last_emit_ms = 0;
   if (now_ms - last_emit_ms < 1000u) return;
   last_emit_ms = now_ms;  // Evidence loss never creates retry/catch-up.
+  // OBS_BOUNDARY:worker_capacity DEBUG_TRACE reuses this existing 1 Hz cadence.
+  CSM_OBS(csm::board::observation::capacity(now_ms));
   const auto t = wifi_tcp_sink.controlEvidence();
   const auto w = wifi_tcp_sink.diagnosticSnapshot(mono64_us(), now_ms);
   const auto rt = wifi_tcp_sink.realtimeEvidence();
@@ -4685,7 +4688,8 @@ static void close_host_control_epoch(HostControlCloseReason reason,
       reason != HostControlCloseReason::AuthorityPreempted)
     record_control_path_failure(0x100u + static_cast<uint32_t>(reason), now_ms);
   control_path_observing = false;
-  host_realtime_authority.disarm();
+  if (reason == HostControlCloseReason::HostDisarm) host_realtime_authority.disarm();
+  else host_realtime_authority.retire(csm::kRealtimeProofReasonLivenessExpired);
   control_source_manager.clearHost();
 }
 
@@ -5535,6 +5539,8 @@ static void service_host_realtime() {
       csm::decode_host_realtime_datagram(datagram.bytes, datagram.length,
                                          &state);
   if (decoded != csm::RealtimeFrameDecodeResult::Accepted) {
+    // OBS_BOUNDARY:mailbox_admission DEBUG_TRACE, invalid bytes have no trusted wire IDs.
+    CSM_OBS(csm::board::observation::admission(1,0,7,static_cast<uint32_t>(decoded),datagram.token));
     ++realtime_decode_reject_total;
     return;
   }
@@ -5542,6 +5548,10 @@ static void service_host_realtime() {
   using csm::board::control::HostRealtimeAdmission;
   const HostRealtimeAdmission admission =
       host_realtime_authority.accept(state, datagram.arrival_ms);
+  CSM_OBS(csm::board::observation::admission(1,0,
+    admission==HostRealtimeAdmission::AcceptedActive || admission==HostRealtimeAdmission::AcceptedPreArm?6:7,
+    static_cast<uint32_t>(admission),datagram.token,state.realtime_sequence,
+    state.state_generation,state.authority_epoch,state.proof_ref,31));
   bool close_for_state = false;
   switch (admission) {
     case HostRealtimeAdmission::AcceptedActive: {
@@ -5553,6 +5563,9 @@ static void service_host_realtime() {
           csm::board::control_island::HostStateAdmission::Rejected;
       host_realtime_authority.noteStateApplied(state.state_generation,
                                                applied);
+      CSM_OBS(csm::board::observation::admission(1,0,applied?8:7,
+        static_cast<uint32_t>(state_result),datagram.token,state.realtime_sequence,
+        state.state_generation,state.authority_epoch,state.proof_ref,31));
       if (applied) {
         ++host_control_state_request_total;
       } else {
@@ -5747,6 +5760,12 @@ static void handle_host_query_capability(uint16_t seq, const uint8_t* payload, u
 
 static void dispatch_host_frame(uint8_t version, uint8_t record_type, uint16_t seq,
                                 const uint8_t* payload, uint16_t len) {
+  // OBS_BOUNDARY:tcp_apply DEBUG_TRACE: framed RX is not handler acceptance.
+  CSM_OBS(csm::board::observation::transaction(1,wifi_tcp_sink.controlConnectionEpoch(),5,
+    payload && len>=4?rd_u32_le(payload):0,
+    payload && record_type==static_cast<uint8_t>(RecordType::HostControlNShot) &&
+      len==csm::kHostControlNShotPayloadLen?rd_u32_le(payload+csm::kHostControlNShotTransactionIdOffset):0,
+    record_type,version));
   if (version != kProtocolVersion) {
     emit_control_ack(seq, ControlAckRejected, ControlReasonBadProtocol, 0, 0, 0,
                      host_control_state_request_total);
@@ -6043,6 +6062,7 @@ void setup() {
       (static_cast<uint64_t>(static_cast<uint32_t>(random(0x7FFFFFFF))) << 2) ^
       static_cast<uint64_t>(static_cast<uint32_t>(random(4)));
   product_boot_session_id = boot_session_id;
+  CSM_OBS(csm::board::observation::begin(boot_session_id,[]()->uint32_t {return millis();}));
 #if BOARD_ENABLE_WIFI_UPLINK
   csm::board::uplink::WifiTcpSinkConfig wifi_sink_config;
   requested_wifi_runtime_mode =

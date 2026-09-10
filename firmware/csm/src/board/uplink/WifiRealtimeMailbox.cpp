@@ -1,4 +1,5 @@
 #include "board/uplink/WifiRealtimeMailbox.h"
+#include "board/observability/DebugObservation.h"
 
 #include <string.h>
 
@@ -41,6 +42,8 @@ bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
       length > kRealtimeDatagramCapacity) return false;
   if (rx_guard_.test_and_set(std::memory_order_acquire)) {
     incrementSaturating(&rx_overwrite_);
+    // OBS_BOUNDARY:mailbox_replace DEBUG_TRACE: busy is not a latest replacement.
+    CSM_OBS(observation::admission(2,network_epoch_.load(),7,1,0));
     return false;
   }
   uint32_t next = rx_next_token_.fetch_add(1, std::memory_order_relaxed) + 1u;
@@ -48,6 +51,7 @@ bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
   const uint32_t prior = rx_slot_.token;
   if (prior != 0u && prior != rx_consumed_token_.load(std::memory_order_acquire)) {
     incrementSaturating(&rx_overwrite_);
+    CSM_OBS(observation::admission(2,network_epoch_.load(),4,0,prior));
   }
   memcpy(rx_slot_.bytes, bytes, length);
   rx_slot_.length = length;
@@ -55,6 +59,7 @@ bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
   rx_slot_.arrival_ms = arrival_ms;
   rx_slot_.peer = peer;
   rx_guard_.clear(std::memory_order_release);
+  CSM_OBS(observation::admission(2,network_epoch_.load(),3,0,next));
   incrementSaturating(&rx_datagrams_);
   rx_bytes_.fetch_add(length, std::memory_order_relaxed);
   const uint32_t prior_ms = rx_last_ms_.exchange(arrival_ms, std::memory_order_relaxed);
@@ -70,7 +75,10 @@ bool WifiRealtimeMailbox::publishRx(const uint8_t* bytes, uint16_t length,
 
 bool WifiRealtimeMailbox::takeLatestRx(WifiRealtimeDatagram* datagram) {
   if (datagram == nullptr) return false;
-  if (rx_guard_.test_and_set(std::memory_order_acquire)) return false;
+  if (rx_guard_.test_and_set(std::memory_order_acquire)) {
+    CSM_OBS(observation::admission(1,network_epoch_.load(),7,1,0));
+    return false;
+  }
   const WifiRealtimeDatagram candidate = rx_slot_;
   if (candidate.token == 0u ||
       candidate.token == rx_consumed_token_.load(std::memory_order_relaxed)) {
@@ -80,6 +88,8 @@ bool WifiRealtimeMailbox::takeLatestRx(WifiRealtimeDatagram* datagram) {
   *datagram = candidate;
   rx_consumed_token_.store(candidate.token, std::memory_order_release);
   rx_guard_.clear(std::memory_order_release);
+  // OBS_BOUNDARY:mailbox_admission DEBUG_TRACE: actual successful take.
+  CSM_OBS(observation::admission(1,network_epoch_.load(),5,0,candidate.token));
   return true;
 }
 
@@ -91,10 +101,14 @@ bool WifiRealtimeMailbox::stageProof(const uint8_t* bytes, uint16_t length,
       request.token == 0u || proof_sequence == 0u) return false;
   if (proof_guard_.test_and_set(std::memory_order_acquire)) {
     incrementSaturating(&proof_would_block_);
+    CSM_OBS(observation::admission(1,network_epoch_.load(),7,2,request.token));
     return false;
   }
   uint32_t next = proof_next_token_.fetch_add(1, std::memory_order_relaxed) + 1u;
   if (next == 0u) next = proof_next_token_.fetch_add(1, std::memory_order_relaxed) + 1u;
+  // OBS_BOUNDARY:proof_stage DEBUG_TRACE: previous pending identity before replacement.
+  CSM_OBS(if(proof_slot_.token && proof_slot_.token!=proof_consumed_token_.load())
+    observation::proof(1,network_epoch_.load(),4,proof_slot_.rx_token,proof_slot_.bytes));
   memcpy(proof_slot_.bytes, bytes, length);
   proof_slot_.length = length;
   proof_slot_.token = next;
@@ -102,6 +116,7 @@ bool WifiRealtimeMailbox::stageProof(const uint8_t* bytes, uint16_t length,
   proof_slot_.peer = request.peer;
   proof_slot_.staged_ms = now_ms;
   proof_guard_.clear(std::memory_order_release);
+  CSM_OBS(observation::proof(1,network_epoch_.load(),3,request.token,bytes));
   incrementSaturating(&proof_staged_);
   notify();
   return true;

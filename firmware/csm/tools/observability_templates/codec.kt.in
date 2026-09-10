@@ -1,0 +1,118 @@
+// Generated from CSM canonical observation contract. No runtime hooks or authority.
+package com.hamt.vsm.observability
+
+object CanonicalObservation {
+@CONSTANTS@
+    const val SCHEMA_SHA256: String = "@HASH@"
+    const val RECORD_TYPE: Int = @RECORD@
+    const val HEADER_BYTES: Int = 72
+    private val hashBytes = byteArrayOf(@HASH_BYTES@)
+    data class Meta(val producer: Int, val clock: Int, val traceSequence: Long,
+                    val epoch: ULong, val bootId: ULong, val ticks: ULong)
+    sealed interface Event {
+        val id: Int
+        fun write(out: ByteArray, base: Int)
+    }
+    private fun size(id: Int): Int = when(id) {
+@SIZES@
+        else -> -1
+    }
+    private fun owns(id: Int, p: Int): Boolean = when(id) {
+@OWNERS@
+        else -> false
+    }
+    private fun clockValid(p: Int, c: Int): Boolean = when(p) {
+@CLOCKS@
+        else -> false
+    }
+    private fun valid(meta: Meta, id: Int): Boolean =
+        owns(id, meta.producer) && clockValid(meta.producer, meta.clock) &&
+        meta.traceSequence in 0L..4294967295L &&
+        (meta.clock != 1 || meta.ticks <= 4294967295uL)
+    private fun put(out: ByteArray, offset: Int, value: ULong, count: Int) {
+        for (i in 0 until count) out[offset+i] = (value shr (8*i)).toByte()
+    }
+    private fun get(bytes: ByteArray, offset: Int, count: Int): ULong {
+        var value = 0uL
+        for(i in 0 until count) value = value or ((bytes[offset+i].toInt() and 255).toULong() shl (8*i))
+        return value
+    }
+    private fun crc(bytes: ByteArray, start: Int, end: Int): Int {
+        var value=65535
+        for(i in start until end) {
+            value=value xor ((bytes[i].toInt() and 255) shl 8)
+            repeat(8) { value=((value shl 1) xor (if(value and 32768 != 0) 4129 else 0)) and 65535 }
+        }
+        return value
+    }
+@EVENTS@
+    /** DEBUG_TRACE: preallocated slot; primitive field methods do not allocate events. */
+    class Writer {
+        val bytes = ByteArray(523)
+        var id: Int = 0
+            private set
+        var producer: Int = 0
+            private set
+        var clock: Int = 0
+            private set
+        var length: Int = 0
+            private set
+        fun begin(producer: Int, clock: Int, sequence: Long, epoch: ULong, boot: ULong, ticks: ULong) {
+            require(clockValid(producer, clock) && sequence in 0L..4294967295L)
+            require(clock != 1 || ticks <= 4294967295uL)
+            this.producer = producer; this.clock = clock; id = 0; length = 0
+            bytes[0]=@SOF0@.toByte();bytes[1]=@SOF1@.toByte();bytes[2]=@VERSION@;bytes[3]=RECORD_TYPE.toByte();bytes[4]=0
+            put(bytes,5,(sequence and 65535L).toULong(),2)
+            bytes[9]=1;bytes[10]=producer.toByte();bytes[11]=clock.toByte();bytes[12]=0
+            put(bytes,13,16909060uL,4);put(bytes,17,sequence.toULong(),4)
+            put(bytes,21,epoch,8);put(bytes,29,boot,8);put(bytes,37,ticks,8)
+            hashBytes.copyInto(bytes,49)
+        }
+@WRITERS@
+        fun finish(): Int {
+            val body = size(id)
+            require(body >= 0 && owns(id, producer))
+            length = 83 + body
+            put(bytes,7,(HEADER_BYTES+body).toULong(),2)
+            put(bytes,45,id.toULong(),2);put(bytes,47,body.toULong(),2)
+            put(bytes,length-2,crc(bytes,2,length-2).toULong(),2)
+            return length
+        }
+    }
+    fun encode(meta: Meta, event: Event, out: ByteArray): Int {
+        val bodySize=size(event.id)
+        val length=83+bodySize
+        require(bodySize>=0 && valid(meta,event.id) && out.size>=length)
+        out[0]=@SOF0@.toByte();out[1]=@SOF1@.toByte();out[2]=@VERSION@;out[3]=RECORD_TYPE.toByte();out[4]=0
+        put(out,5,(meta.traceSequence and 65535L).toULong(),2)
+        put(out,7,(HEADER_BYTES+bodySize).toULong(),2)
+        out[9]=1;out[10]=meta.producer.toByte();out[11]=meta.clock.toByte();out[12]=0
+        put(out,13,16909060uL,4);put(out,17,meta.traceSequence.toULong(),4)
+        put(out,21,meta.epoch,8);put(out,29,meta.bootId,8);put(out,37,meta.ticks,8)
+        put(out,45,event.id.toULong(),2);put(out,47,bodySize.toULong(),2)
+        hashBytes.copyInto(out,49)
+        event.write(out,81)
+        put(out,length-2,crc(out,2,length-2).toULong(),2)
+        return length
+    }
+    fun decode(bytes: ByteArray): Pair<Meta, Event> {
+        require(bytes.size in 83..523)
+        require(get(bytes,0,1)==@SOF0@uL && get(bytes,1,1)==@SOF1@uL &&
+                bytes[2].toInt()==@VERSION@ && bytes[3].toInt()==RECORD_TYPE && bytes[4].toInt()==0)
+        require(get(bytes,7,2).toInt()==bytes.size-11)
+        require(get(bytes,bytes.size-2,2).toInt()==crc(bytes,2,bytes.size-2))
+        require(bytes[9].toInt()==1 && bytes[12].toInt()==0 && get(bytes,13,4)==16909060uL)
+        require(hashBytes.indices.all { bytes[49+it]==hashBytes[it] })
+        val meta=Meta(bytes[10].toInt() and 255,bytes[11].toInt() and 255,
+                      get(bytes,17,4).toLong(),get(bytes,21,8),get(bytes,29,8),get(bytes,37,8))
+        val id=get(bytes,45,2).toInt()
+        require(valid(meta,id) && get(bytes,5,2).toLong()==(meta.traceSequence and 65535L))
+        require(size(id)>=0 && get(bytes,47,2).toInt()==size(id) && bytes.size==83+size(id))
+        val start=81
+        val event=when(id) {
+@DECODE@
+            else -> error("unknown event")
+        }
+        return meta to event
+    }
+}

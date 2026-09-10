@@ -50,3 +50,8 @@ cross-repo wire=architecture-change+explicit integration, experiment=experiment,
 build-only=implement+build procedure, HIL request=implement 또는 verification procedure+authorization,
 compacted session=Git/active-plan reconstruction. 모든 scenario에서
 HISTORY/CURRENT default-read는 false다.
+
+Cross-repository observability migration의 CSM 진입점은 route-only
+`docs/exec-plans/active/OBSERVABILITY_CONTRACT_REFACTOR_20260909.md`다. P0는
+`harness-maint`이며 standalone H0는 다른 checkout, runtime hook, schema 또는 제품 PASS를
+요구하지 않는다. 실행 상태는 canonical Android plan과 immutable evidence로만 판정한다.

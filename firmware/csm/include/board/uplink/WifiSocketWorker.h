@@ -31,6 +31,7 @@ class WifiSocketWorker final {
   bool start(const WifiTcpSinkConfig& config);
 
  private:
+  friend struct ObservationOwnerTest;
   WifiWorkerMailbox& mailbox_;
   WifiControlPlaneMailbox& control_mailbox_;
   WifiRealtimeMailbox& realtime_mailbox_;
@@ -78,6 +79,9 @@ class WifiSocketWorker final {
   uint32_t next_startup_attempt_ms_ = 0;
   uint32_t current_call_started_us_ = 0;
 #if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  uint32_t observation_operation_ = 0;
+  uint64_t observation_control_tx_bytes_ = 0, observation_control_rx_bytes_ = 0;
+  uint64_t observation_tx_bytes_ = 0, observation_rx_bytes_ = 0;
   WifiWorkerCallPhase current_call_phase_ = WifiWorkerCallPhase::Idle;
   WifiWorkerFailureLatch failure_latch_;
 #endif

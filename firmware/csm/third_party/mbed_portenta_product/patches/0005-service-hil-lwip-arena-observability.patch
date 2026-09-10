@@ -89,3 +89,41 @@ index 7253b3ee..e318210e 100644
  
      while (s->multicast_memberships_count > 0) {
          uint32_t index = 0;
+
+diff --git a/connectivity/lwipstack/source/LWIPStack.cpp b/connectivity/lwipstack/source/LWIPStack.cpp
+index 00000000..00000000 100644
+--- a/connectivity/lwipstack/source/LWIPStack.cpp
++++ b/connectivity/lwipstack/source/LWIPStack.cpp
+@@ -365,20 +365,25 @@ nsapi_error_t LWIP::socket_accept(nsapi_socket_t server, nsapi_socket_t *handle,
+ {
+ #if LWIP_TCP
+     struct mbed_lwip_socket *s = (struct mbed_lwip_socket *)server;
+-    struct mbed_lwip_socket *ns = arena_alloc();
+-    if (!ns) {
+-        return NSAPI_ERROR_NO_SOCKET;
+-    }
+-
+     if (s->conn->pcb.tcp->state != LISTEN) {
+         return NSAPI_ERROR_PARAMETER;
+     }
+ 
+-    err_t err = netconn_accept(s->conn, &ns->conn);
++    // A no-pending nonblocking poll must not consume an arena slot. If a
++    // pending peer arrives while full, release only that peer and preserve
++    // the established client and listener.
++    struct netconn *accepted = NULL;
++    err_t err = netconn_accept(s->conn, &accepted);
+     if (err != ERR_OK) {
+-        arena_dealloc(ns);
+         return err_remap(err);
+     }
++
++    struct mbed_lwip_socket *ns = arena_alloc();
++    if (!ns) {
++        netconn_delete(accepted);
++        return NSAPI_ERROR_NO_SOCKET;
++    }
++    ns->conn = accepted;
+ 
+     netconn_set_nonblocking(ns->conn, true);
+     *(struct mbed_lwip_socket **)handle = ns;

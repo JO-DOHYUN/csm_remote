@@ -31,6 +31,7 @@ bool HostRealtimeAuthority::begin(uint64_t boot_session_id,
   realtime_sequence_seen_ = false;
   highest_rx_sequence_ = 0u;
   proof_sequence_ = 0u;
+  proof_issue_cursor_ = 0u;
   clearProofIssueWindow();
   last_echoed_proof_ = 0u;
   prearm_proof_valid_ = false;
@@ -53,6 +54,8 @@ bool HostRealtimeAuthority::begin(uint64_t boot_session_id,
   proof_ok_total_ = 0u;
   proof_status_ = csm::kRealtimeProofStatusPreArm;
   proof_reason_ = csm::kRealtimeProofReasonOk;
+  terminal_report_valid_ = false;
+  terminal_highest_rx_sequence_ = 0u;
   return configured_;
 }
 
@@ -161,10 +164,30 @@ void HostRealtimeAuthority::disarm() {
   last_state_applied_ = false;
   resetPreArmSequenceDomain();
   if (!preserve_terminal) {
+    terminal_report_valid_ = false;
+    terminal_highest_rx_sequence_ = 0u;
     proof_authority_epoch_ = 0u;
     proof_status_ = csm::kRealtimeProofStatusPreArm;
     proof_reason_ = csm::kRealtimeProofReasonOk;
   }
+}
+
+void HostRealtimeAuthority::retire(uint8_t reason) {
+  if (terminal_report_valid_) return;
+  if (active_) proof_authority_epoch_ = authority_epoch_;
+  terminal_highest_rx_sequence_ = highest_rx_sequence_;
+  terminal_report_valid_ = proof_authority_epoch_ != 0u;
+  active_ = false;
+  authority_epoch_ = 0u;
+  bound_m4_boot_id_ = 0u;
+  bound_m4_activation_epoch_ = 0u;
+  bound_m4_active_seen_ = false;
+  active_forward_valid_ = false;
+  active_proof_valid_ = false;
+  last_state_applied_ = false;
+  resetPreArmSequenceDomain();
+  proof_status_ = csm::kRealtimeProofStatusExpired;
+  proof_reason_ = reason;
 }
 
 bool HostRealtimeAuthority::update(uint32_t now_ms) {
@@ -177,16 +200,8 @@ bool HostRealtimeAuthority::update(uint32_t now_ms) {
       ? now_ms - active_proof_ms_ > timeout_ms_
       : now_ms - arm_ms_ > timeout_ms_;
   if (!first_packet_expired && !forward_expired && !proof_expired) return false;
-  proof_authority_epoch_ = authority_epoch_;
-  active_ = false;
-  authority_epoch_ = 0u;
-  active_forward_valid_ = false;
-  active_proof_valid_ = false;
-  last_state_applied_ = false;
-  resetPreArmSequenceDomain();
+  retire(csm::kRealtimeProofReasonLivenessExpired);
   incrementSaturating(&timeout_total_);
-  proof_status_ = csm::kRealtimeProofStatusExpired;
-  proof_reason_ = csm::kRealtimeProofReasonLivenessExpired;
   return true;
 }
 
@@ -218,6 +233,10 @@ HostRealtimeAdmission HostRealtimeAuthority::accept(
       state.mode == csm::kHostRealtimeModePreArm &&
       state.authority_epoch == 0u && !active_;
   if (!active_packet && !prearm_packet) {
+    if (terminal_report_valid_) {
+      issueTerminalProof(arrival_ms);
+      return HostRealtimeAdmission::AuthorityMismatch;
+    }
     issueProof(active_ ? csm::kRealtimeProofStatusActive
                        : csm::kRealtimeProofStatusExpired,
                active_ ? csm::kRealtimeProofReasonAuthorityEpoch
@@ -234,6 +253,11 @@ HostRealtimeAdmission HostRealtimeAuthority::accept(
   }
   realtime_sequence_seen_ = true;
   highest_rx_sequence_ = state.realtime_sequence;
+  if (prearm_packet && terminal_report_valid_) {
+    terminal_report_valid_ = false;
+    terminal_highest_rx_sequence_ = 0u;
+    proof_authority_epoch_ = 0u;
+  }
   if (prearm_packet) proof_authority_epoch_ = 0u;
 
   proof_reason_ = csm::kRealtimeProofReasonOk;
@@ -327,8 +351,11 @@ bool HostRealtimeAuthority::validProofRef(uint32_t proof_ref,
   if (proof_ref != proof_sequence_ && !newer(proof_ref, proof_sequence_)) {
     return false;
   }
-  const ProofIssue& issue = proof_issues_[proof_ref % kProofIssueWindow];
-  return issue.sequence == proof_ref && now_ms - issue.issued_ms <= timeout_ms_;
+  for (uint32_t index = 0u; index < kProofIssueWindow; ++index) {
+    const ProofIssue& issue = proof_issues_[index];
+    if (issue.sequence == proof_ref) return now_ms - issue.issued_ms <= timeout_ms_;
+  }
+  return false;
 }
 
 void HostRealtimeAuthority::observeProofRef(uint32_t proof_ref,
@@ -348,7 +375,9 @@ void HostRealtimeAuthority::observeProofRef(uint32_t proof_ref,
     proof_reason_ = csm::kRealtimeProofReasonProofRef;
     return;
   }
-  const uint32_t issued_ms = proof_issues_[proof_ref % kProofIssueWindow].issued_ms;
+  uint32_t issued_ms = 0u;
+  for (uint32_t index = 0u; index < kProofIssueWindow; ++index)
+    if (proof_issues_[index].sequence == proof_ref) { issued_ms = proof_issues_[index].issued_ms; break; }
   if (active_path) {
     if (active_proof_valid_) {
       const uint32_t gap = now_ms - active_proof_ms_;
@@ -369,14 +398,26 @@ void HostRealtimeAuthority::observeProofRef(uint32_t proof_ref,
 
 void HostRealtimeAuthority::issueProof(uint8_t status, uint8_t reason,
                                        uint32_t issued_ms) {
+  if (terminal_report_valid_) {
+    issueTerminalProof(issued_ms);
+    return;
+  }
   ++proof_sequence_;
   if (proof_sequence_ == 0u) ++proof_sequence_;
-  proof_issues_[proof_sequence_ % kProofIssueWindow] = {proof_sequence_, issued_ms};
+  proof_issues_[proof_issue_cursor_] = {proof_sequence_, issued_ms};
+  proof_issue_cursor_ = (proof_issue_cursor_ + 1u) % kProofIssueWindow;
   proof_status_ = status;
   if (proof_reason_ != csm::kRealtimeProofReasonProofRef ||
       reason != csm::kRealtimeProofReasonOk) {
     proof_reason_ = reason;
   }
+}
+
+void HostRealtimeAuthority::issueTerminalProof(uint32_t issued_ms) {
+  ++proof_sequence_;
+  if (proof_sequence_ == 0u) ++proof_sequence_;
+  proof_status_ = csm::kRealtimeProofStatusExpired;
+  (void)issued_ms;
 }
 
 void HostRealtimeAuthority::requireNewPreArmChallenge() {
@@ -392,6 +433,7 @@ void HostRealtimeAuthority::clearProofIssueWindow() {
   for (uint32_t index = 0u; index < kProofIssueWindow; ++index) {
     proof_issues_[index] = {};
   }
+  proof_issue_cursor_ = 0u;
 }
 
 void HostRealtimeAuthority::resetPreArmSequenceDomain() {

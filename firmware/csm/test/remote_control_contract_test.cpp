@@ -1210,12 +1210,96 @@ void testRealtimeProofCausalIssueAge() {
   assert(authority.accept(state, 400u) == HostRealtimeAdmission::AcceptedActive);
   assert(authority.update(400u));  // old proof must not extend 350ms return freshness
 }
+
+void testRealtimeTerminalReportSurvivesInvalidPacketsAndDisarm() {
+  using csm::board::control::HostRealtimeAdmission;
+  using csm::board::control::HostRealtimeAuthority;
+  constexpr uint64_t kBoot = 0x1234567890ABCDEFull;
+  HostRealtimeAuthority authority;
+  assert(authority.begin(kBoot, 350u));
+  csm::HostRealtimeStateV1 state = {};
+  state.boot_session_id = kBoot;
+  state.control_contract_id = csm::kHostControlStateContractId;
+  state.valid_mask = kAllLanePermitMask;
+  state.state_generation = 1u;
+  state.realtime_sequence = 1u;
+  assert(authority.accept(state, 1u) == HostRealtimeAdmission::AcceptedPreArm);
+  state.realtime_sequence = 2u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 2u) == HostRealtimeAdmission::AcceptedPreArm);
+  uint8_t reason = 0u;
+  assert(authority.arm(41u, 3u, true, true, &reason));
+  state.mode = csm::kHostRealtimeModeActive;
+  state.authority_epoch = 41u;
+  state.realtime_sequence = 3u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 4u) == HostRealtimeAdmission::AcceptedActive);
+  assert(authority.update(355u));
+  const uint32_t terminal_rx = authority.highestRxSequence();
+  const uint32_t terminal_authority = authority.proofAuthorityEpoch();
+  const uint8_t terminal_reason = authority.proofReason();
+  state.boot_session_id = 0u;
+  assert(authority.accept(state, 356u) == HostRealtimeAdmission::BootMismatch);
+  assert(authority.proofAuthorityEpoch() == terminal_authority);
+  assert(authority.highestRxSequence() == terminal_rx);
+  assert(authority.proofReason() == terminal_reason);
+  authority.disarm();
+  assert(authority.proofAuthorityEpoch() == terminal_authority);
+  assert(authority.highestRxSequence() == terminal_rx);
+  state.boot_session_id = kBoot;
+  state.mode = csm::kHostRealtimeModePreArm;
+  state.authority_epoch = 0u;
+  state.realtime_sequence = 0u;
+  assert(authority.accept(state, 357u) == HostRealtimeAdmission::DuplicateOrReordered);
+  assert(authority.proofAuthorityEpoch() == terminal_authority);
+  state.realtime_sequence = 1u;
+  assert(authority.accept(state, 358u) == HostRealtimeAdmission::AcceptedPreArm);
+  assert(authority.proofAuthorityEpoch() == 0u);
+  assert(authority.begin(kBoot + 1u, 350u));
+  assert(authority.proofAuthorityEpoch() == 0u);
+  assert(authority.highestRxSequence() == 0u);
+}
+
+void testRealtimeProofWindowKeepsFreshIssueAcrossU32Wrap() {
+  using csm::board::control::HostRealtimeAdmission;
+  using csm::board::control::HostRealtimeAuthority;
+  HostRealtimeAuthority authority;
+  constexpr uint64_t kBoot = 0xAABBCCDDEEFF0011ull;
+  assert(authority.begin(kBoot, 350u));
+  csm::HostRealtimeStateV1 state = {};
+  state.boot_session_id = kBoot;
+  state.control_contract_id = csm::kHostControlStateContractId;
+  state.valid_mask = kAllLanePermitMask;
+  state.state_generation = 1u;
+  state.realtime_sequence = 1u;
+  assert(authority.accept(state, 0u) == HostRealtimeAdmission::AcceptedPreArm);
+  state.realtime_sequence = 2u;
+  state.proof_ref = authority.proofSequence();
+  assert(authority.accept(state, 1u) == HostRealtimeAdmission::AcceptedPreArm);
+  uint8_t reason = 0u;
+  assert(authority.arm(1u, 2u, true, true, &reason));
+  authority.testSeedProofSequence(0xFFFFFFFAu);
+  state.mode = csm::kHostRealtimeModeActive;
+  state.authority_epoch = 1u;
+  state.proof_ref = 0u;
+  for (uint32_t sequence = 3u; sequence <= 8u; ++sequence) {
+    state.realtime_sequence = sequence;
+    assert(authority.accept(state, 10u + (sequence - 3u) * 20u) ==
+           HostRealtimeAdmission::AcceptedActive);
+  }
+  state.realtime_sequence = 9u;
+  state.proof_ref = 0xFFFFFFFBu;
+  assert(authority.accept(state, 110u) == HostRealtimeAdmission::AcceptedActive);
+  assert(authority.healthy(110u));
+}
 }  // namespace
 
 int main() {
   testLocalReadyTruthAndFirstFailureRetention();
   testRealtimeWireAndBidirectionalAuthority();
   testRealtimeProofCausalIssueAge();
+  testRealtimeTerminalReportSurvivesInvalidPacketsAndDisarm();
+  testRealtimeProofWindowKeepsFreshIssueAcrossU32Wrap();
   testReceiverQualifiedAdmissionAndOptionalStatistics();
   testCrsfForegroundBudgetIsByteTimeAndWrapBounded();
   testCrsfStreamResynchronizationAndR16smFixture();

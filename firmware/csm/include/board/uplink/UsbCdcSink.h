@@ -111,6 +111,11 @@ class UsbCdcSink final : public IFrameSink {
   UsbCdcSinkCounters counters_;
   uint32_t blocked_since_ms_ = 0;
   bool connected_last_ = false;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  // DEBUG_TRACE: independent frame accounting, owned by this same USB writer.
+  uint8_t observation_frame_[227] = {};
+  uint16_t observation_length_ = 0, observation_offset_ = 0;
+#endif
 
   bool updateConnectionState();
   void noteBackpressure(uint32_t now_ms, SinkServiceResult& result);

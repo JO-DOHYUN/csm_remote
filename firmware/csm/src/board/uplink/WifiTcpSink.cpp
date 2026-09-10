@@ -1,4 +1,5 @@
 #include "board/uplink/WifiTcpSink.h"
+#include "board/observability/DebugObservation.h"
 
 #include "protocol/TypedRecords.h"
 
@@ -93,6 +94,10 @@ SinkOfferResult WifiTcpSink::offer(const PublishedFrameView& frame) {
     return SinkOfferResult::Overflow;
   }
   const WifiMailboxOfferResult offered = mailbox_.tryOffer(frame, millis());
+  // OBS_BOUNDARY:observer_sink_admission DEBUG_TRACE preserves busy vs overflow reason.
+  CSM_OBS(observation::stream(1,counters_.connection_epoch,
+    offered==WifiMailboxOfferResult::Accepted?6:7,3333,0,frame.publish_seq,0,frame.length,
+    static_cast<int32_t>(offered),static_cast<uint16_t>(frame.type)));
   switch (offered) {
     case WifiMailboxOfferResult::Accepted:
       break;

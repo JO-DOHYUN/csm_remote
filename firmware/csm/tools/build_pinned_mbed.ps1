@@ -60,7 +60,10 @@ function Test-BaseProductSourcePatches {
 
 function Test-ServiceHilArenaPatch {
   $arena = Join-Path $mbedRoot 'connectivity\lwipstack\source\lwip_tools.cpp'
-  return Select-String -Quiet -LiteralPath $arena -Pattern 'csm_lwip_socket_arena_snapshot'
+  $accept = Join-Path $mbedRoot 'connectivity\lwipstack\source\LWIPStack.cpp'
+  return (Select-String -Quiet -LiteralPath $arena -Pattern 'csm_lwip_socket_arena_snapshot') -and
+    (Select-String -Quiet -LiteralPath $accept -Pattern 'netconn_accept\(s->conn, &accepted\)') -and
+    (Select-String -Quiet -LiteralPath $accept -Pattern 'netconn_delete\(accepted\)')
 }
 
 New-Item -ItemType Directory -Force -Path $buildRoot,$vendorRoot,$artifactRoot | Out-Null

@@ -1,4 +1,5 @@
 #include "board/uplink/UsbCdcSink.h"
+#include "board/observability/DebugObservation.h"
 
 #include <Arduino.h>
 
@@ -76,10 +77,50 @@ SinkServiceResult UsbCdcSink::service(uint32_t byte_budget, uint32_t now_ms,
       config_.max_writes_per_pump == 0 ? 0xFFFFFFFFu : config_.max_writes_per_pump;
   uint32_t writes = 0;
 
-  while (!queue_.empty() && result.actual_bytes < pump_budget && writes < max_writes) {
+  while (result.actual_bytes < pump_budget && writes < max_writes) {
     if (config_.drain_time_budget_us > 0 &&
         static_cast<uint32_t>(micros() - start_us) >= config_.drain_time_budget_us) break;
     const uint32_t budget_left = pump_budget - result.actual_bytes;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+    // OBS_BOUNDARY:usb_debug_drain DEBUG_TRACE. Never interrupt a canonical frame:
+    // begin debug only when canonical queue is empty; finish its partial frame
+    // before returning to canonical bytes. Same write/time/byte budget, no retry.
+    if(observation_length_ || queue_.empty()) {
+      if(!observation_length_) {
+        observation_length_=static_cast<uint16_t>(observation::nextFrame(
+          observation_frame_,sizeof(observation_frame_)));
+        observation_offset_=0;
+      }
+      if(observation_length_) {
+        const uint16_t remaining=observation_length_-observation_offset_;
+        const uint16_t requested=static_cast<uint16_t>(budget_left<remaining?budget_left:remaining);
+        uint32_t actual=0;
+        _SerialUSB.send_nb(observation_frame_+observation_offset_,requested,&actual,true);
+        if(actual>requested) actual=requested;
+        ++writes; result.actual_bytes+=actual;
+        ++counters_.write_attempt_total;
+        observation_offset_=static_cast<uint16_t>(observation_offset_+actual);
+        if(observation_offset_==observation_length_) observation_length_=0;
+        if(actual<requested) {
+          if(actual==0) ++counters_.zero_write_total;
+          else ++counters_.partial_write_total;
+          // Same physical USB stall contract. Do not generate a canonical
+          // BOARD_EVENT for each debug-only would-block/recovery transition.
+          SinkServiceResult debug_backpressure;
+          noteBackpressure(now_ms,debug_backpressure);
+          break;
+        }
+        if(blocked_since_ms_!=0) {
+          const uint32_t duration=now_ms-blocked_since_ms_;
+          if(duration>counters_.backpressure_max_duration_ms)
+            counters_.backpressure_max_duration_ms=duration;
+          blocked_since_ms_=0;
+        }
+        continue;
+      }
+    }
+#endif
+    if(queue_.empty()) break;
     const uint16_t stage_capacity = static_cast<uint16_t>(
         budget_left < BOARD_SERIAL_TX_CHUNK_BYTES
             ? budget_left
@@ -134,6 +175,8 @@ SinkServiceResult UsbCdcSink::service(uint32_t byte_budget, uint32_t now_ms,
 }
 
 void UsbCdcSink::abortQueuedFrames() {
+  CSM_OBS(if(observation_length_) ++observation::state().usb_aborted;
+    observation_length_=0;observation_offset_=0);
   const uint32_t bytes = queue_.clear();
   if (bytes > 0) {
     counters_.queue_abort_total++;

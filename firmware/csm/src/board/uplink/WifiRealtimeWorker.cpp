@@ -1,4 +1,5 @@
 #include "board/uplink/WifiRealtimeWorker.h"
+#include "board/observability/DebugObservation.h"
 
 #if BOARD_ENABLE_WIFI_UPLINK
 
@@ -75,6 +76,8 @@ bool WifiRealtimeWorker::openSocket() {
 }
 
 void WifiRealtimeWorker::closeSocket(int32_t result) {
+  // OBS_BOUNDARY:udp_close DEBUG_TRACE only; preserve existing close/reopen policy.
+  CSM_OBS(observation::datagram(network_epoch_,10,observation_operation_,0,0,result,nullptr,0));
   if (socket_open_) {
     socket_.sigio(nullptr);
     (void)socket_.close();
@@ -90,8 +93,14 @@ void WifiRealtimeWorker::serviceReceive() {
   uint8_t serviced = 0;
   while (serviced < kRxDatagramsPerTurn) {
     SocketAddress peer;
+    // OBS_BOUNDARY:udp_receive DEBUG_TRACE: both sides of actual recvfrom syscall.
+    CSM_OBS(++observation_operation_;
+      observation::datagram(network_epoch_,1,observation_operation_,0,sizeof(rx_buffer_),0,nullptr,0));
     const nsapi_size_or_error_t received =
         socket_.recvfrom(&peer, rx_buffer_, sizeof(rx_buffer_));
+    CSM_OBS(observation::datagram(network_epoch_,2,observation_operation_,0,
+      received>0?static_cast<uint16_t>(received):0,received,peer.get_ip_address(),peer.get_port(),
+      received>0?rx_buffer_:nullptr,received>0?static_cast<uint16_t>(received):0));
     if (received == NSAPI_ERROR_WOULD_BLOCK) return;
     if (received < 0) {
       closeSocket(received);
@@ -107,8 +116,17 @@ void WifiRealtimeWorker::serviceReceive() {
     if (address == nullptr) continue;
     strncpy(endpoint.address, address, sizeof(endpoint.address) - 1u);
     endpoint.port = peer.get_port();
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+    uint32_t observation_token=0;
+    const bool observation_staged=mailbox_.publishRx(rx_buffer_,static_cast<uint16_t>(received),
+                            millis(),endpoint,&observation_token);
+    observation::datagram(network_epoch_,observation_staged?3:7,observation_operation_,
+      observation_token,static_cast<uint16_t>(received),observation_staged?1:0,
+      endpoint.address,endpoint.port);
+#else
     (void)mailbox_.publishRx(rx_buffer_, static_cast<uint16_t>(received),
                             millis(), endpoint, nullptr);
+#endif
   }
   mailbox_.noteRxBudgetHit();
 }
@@ -118,12 +136,20 @@ void WifiRealtimeWorker::serviceProof() {
   if (!mailbox_.peekProof(&proof)) return;
   if (!realtimeRxAfterSocketOpen(socket_open_rx_floor_, proof.rx_token) ||
       proof.peer.address[0] == '\0' || proof.peer.port == 0u) {
+    CSM_OBS(observation::proof(2,network_epoch_,9,proof.rx_token,proof.bytes));
     mailbox_.consumeProof(proof.token);
     return;
   }
   const SocketAddress destination(proof.peer.address, proof.peer.port);
+  // OBS_BOUNDARY:proof_send DEBUG_TRACE: selected payload/destination and syscall outcome.
+  CSM_OBS(++observation_operation_;
+    observation::proof(2,network_epoch_,5,proof.rx_token,proof.bytes);
+    observation::datagram(network_epoch_,1,observation_operation_,proof.rx_token,
+      proof.length,0,proof.peer.address,proof.peer.port,proof.bytes,proof.length));
   const nsapi_size_or_error_t sent =
       socket_.sendto(destination, proof.bytes, proof.length);
+  CSM_OBS(observation::datagram(network_epoch_,2,observation_operation_,proof.rx_token,
+    proof.length,sent,proof.peer.address,proof.peer.port));
   const bool would_block = sent == NSAPI_ERROR_WOULD_BLOCK;
   const uint32_t proof_sequence = csm::rd_u32_le(
       proof.bytes + 9u + csm::kRealtimeProofSequenceOffset);

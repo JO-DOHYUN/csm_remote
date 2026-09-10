@@ -16,7 +16,8 @@ from pathlib import Path
 
 MANIFEST_SCHEMA = 1
 SOURCE_ROOTS = ("include", "lib", "linker", "src", "tools")
-SOURCE_FILES = ("platformio.ini",)
+SOURCE_FILES = ("platformio.ini", "shared/observability/contract.json",
+                "shared/observability/generated/Observation.h")
 EXCLUDED_DIRS = frozenset((".pio", "artifacts", "__pycache__"))
 EXCLUDED_SUFFIXES = frozenset((".pyc", ".pyo"))
 

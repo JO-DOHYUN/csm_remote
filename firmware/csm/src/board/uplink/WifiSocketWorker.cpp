@@ -1,4 +1,5 @@
 #include "board/uplink/WifiSocketWorker.h"
+#include "board/observability/DebugObservation.h"
 
 #if BOARD_ENABLE_WIFI_UPLINK
 
@@ -557,9 +558,16 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
   state_.counters.write_attempt_total++;
   state_.counters.send_request_bytes_total += remaining;
   beginCall(WifiWorkerCallPhase::Send);
+  CSM_OBS(observation::stream(3,state_.counters.connection_epoch,1,3333,
+    observation_operation_,session_anchor_.publish_seq,observation_tx_bytes_,remaining,0,
+    static_cast<uint16_t>(csm::RecordType::StreamSession)));
   const nsapi_size_or_error_t sent =
       client_->send(session_anchor_.bytes + session_anchor_offset_, remaining);
   const uint32_t duration_us = endCall(sent);
+  CSM_OBS(observation::stream(3,state_.counters.connection_epoch,2,3333,
+    observation_operation_,session_anchor_.publish_seq,observation_tx_bytes_,remaining,sent,
+    static_cast<uint16_t>(csm::RecordType::StreamSession));
+    if(sent>0) observation_tx_bytes_+=static_cast<uint32_t>(sent));
   const uint32_t completed_ms = millis();
   result.writes_attempted = 1;
   if (duration_us > state_.counters.send_call_max_us) {
@@ -638,8 +646,13 @@ WifiTransmitPumpResult WifiSocketWorker::serviceSessionAnchor(uint32_t now_ms) {
 
 void WifiSocketWorker::serviceReceive(uint32_t) {
   beginCall(WifiWorkerCallPhase::Receive);
+  CSM_OBS(observation::stream(3,state_.counters.connection_epoch,1,3333,
+    observation_operation_,0,observation_rx_bytes_,sizeof(rx_buffer_),0,0));
   const nsapi_size_or_error_t received = client_->recv(rx_buffer_, sizeof(rx_buffer_));
   const uint32_t duration_us = endCall(received);
+  CSM_OBS(observation::stream(3,state_.counters.connection_epoch,2,3333,
+    observation_operation_,0,observation_rx_bytes_,sizeof(rx_buffer_),received,0);
+    if(received>0) observation_rx_bytes_+=static_cast<uint32_t>(received));
   if (duration_us > state_.counters.recv_call_max_us) {
     state_.counters.recv_call_max_us = duration_us;
   }
@@ -724,9 +737,15 @@ void WifiSocketWorker::serviceControlClient(uint32_t now_ms) {
 
 void WifiSocketWorker::serviceControlReceive() {
   beginCall(WifiWorkerCallPhase::ReceiveControl);
+  // OBS_BOUNDARY:tcp_transaction DEBUG_TRACE, connection-local ordered byte range.
+  CSM_OBS(observation::stream(3,control_mailbox_.connectionEpoch(),1,3334,
+    observation_operation_,0,observation_control_rx_bytes_,sizeof(control_rx_buffer_),0,0));
   const nsapi_size_or_error_t received =
       control_client_->recv(control_rx_buffer_, sizeof(control_rx_buffer_));
   endCall(received);
+  CSM_OBS(observation::stream(3,control_mailbox_.connectionEpoch(),2,3334,
+    observation_operation_,0,observation_control_rx_bytes_,sizeof(control_rx_buffer_),received,0);
+    if(received>0) observation_control_rx_bytes_+=static_cast<uint32_t>(received));
   control_mailbox_.noteReceive(received, millis());
   if (received > 0) {
     if (!control_mailbox_.pushRx(control_rx_buffer_,
@@ -766,13 +785,23 @@ void WifiSocketWorker::serviceControlTransmit(uint32_t now_ms) {
   if (length == 0 || offset >= length) return;
 
   beginCall(WifiWorkerCallPhase::SendControl);
+  CSM_OBS(observation::stream(3,control_mailbox_.connectionEpoch(),1,3334,
+    observation_operation_,csm::rd_u16_le(control_tx_buffer_+5),observation_control_tx_bytes_,
+    length-offset,0,control_tx_buffer_[3]));
   const nsapi_size_or_error_t sent =
       control_client_->send(control_tx_buffer_ + offset, length - offset);
   const uint32_t duration_us = endCall(sent);
   const uint32_t completed_ms = millis();
+  CSM_OBS(observation::stream(3,control_mailbox_.connectionEpoch(),2,3334,
+    observation_operation_,csm::rd_u16_le(control_tx_buffer_+5),observation_control_tx_bytes_,
+    length-offset,sent,control_tx_buffer_[3]);
+    if(sent>0) observation_control_tx_bytes_+=static_cast<uint32_t>(sent));
   // Socket acceptance is evidence of ACK TX only, never remote receipt.
   const uint32_t ack_id = control_anchor_pending_ ? 0u :
       csm::rd_u32_le(control_tx_buffer_ + 9u + csm::kControlAckCommandIdOffset);
+  CSM_OBS(observation::transaction(3,control_mailbox_.connectionEpoch(),
+    sent>0 && static_cast<uint32_t>(offset)+sent>=length?2:5,
+    ack_id,0,control_tx_buffer_[3],sent));
   control_mailbox_.noteSend(sent, completed_ms, duration_us, ack_id,
       static_cast<uint16_t>(offset + (sent > 0 ? sent : 0)),
       sent > 0 && static_cast<uint32_t>(offset) + sent >= length,
@@ -855,8 +884,14 @@ WifiTransmitPumpResult WifiSocketWorker::serviceTransmit(uint32_t now_ms) {
     state_.counters.write_attempt_total++;
     state_.counters.send_request_bytes_total += lease.length;
     beginCall(WifiWorkerCallPhase::Send);
+    // OBS_BOUNDARY:observer_socket_send DEBUG_TRACE: byte ranges, not assumed packet/frame correspondence.
+    CSM_OBS(observation::stream(3,state_.counters.connection_epoch,1,3333,
+      observation_operation_,0,observation_tx_bytes_,lease.length,0,0));
     const nsapi_size_or_error_t sent = client_->send(tx_buffer_, lease.length);
     const uint32_t duration_us = endCall(sent);
+    CSM_OBS(observation::stream(3,state_.counters.connection_epoch,2,3333,
+      observation_operation_,0,observation_tx_bytes_,lease.length,sent,0);
+      if(sent>0) observation_tx_bytes_+=static_cast<uint32_t>(sent));
     const uint32_t send_completed_ms = millis();
     if (duration_us > state_.counters.send_call_max_us) {
       state_.counters.send_call_max_us = duration_us;
@@ -1082,6 +1117,9 @@ bool WifiSocketWorker::refreshAdmissionSnapshotForSettlement() {
 }
 
 void WifiSocketWorker::closeClient(WifiCloseReason reason) {
+  CSM_OBS(observation::stream(3,state_.counters.connection_epoch,10,3333,
+    observation_operation_,0,observation_tx_bytes_,0,0,0,static_cast<uint32_t>(reason));
+    observation_tx_bytes_=0;observation_rx_bytes_=0);
   const bool was_connected = client_ != nullptr || state_.connected;
   const uint32_t no_progress_duration_ms = state_.backpressure_duration_ms;
   TCPSocket* closing = client_;
@@ -1134,6 +1172,7 @@ void WifiSocketWorker::closeControlClient(uint32_t reason, int32_t result) {
   control_tx_length_ = 0;
   control_tx_offset_ = 0;
   control_tx_progress_.reset();
+  CSM_OBS(observation_control_tx_bytes_=0;observation_control_rx_bytes_=0);
   closeSocket(closing, WifiWorkerCallPhase::CloseControlClient);
 }
 
@@ -1196,6 +1235,10 @@ void WifiSocketWorker::beginCall(WifiWorkerCallPhase phase) {
   current_call_phase_ = phase;
 #endif
   mailbox_.beginCall(phase, now_ms);
+  // OBS_BOUNDARY:socket_call DEBUG_TRACE: existing call phase, no second call owner.
+  CSM_OBS(++observation_operation_;
+    observation::emit(3,network_epoch_,now_ms,csm::observation::Resource{
+      1,0,static_cast<uint16_t>(phase),observation_operation_,0,network_epoch_}));
   if (config_.call_persistence.enter != nullptr) {
     const WifiWorkerCallSnapshot call = mailbox_.callSnapshot();
     config_.call_persistence.enter(
@@ -1208,6 +1251,8 @@ uint32_t WifiSocketWorker::endCall(int32_t result) {
   const uint32_t duration_us = micros() - current_call_started_us_;
   const uint32_t now_ms = millis();
   mailbox_.endCall(now_ms, duration_us, result);
+  CSM_OBS(observation::emit(3,network_epoch_,now_ms,csm::observation::Resource{
+    2,0,static_cast<uint16_t>(current_call_phase_),observation_operation_,result,network_epoch_}));
 #if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
   if (failure_latch_.observe(current_call_phase_, result,
                              NSAPI_ERROR_WOULD_BLOCK)) {

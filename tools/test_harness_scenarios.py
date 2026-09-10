@@ -13,6 +13,8 @@ def route(case: dict) -> dict:
         primary = "architecture-change"
     elif task_kind == "experiment":
         primary = "experiment"
+    elif task_kind == "harness":
+        primary = "harness-maint"
     else:
         primary = "implement"
     procedure = {
@@ -32,10 +34,21 @@ def route(case: dict) -> dict:
     }
 
 
+def observability_status(case: dict) -> dict | None:
+    """Harness-only completion semantics; this is not a product runtime verdict."""
+    if case.get("observability_implementation") != "unimplemented":
+        return None
+    return {
+        "execution": "NOT_RUN",
+        "product": "NOT_PROVEN",
+        "evidence": "INCOMPLETE",
+    }
+
+
 class HarnessV3ScenarioTest(unittest.TestCase):
     def test_routes(self) -> None:
         cases = json.loads((ROOT / "tools/fixtures/harness_v3_scenarios.json").read_text(encoding="utf-8"))
-        self.assertEqual(7, len(cases))
+        self.assertEqual(11, len(cases))
         for case in cases:
             with self.subTest(case=case["id"]):
                 actual = route(case)
@@ -48,6 +61,11 @@ class HarnessV3ScenarioTest(unittest.TestCase):
                 self.assertFalse(actual["current_default"])
                 self.assertTrue(actual["git_preflight"])
                 self.assertEqual(case["context_compacted"], actual["reconstruct_from_git"])
+                expected_status = observability_status(case)
+                if expected_status is not None:
+                    self.assertEqual(case["expected_execution"], expected_status["execution"])
+                    self.assertEqual(case["expected_product"], expected_status["product"])
+                    self.assertEqual(case["expected_evidence"], expected_status["evidence"])
 
     def test_default_route_is_v3(self) -> None:
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
@@ -62,6 +80,18 @@ class HarnessV3ScenarioTest(unittest.TestCase):
         h0 = (ROOT / "tools/verify_harness.py").read_text(encoding="utf-8")
         for token in ("TIM4", "FDCAN", "0x005", "0x007", "0x364", "platformio.ini"):
             self.assertNotIn(token, h0)
+
+    def test_observability_bootstrap_is_route_only(self) -> None:
+        pointer = (ROOT / "docs/exec-plans/active/OBSERVABILITY_CONTRACT_REFACTOR_20260909.md").read_text(
+            encoding="utf-8"
+        )
+        harness = (ROOT / "docs/harness/HARNESS_V3_ARCHITECTURE_KO.md").read_text(encoding="utf-8")
+        h0 = (ROOT / "tools/verify_harness.py").read_text(encoding="utf-8")
+        self.assertIn("repository: JO-DOHYUN/vsm_android_app", pointer)
+        self.assertIn("OBSERVABILITY_CONTRACT_REFACTOR_20260909.yaml", pointer)
+        self.assertIn("OBSERVABILITY_CONTRACT_REFACTOR_20260909.md", harness)
+        for product_assertion in ("OBS_BOUNDARY", "observability_implementation", "NOT_PROVEN"):
+            self.assertNotIn(product_assertion, h0)
 
 
 if __name__ == "__main__":

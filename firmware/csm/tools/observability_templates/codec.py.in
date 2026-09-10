@@ -1,0 +1,83 @@
+# Generated from CSM canonical contract. Offline codec, not live/control admission.
+from dataclasses import dataclass
+from typing import ClassVar
+import struct
+@CONSTANTS@
+
+MANIFEST = @MANIFEST@
+EVENTS = {event['id']: event for event in MANIFEST['events']}
+PRODUCERS = {item['id']: item['clocks'] for item in MANIFEST['producers']}
+DIGEST = bytes.fromhex('@HASH@')
+
+@dataclass(frozen=True)
+class Meta:
+    producer: int
+    clock: int
+    trace_sequence: int
+    epoch: int
+    boot_id: int
+    ticks: int
+
+@CLASSES@
+
+CLASSES = {key: globals()[value] for key, value in @CLASS_MAP@.items()}
+
+
+def crc16(data):
+    value=0xffff
+    for byte in data:
+        value ^= byte << 8
+        for _ in range(8):
+            value = ((value << 1) ^ (0x1021 if value & 0x8000 else 0)) & 0xffff
+    return value
+
+
+def _meta(meta, event):
+    if meta.producer not in event['producers'] or meta.clock not in PRODUCERS.get(meta.producer, []):
+        raise ValueError('producer/clock mismatch')
+    if meta.clock == 1 and not 0 <= meta.ticks <= 0xffffffff:
+        raise ValueError('M7 clock is raw u32 milliseconds')
+
+
+def encode(meta, event):
+    definition = EVENTS.get(event.id)
+    if definition is None or type(event) is not CLASSES[event.id]:
+        raise ValueError('unknown event')
+    _meta(meta, definition)
+    values = []
+    for field in definition['fields']:
+        value = getattr(event, field['name'])
+        if field['type'].startswith('bytes'):
+            if not isinstance(value, bytes) or len(value) != field['bytes']:
+                raise ValueError('fixed byte field length')
+        elif type(value) is not int:
+            raise ValueError('integer field required')
+        values.append(value)
+    try:
+        body = struct.pack('<'+''.join(f['fmt'] for f in definition['fields']), *values)
+        payload=struct.pack('<BBBBIIQQQHH32s',1,meta.producer,meta.clock,0,0x01020304,
+                            meta.trace_sequence,meta.epoch,meta.boot_id,meta.ticks,event.id,len(body),DIGEST)+body
+        raw=struct.pack('<BBBBBHH',@SOF0@,@SOF1@,@VERSION@,@RECORD@,0,meta.trace_sequence&0xffff,len(payload))+payload
+    except struct.error as error:
+        raise ValueError(str(error)) from error
+    return raw+struct.pack('<H',crc16(raw[2:]))
+
+
+def decode(raw):
+    if len(raw)<83 or len(raw)>523:
+        raise ValueError('frame length')
+    sof0,sof1,version,record,flags,sequence,length=struct.unpack_from('<BBBBBHH',raw)
+    if (sof0,sof1,version,record,flags)!=(@SOF0@,@SOF1@,@VERSION@,@RECORD@,0) or length!=len(raw)-11:
+        raise ValueError('typed frame/header mismatch')
+    if struct.unpack_from('<H',raw,len(raw)-2)[0]!=crc16(raw[2:-2]):
+        raise ValueError('CRC')
+    v,p,c,reserved,tag,seq,epoch,boot,ticks,event_id,body_len,digest=struct.unpack_from('<BBBBIIQQQHH32s',raw,9)
+    if v!=1 or reserved!=0 or tag!=0x01020304 or digest!=DIGEST or sequence!=(seq&0xffff):
+        raise ValueError('schema/endian/sequence mismatch')
+    event=EVENTS.get(event_id)
+    if event is None or body_len!=event['body_bytes'] or len(raw)!=83+body_len:
+        raise ValueError('event ID/body length')
+    meta=Meta(p,c,seq,epoch,boot,ticks)
+    _meta(meta,event)
+    values=struct.unpack_from('<'+''.join(f['fmt'] for f in event['fields']),raw,81)
+    return meta,CLASSES[event_id](*values)

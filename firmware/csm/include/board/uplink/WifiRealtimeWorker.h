@@ -27,6 +27,10 @@ class WifiRealtimeWorker final {
              uint32_t network_epoch);
 
  private:
+  friend struct ObservationOwnerTest;
+#if BOARD_ENABLE_SERVICE_HIL_OBSERVABILITY
+  uint32_t observation_operation_ = 0;
+#endif
   static constexpr uint32_t kWakeSocket = 1u << 0;
   static constexpr uint32_t kWakeProof = 1u << 1;
   static constexpr uint8_t kRxDatagramsPerTurn = 4;

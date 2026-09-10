@@ -36,6 +36,9 @@ class HostRealtimeAuthority {
                           bool control_active,
                           uint32_t applied_generation);
   void disarm();
+  // Retires an authority without discarding the terminal proof identity.
+  // The next PRE-ARM replaces this report; old ACTIVE never does.
+  void retire(uint8_t reason);
   bool update(uint32_t now_ms);
 
   HostRealtimeAdmission accept(const csm::HostRealtimeStateV1& state,
@@ -53,7 +56,7 @@ class HostRealtimeAuthority {
   }
   uint32_t proofSequence() const { return proof_sequence_; }
   uint32_t lastProofRef() const { return last_echoed_proof_; }
-  uint32_t highestRxSequence() const { return highest_rx_sequence_; }
+  uint32_t highestRxSequence() const { return terminal_report_valid_ ? terminal_highest_rx_sequence_ : highest_rx_sequence_; }
   uint32_t lastAppliedGeneration() const { return last_applied_generation_; }
   uint32_t forwardAgeMs(uint32_t now_ms) const;
   uint32_t proofRefAgeMs(uint32_t now_ms) const;
@@ -68,11 +71,21 @@ class HostRealtimeAuthority {
   uint8_t proofReason() const { return proof_reason_; }
   uint16_t proofFlags(uint32_t now_ms) const;
 
+#if defined(CSM_CONTROL_ISLAND_SHARED_MEMORY_TEST)
+  // Native contract seam: exercises the real fixed metadata owner at u32 wrap.
+  void testSeedProofSequence(uint32_t sequence) {
+    proof_sequence_ = sequence;
+    last_echoed_proof_ = 0u;
+    clearProofIssueWindow();
+  }
+#endif
+
  private:
   static bool newer(uint32_t previous, uint32_t current);
   bool validProofRef(uint32_t proof_ref, uint32_t now_ms) const;
   void observeProofRef(uint32_t proof_ref, uint32_t now_ms, bool active_path);
   void issueProof(uint8_t status, uint8_t reason, uint32_t issued_ms);
+  void issueTerminalProof(uint32_t issued_ms);
   void clearProofIssueWindow();
   void requireNewPreArmChallenge();
   void resetPreArmSequenceDomain();
@@ -103,6 +116,7 @@ class HostRealtimeAuthority {
     uint32_t issued_ms = 0;
   };
   ProofIssue proof_issues_[kProofIssueWindow] = {};
+  uint32_t proof_issue_cursor_ = 0u;
   uint32_t last_echoed_proof_ = 0;
   bool prearm_proof_valid_ = false;
   uint32_t prearm_proof_ms_ = 0;
@@ -124,6 +138,8 @@ class HostRealtimeAuthority {
   uint32_t proof_ok_total_ = 0;
   uint8_t proof_status_ = csm::kRealtimeProofStatusPreArm;
   uint8_t proof_reason_ = csm::kRealtimeProofReasonOk;
+  bool terminal_report_valid_ = false;
+  uint32_t terminal_highest_rx_sequence_ = 0u;
 };
 
 }  // namespace csm::board::control

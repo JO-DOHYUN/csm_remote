@@ -1,0 +1,288 @@
+{
+  "contract_repository": "JO-DOHYUN/csm_remote",
+  "contract_path": "firmware/csm/shared/observability/contract.json",
+  "bindings": [
+    {
+      "id": "udp_receive",
+      "event_ids": [
+        2,
+        3
+      ],
+      "producer": 2,
+      "path": "firmware/csm/src/board/uplink/WifiRealtimeWorker.cpp",
+      "symbol": "serviceReceive",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F2",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::run: real recvfrom owner, bytes, operation/token, replacement, busy, partial/error/close; syscall double only."
+    },
+    {
+      "id": "mailbox_admission",
+      "event_ids": [
+        4,
+        5
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/main.cpp",
+      "symbol": "service_host_realtime",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F2/F3",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "mainOwner: verbatim service_host_realtime and real decode/HostRealtimeAuthority/ControlSourceManager/mailbox. Outer board close adapter is not a full main-loop proof."
+    },
+    {
+      "id": "mailbox_replace",
+      "event_ids": [
+        4
+      ],
+      "producer": 2,
+      "path": "firmware/csm/src/board/uplink/WifiRealtimeMailbox.cpp",
+      "symbol": "publishRx",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F2",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::run: actual publish/take, replacement identity and forced busy."
+    },
+    {
+      "id": "proof_send",
+      "event_ids": [
+        2,
+        3,
+        5
+      ],
+      "producer": 2,
+      "path": "firmware/csm/src/board/uplink/WifiRealtimeWorker.cpp",
+      "symbol": "serviceProof",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F3",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::run: actual worker selection/send/close and mailbox retention; syscall double, not lwIP/HIL."
+    },
+    {
+      "id": "tcp_transaction",
+      "event_ids": [
+        6,
+        7
+      ],
+      "producer": 3,
+      "path": "firmware/csm/src/board/uplink/WifiSocketWorker.cpp",
+      "symbol": "WifiSocketWorker",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F4",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::tcp: verbatim control receive/transmit/close and begin/end call, real mailbox; socket and outer publishState/close collaborators are doubles."
+    },
+    {
+      "id": "canonical_publish",
+      "event_ids": [
+        7
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/board/uplink/CanonicalPublisher.cpp",
+      "symbol": "publish",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F5",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::observer: actual publisher and mailbox, full sequence unaffected by trace overflow/drain; no physical throughput claim."
+    },
+    {
+      "id": "local_first_failure",
+      "event_ids": [],
+      "producer": 1,
+      "path": "firmware/csm/include/board/control_island/ControlPathDiagnostics.h",
+      "symbol": "ControlPathFirstFailure",
+      "status": "existing_summary",
+      "runtime_coverage": false,
+      "proof": "P2 retainedFirst: actual ControlPathFirstFailure and control-mailbox first close persist. Physical failure attribution NOT RUN.",
+      "scenario": "F2/F3/F4/F7",
+      "owner_test_status": "PASS"
+    },
+    {
+      "id": "rc_summary",
+      "event_ids": [],
+      "producer": 1,
+      "path": "firmware/csm/src/main.cpp",
+      "symbol": "emit_remote_control_state",
+      "status": "existing_summary",
+      "runtime_coverage": false,
+      "proof": "P1 declares location only; P2/P3 actual owner tests and P6 evidence required.",
+      "scenario": "RC-reference",
+      "owner_test_status": "NOT_RUN"
+    },
+    {
+      "id": "m4_physical_summary",
+      "event_ids": [],
+      "producer": 1,
+      "path": "firmware/csm/include/protocol/TypedRecords.h",
+      "symbol": "kControlIslandHealthPayloadLen",
+      "status": "existing_summary",
+      "runtime_coverage": false,
+      "proof": "P1 declares location only; P2/P3 actual owner tests and P6 evidence required.",
+      "scenario": "F8",
+      "owner_test_status": "NOT_RUN"
+    },
+    {
+      "id": "tcp_apply",
+      "event_ids": [
+        6
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/main.cpp",
+      "symbol": "dispatch_host_frame",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F4",
+      "owner_test_status": "NOT_RUN",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "Target M7 compile of actual dispatch hook. Handler application via framed main parser is NOT RUN by this focused suite; ACK payload outcome remains separate."
+    },
+    {
+      "id": "tcp_ack_stage",
+      "event_ids": [
+        6
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/board/uplink/WifiControlPlaneMailbox.cpp",
+      "symbol": "offerAck",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F4",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "retainedFirst/ObservationOwnerTest::tcp: actual offerAck, partial/full send and first-close retention."
+    },
+    {
+      "id": "observer_sink_admission",
+      "event_ids": [
+        7
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/board/uplink/WifiTcpSink.cpp",
+      "symbol": "offer",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F5",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::sinkAdmission: actual WifiTcpSink offer/connection checks + real mailbox; startup is not exercised."
+    },
+    {
+      "id": "observer_socket_send",
+      "event_ids": [
+        7
+      ],
+      "producer": 3,
+      "path": "firmware/csm/src/board/uplink/WifiSocketWorker.cpp",
+      "symbol": "serviceTransmit",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F5",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::observer: verbatim session anchor, transmit, receive, reconciliation and close methods with real mailbox; outer summary publication/socket syscall double."
+    },
+    {
+      "id": "usb_debug_drain",
+      "event_ids": [
+        9,
+        10
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/board/uplink/UsbCdcSink.cpp",
+      "symbol": "service",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F7",
+      "owner_test_status": "PASS",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "usbOwner: actual USB owner with nonblocking USB double; partial debug/canonical separation and independent canonical counters."
+    },
+    {
+      "id": "worker_capacity",
+      "event_ids": [
+        9
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/main.cpp",
+      "symbol": "emit_control_path_diagnostic",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 software evidence: APP artifacts/observability/p2_20260909_1000/HANDOFF_KO.md. Native scope only; live evidence P6 pending.",
+      "scenario": "F7",
+      "owner_test_status": "NOT_RUN",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "capacityAndWrap: actual capacity primitive/ring overflow/wrap. Existing main 1Hz call site target-compiled; main-loop cadence is NOT RUN."
+    },
+    {
+      "id": "udp_close",
+      "event_ids": [
+        2
+      ],
+      "producer": 2,
+      "path": "firmware/csm/src/board/uplink/WifiRealtimeWorker.cpp",
+      "symbol": "closeSocket",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 scoped native evidence; P6 pending.",
+      "scenario": "F2/F3/F4/F5/F7",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::run: actual worker selection/send/close and mailbox retention; syscall double, not lwIP/HIL.",
+      "owner_test_status": "PASS"
+    },
+    {
+      "id": "proof_stage",
+      "event_ids": [
+        5
+      ],
+      "producer": 1,
+      "path": "firmware/csm/src/board/uplink/WifiRealtimeMailbox.cpp",
+      "symbol": "stageProof",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 scoped native evidence; P6 pending.",
+      "scenario": "F2/F3/F4/F5/F7",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::run/mainOwner: real proof staging, replacement and busy.",
+      "owner_test_status": "PASS"
+    },
+    {
+      "id": "socket_call",
+      "event_ids": [
+        8
+      ],
+      "producer": 3,
+      "path": "firmware/csm/src/board/uplink/WifiSocketWorker.cpp",
+      "symbol": "beginCall",
+      "status": "implemented",
+      "runtime_coverage": false,
+      "proof": "P2 scoped native evidence; P6 pending.",
+      "scenario": "F2/F3/F4/F5/F7",
+      "owner_test": "firmware/csm/test/observation_owner_test.cpp",
+      "owner_test_scope": "ObservationOwnerTest::tcp: verbatim control receive/transmit/close and begin/end call, real mailbox; socket and outer publishState/close collaborators are doubles.",
+      "owner_test_status": "PASS"
+    }
+  ]
+}

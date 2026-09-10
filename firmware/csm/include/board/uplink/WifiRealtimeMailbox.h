@@ -98,6 +98,7 @@ class WifiRealtimeMailbox {
   WifiRealtimeEvidence evidence() const;
 
  private:
+  friend struct ObservationOwnerTest;
   static void incrementSaturating(std::atomic<uint32_t>* value);
   void notify();
 

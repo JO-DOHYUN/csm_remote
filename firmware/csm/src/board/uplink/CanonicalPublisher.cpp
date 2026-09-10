@@ -1,4 +1,5 @@
 #include "board/uplink/CanonicalPublisher.h"
+#include "board/observability/DebugObservation.h"
 
 #include <string.h>
 
@@ -106,6 +107,10 @@ PublishServiceResult CanonicalPublisher::publish(csm::RecordType type,
       result.connected_sink_mask |= static_cast<uint8_t>(1u << i);
     }
     const SinkOfferResult offered = sinks_[i]->offer(frame);
+    // OBS_BOUNDARY:canonical_publish DEBUG_TRACE: sequence assignment vs per-sink acceptance.
+    CSM_OBS(observation::stream(1,0,offered==SinkOfferResult::Accepted?6:7,
+      i==0?0:3333,0,frame.publish_seq,0,frame.length,static_cast<int32_t>(offered),
+      static_cast<uint16_t>(type),i));
     if (offered == SinkOfferResult::Accepted) {
       result.sink_accept_count++;
       result.sink_accept_mask |= static_cast<uint8_t>(1u << i);

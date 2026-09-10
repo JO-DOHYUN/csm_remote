@@ -1,4 +1,5 @@
 #include "board/uplink/WifiControlPlaneMailbox.h"
+#include "board/observability/DebugObservation.h"
 
 #include <string.h>
 
@@ -68,6 +69,13 @@ void WifiControlPlaneMailbox::deactivate() {
 
 bool WifiControlPlaneMailbox::offerAck(const uint8_t* payload,
                                        uint16_t length) {
+  // OBS_BOUNDARY:tcp_ack_stage DEBUG_TRACE: actual ACK payload identity/status.
+  CSM_OBS(const bool observation_valid=payload && length==csm::kControlAckPayloadLen;
+    observation::transaction(1,connectionEpoch(),3,
+      observation_valid?csm::rd_u32_le(payload+csm::kControlAckCommandIdOffset):0,
+      0,static_cast<uint16_t>(csm::RecordType::ControlAck),
+      observation_valid?payload[csm::kControlAckStatusOffset]:-1,
+      observation_valid?payload[csm::kControlAckReasonOffset]:0));
   ack_offered_.fetch_add(1, std::memory_order_relaxed);
   if (payload != nullptr && length == csm::kControlAckPayloadLen) {
     ack_generated_id_.store(csm::rd_u32_le(payload + 8), std::memory_order_relaxed);
@@ -77,12 +85,17 @@ bool WifiControlPlaneMailbox::offerAck(const uint8_t* payload,
   if (payload == nullptr || length != csm::kControlAckPayloadLen ||
       !active_.load(std::memory_order_acquire)) {
     ack_rejected_.fetch_add(1, std::memory_order_relaxed);
+    CSM_OBS(observation::transaction(1,connectionEpoch(),7,
+      payload && length==csm::kControlAckPayloadLen?csm::rd_u32_le(payload+csm::kControlAckCommandIdOffset):0,0,
+      static_cast<uint16_t>(csm::RecordType::ControlAck),0,1));
     return false;
   }
   const uint32_t generation = generation_.load(std::memory_order_acquire);
   const uint32_t tail = tail_.load(std::memory_order_relaxed);
   const uint32_t head = head_.load(std::memory_order_acquire);
   if (tail - head >= kQueueRecords) {
+    CSM_OBS(observation::transaction(1,connectionEpoch(),7,ack_generated_id_.load(),0,
+      static_cast<uint16_t>(csm::RecordType::ControlAck),0,2));
     ack_rejected_.fetch_add(1, std::memory_order_relaxed);
     recordFirst(7u, 0, ack_generated_ms_.load(std::memory_order_relaxed));
     active_.store(false, std::memory_order_release);
@@ -97,17 +110,23 @@ bool WifiControlPlaneMailbox::offerAck(const uint8_t* payload,
           slot.bytes, sizeof(slot.bytes), csm::RecordType::ControlAck, payload,
           length, static_cast<uint16_t>(sequence & 0xFFFFu), 0, &written)) {
     ack_rejected_.fetch_add(1, std::memory_order_relaxed);
+    CSM_OBS(observation::transaction(1,connectionEpoch(),7,ack_generated_id_.load(),0,
+      static_cast<uint16_t>(csm::RecordType::ControlAck),0,3));
     return false;
   }
   slot.length = static_cast<uint16_t>(written);
   if (!active_.load(std::memory_order_acquire) ||
       generation_.load(std::memory_order_acquire) != generation) {
     ack_rejected_.fetch_add(1, std::memory_order_relaxed);
+    CSM_OBS(observation::transaction(1,connectionEpoch(),7,ack_generated_id_.load(),0,
+      static_cast<uint16_t>(csm::RecordType::ControlAck),0,4));
     return false;
   }
   publish_sequence_.store(sequence + 1u, std::memory_order_relaxed);
   tail_.store(tail + 1u, std::memory_order_release);
   ack_admitted_.fetch_add(1, std::memory_order_relaxed);
+  CSM_OBS(observation::transaction(1,connectionEpoch(),6,ack_generated_id_.load(),0,
+      static_cast<uint16_t>(csm::RecordType::ControlAck),1));
   if (tail + 1u - head > ack_high_water_.load(std::memory_order_relaxed))
     ack_high_water_.store(tail + 1u - head, std::memory_order_relaxed);
   return true;
@@ -260,6 +279,7 @@ void WifiControlPlaneMailbox::noteSend(int32_t result, uint32_t now_ms,
 
 void WifiControlPlaneMailbox::noteClose(uint32_t reason, int32_t result,
                                         uint32_t now_ms) {
+  CSM_OBS(observation::stream(3,connectionEpoch(),10,3334,0,0,0,0,result,0,reason));
   close_total_.fetch_add(1, std::memory_order_relaxed);
   close_reason_.store(reason, std::memory_order_relaxed);
   close_ms_.store(now_ms, std::memory_order_relaxed);

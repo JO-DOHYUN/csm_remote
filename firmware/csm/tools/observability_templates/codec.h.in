@@ -1,0 +1,72 @@
+// Generated from the CSM observation contract. DEBUG_TRACE codec; no runtime hook.
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+namespace csm { namespace observation {
+@CONSTANTS@
+static constexpr uint8_t kRecordType = @RECORD@;
+static constexpr size_t kHeaderBytes = 72;
+static constexpr const char* kSchemaHash = "@HASH@";
+static constexpr uint8_t kHash[32] = {@HASH_BYTES@};
+struct Meta { uint8_t producer, clock; uint32_t trace_sequence; uint64_t epoch, boot_id, ticks; };
+struct View { Meta meta; uint16_t event_id; const uint8_t* body; uint16_t body_length; };
+inline uint64_t get(const uint8_t* p, size_t n) {
+  uint64_t v=0; for(size_t i=0;i<n;++i) v |= uint64_t(p[i])<<(8*i); return v;
+}
+inline void put(uint8_t* p,uint64_t v,size_t n) {
+  for(size_t i=0;i<n;++i) p[i]=uint8_t(v>>(8*i));
+}
+inline int32_t signed32(uint32_t v) {
+  return v <= 0x7fffffffu ? int32_t(v) : int32_t(int64_t(v)-4294967296LL);
+}
+inline uint16_t crc16(const uint8_t* p,size_t n) {
+  uint16_t c=0xffff;
+  for(size_t i=0;i<n;++i) {
+    c^=uint16_t(p[i])<<8;
+    for(unsigned b=0;b<8;++b) c=uint16_t((c&0x8000)?(c<<1)^0x1021:c<<1);
+  }
+  return c;
+}
+inline int body_size(uint16_t id) { switch(id) {
+@SIZES@
+    default: return -1;
+} }
+inline bool owns(uint16_t id,uint8_t p) { switch(id) {
+@OWNERS@
+    default: return false;
+} }
+inline bool clock_valid(uint8_t p,uint8_t c) { switch(p) {
+@CLOCKS@
+    default: return false;
+} }
+inline bool meta_valid(const Meta& m) {
+  return clock_valid(m.producer,m.clock) && (m.clock != 1 || m.ticks <= 0xffffffffULL);
+}
+inline bool decode(const uint8_t* raw,size_t n,View& view) {
+  if(!raw || n < 83 || n > 523 || raw[0]!=@SOF0@ || raw[1]!=@SOF1@ ||
+     raw[2]!=@VERSION@ || raw[3]!=kRecordType || raw[4]!=0 ||
+     get(raw+7,2)!=n-11 || get(raw+n-2,2)!=crc16(raw+2,n-4)) return false;
+  const uint8_t* p=raw+9;
+  if(p[0]!=1 || p[3]!=0 || get(p+4,4)!=0x01020304 ||
+     memcmp(p+40,kHash,32)!=0) return false;
+  Meta m{p[1],p[2],uint32_t(get(p+8,4)),get(p+12,8),get(p+20,8),get(p+28,8)};
+  const uint16_t id=uint16_t(get(p+36,2)), len=uint16_t(get(p+38,2));
+  if(!meta_valid(m) || !owns(id,m.producer) || body_size(id)!=len ||
+     n!=size_t(83+len) || get(raw+5,2)!=(m.trace_sequence&0xffffu)) return false;
+  view={m,id,p+72,len}; return true;
+}
+@EVENTS@
+template<class Event>
+inline size_t encode(const Meta& m,const Event& event,uint8_t* raw,size_t capacity) {
+  const size_t n=83+Event::body_size;
+  if(!raw || capacity<n || !meta_valid(m) || !owns(Event::id,m.producer)) return 0;
+  raw[0]=@SOF0@;raw[1]=@SOF1@;raw[2]=@VERSION@;raw[3]=kRecordType;raw[4]=0;
+  put(raw+5,m.trace_sequence&0xffff,2);put(raw+7,72+Event::body_size,2);
+  uint8_t* p=raw+9;
+  p[0]=1;p[1]=m.producer;p[2]=m.clock;p[3]=0;put(p+4,0x01020304,4);
+  put(p+8,m.trace_sequence,4);put(p+12,m.epoch,8);put(p+20,m.boot_id,8);put(p+28,m.ticks,8);
+  put(p+36,Event::id,2);put(p+38,Event::body_size,2);memcpy(p+40,kHash,32);
+  event.write(p+72);put(raw+n-2,crc16(raw+2,n-4),2);return n;
+}
+} }

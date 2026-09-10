@@ -625,17 +625,27 @@ Android command/authority IDs remain transaction/proof correlation and never
 enter the M4 watermark. M4 accepts ACTIVE only for its own boot instance. Both
 cores must migrate together; external health record offsets remain unchanged.
 
-`CONTROL_PATH_DIAGNOSTIC` record 27, schema 1, 340 bytes, Service/HIL only:
+`CONTROL_PATH_DIAGNOSTIC` record 27, schema 2, 496 bytes, Service/HIL only:
 `0..7 M7 mono_us`, `8 schema`, `9..11 reserved zero`; every remaining field is
 u32 LE at its canonical `kControlPathDiagnostic*Offset` in `TypedRecords.h`.
 `12..211` current local readiness, M4 health generation/publication, M7 read,
 control RX/heartbeat/ACK generation-admission-socket TX, call/telemetry/arena;
 `212..291` retained M7 first failure and its local/transport context;
 `292..323` retained first control-transport failure; `324..339` M4 snapshot
-rejects, staged TX command/offset and independent trace TIM4 counter.
+rejects, staged TX command/offset and independent trace TIM4 counter;
+`340..495` realtime RX/admission/proof and retained first-failure context,
+as named by the current canonical offsets (not a high-rate packet log).
 Unused/reserved fields never assert PASS. Diagnostic priority, batchable delivery,
 at most one record/1000 ms; extra
-Service/HIL wire budget is 351 B/s with unchanged 512-byte maximum and queues.
+Service/HIL wire budget is 507 B/s with unchanged 512-byte maximum and queues.
+
+Debug observation record 30 is reserved by
+[`observability/contract.json`](../observability/contract.json), with generated
+layout/API/manifest and lifecycle in [its contract guide](../observability/README.md).
+It is USB-debug/Android-local-file only, on an independent per-producer sequence
+domain: never a canonical TCP3333 publication, control record or M4 IPC addition.
+P1 provides codecs only; production hooks, sink demultiplexing and measured
+coverage remain unimplemented. Record 27 remains the low-rate summary.
 
 M7 first reason `1 local M4 not-ready`, `2 causal proof expired`, `0x100 +
 HostControlCloseReason` for other unexpected authority closures. Explicit ARM
